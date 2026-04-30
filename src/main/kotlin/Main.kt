@@ -71,6 +71,16 @@ fun main(args: Array<String>) {
         }
     }
 
+    // ── Copy Kotlin stdlib compat if not present ─────────────────────
+    val stdlibDst = File(outDir, "ktc_stdlib.kt")
+    if (!stdlibDst.exists()) {
+        val stdlibSrc = object {}.javaClass.getResourceAsStream("/ktc_stdlib.kt")
+        if (stdlibSrc != null) {
+            stdlibDst.writeText(stdlibSrc.bufferedReader().readText())
+            println("  wrote ${stdlibDst.path}")
+        }
+    }
+
     println("  wrote ${headerFile.path}")
     println("  wrote ${sourceFile.path}")
     println("Done. Compile with:  cc -std=c11 -o ${baseName} ${sourceFile.name}")

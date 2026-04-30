@@ -10,6 +10,20 @@ application {
     mainClass.set("com.bitsycore.MainKt")
 }
 
+tasks.jar {
+    manifest {
+        attributes["Main-Class"] = "com.bitsycore.MainKt"
+    }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from({
+        configurations.runtimeClasspath.get().map {
+            if (it.isDirectory) it else zipTree(it)
+        }
+    })
+}
+
 repositories {
     mavenCentral()
 }

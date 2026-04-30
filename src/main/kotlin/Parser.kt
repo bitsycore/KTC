@@ -353,6 +353,14 @@ class Parser(private val tokens: List<Token>) {
                     expect(TokenType.RPAREN); nesting--
                     CallExpr(e, args)
                 }
+                // Type-parameterized call: malloc<Int>(n)
+                at(TokenType.LT) && e is NameExpr && looksLikeTypeArgs() -> {
+                    val typeArgs = parseTypeArgList()
+                    expect(TokenType.LPAREN); nesting++; skipNL()
+                    val args = parseArgList()
+                    expect(TokenType.RPAREN); nesting--
+                    CallExpr(e, args, typeArgs)
+                }
                 at(TokenType.LBRACKET) -> {
                     advance(); nesting++; skipNL()
                     val idx = parseExpr()
@@ -503,6 +511,32 @@ class Parser(private val tokens: List<Token>) {
     }
 
     // ═══════════════════════════ Type references ══════════════════════
+
+    /** Lookahead: does `<` here start type args? Check for `<Ident>` or `<Ident,` pattern. */
+    private fun looksLikeTypeArgs(): Boolean {
+        // Save position, peek ahead: < IDENT > ( or < IDENT , ...
+        val saved = pos
+        try {
+            if (!at(TokenType.LT)) return false
+            advance(); skipNL()
+            if (!at(TokenType.IDENT)) return false
+            val name = tokens[pos].value
+            if (name.isEmpty() || name[0].isLowerCase()) return false  // types start uppercase
+            advance(); skipNL()
+            return at(TokenType.GT) || at(TokenType.COMMA)
+        } finally {
+            pos = saved
+        }
+    }
+
+    /** Parse `<Type, Type, ...>` type argument list. */
+    private fun parseTypeArgList(): List<TypeRef> {
+        expect(TokenType.LT); nesting++; skipNL()
+        val args = mutableListOf(parseTypeRef())
+        while (at(TokenType.COMMA)) { advance(); skipNL(); args += parseTypeRef() }
+        expect(TokenType.GT); nesting--
+        return args
+    }
 
     private fun parseTypeRef(): TypeRef {
         val name = parseQualifiedName()

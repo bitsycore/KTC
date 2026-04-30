@@ -101,19 +101,6 @@ static inline void kt_sb_append_bool(kt_StrBuf* sb, bool v) {
     kt_sb_append_cstr(sb, v ? "true" : "false");
 }
 
-/* ═══════════════════════════ Typed Arrays ════════════════════════════ */
-
-#define KT_ARRAY_DEF(ElemT, Name)                                       \
-    typedef struct { ElemT* ptr; int32_t len; } Name;
-
-KT_ARRAY_DEF(int32_t,  kt_IntArray)
-KT_ARRAY_DEF(int64_t,  kt_LongArray)
-KT_ARRAY_DEF(float,    kt_FloatArray)
-KT_ARRAY_DEF(double,   kt_DoubleArray)
-KT_ARRAY_DEF(bool,     kt_BooleanArray)
-KT_ARRAY_DEF(char,     kt_CharArray)
-KT_ARRAY_DEF(kt_String,kt_StringArray)
-
 /* ═══════════════════════════ Nullable types ══════════════════════════ */
 
 #define KT_NULLABLE_DEF(T, Name)                                        \

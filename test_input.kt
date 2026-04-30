@@ -1,10 +1,10 @@
 package game
 
-// ── Nested data classes ──────────────────────────────────────────────
+// ── Data classes ─────────────────────────────────────────────────────
 data class Vec2(val x: Float, val y: Float)
 data class Rect(val origin: Vec2, val size: Vec2)
 
-// ── Class with body properties (directly initialized fields) ─────────
+// ── Class with body properties ───────────────────────────────────────
 class Player(val name: String) {
     var health: Int = 100
     var score: Int = 0
@@ -25,18 +25,14 @@ class Counter(var count: Int) {
     fun get(): Int = count
 }
 
-// ── Extension function on data class ─────────────────────────────────
+// ── Extension functions ──────────────────────────────────────────────
 fun Vec2.lengthSquared(): Float = x * x + y * y
-
-// ── Extension function on primitive type ─────────────────────────────
 fun Int.isEven(): Boolean = this % 2 == 0
-
-// ── Extension function on class (mutates receiver) ───────────────────
 fun Player.heal(amount: Int) {
     health += amount
 }
 
-// ── Enum, object, functions (original tests) ─────────────────────────
+// ── Enum, object ─────────────────────────────────────────────────────
 enum class Color { RED, GREEN, BLUE }
 
 object Config {
@@ -44,6 +40,7 @@ object Config {
     var debug: Boolean = false
 }
 
+// ── Helper functions ─────────────────────────────────────────────────
 fun add(a: Int, b: Int): Int {
     return a + b
 }
@@ -73,96 +70,149 @@ fun describe(x: Int): String {
     }
 }
 
-fun main(args: Array<String>) {
-    // ── Command-line arguments ──
+// ═══════════════════════ Test functions ═══════════════════════════════
+
+fun testArgs(args: Array<String>) {
     println(args.size)
     for (arg in args) {
         println(arg)
     }
+}
 
-    // ── Array<T> with class type ──
-    val points = arrayOf(Vec2(1.0f, 2.0f), Vec2(3.0f, 4.0f), Vec2(5.0f, 6.0f))
-    for (pt in points) {
-        println(pt)
-    }
-    println(points.size)
-
-    // ── Array<String> via arrayOf ──
-    val names = arrayOf("Alice", "Bob", "Charlie")
-    for (name in names) {
-        println(name)
-    }
-
-    // ── Nested data classes ──
+fun testDataClasses() {
     val origin = Vec2(0.0f, 0.0f)
     val size = Vec2(10.0f, 5.0f)
     val rect = Rect(origin, size)
     println(rect)
+    val p = Vec2(1.0f, 2.0f)
+    println(p)
+}
 
-    // ── Class with body properties ──
+fun testClassMethods() {
     val player = Player("Alice")
     println(player.health)
     player.takeDamage(30)
     println(player.health)
     println(player.isAlive())
-
-    // ── Extension functions ──
-    val v = Vec2(3.0f, 4.0f)
-    println(v.lengthSquared())
-
-    val n = 42
-    println(n.isEven())
-
     player.heal(10)
     println(player.health)
-
-    // ── String template with data class (complex template → StrBuf) ──
-    println("Rect: $rect")
-    println("Player health: ${player.health}")
-
-    // ── String template as value ──
-    val info = "v=$v len2=${v.lengthSquared()}"
-    println(info)
-
-    // ── Original tests ──
-    val p = Vec2(1.0f, 2.0f)
-    println(p)
 
     val counter = Counter(0)
     counter.increment()
     counter.increment()
     println(counter.get())
+}
 
-    val result = add(10, 20)
-    println(result)
+fun testExtensions() {
+    val v = Vec2(3.0f, 4.0f)
+    println(v.lengthSquared())
+    val n = 42
+    println(n.isEven())
+}
 
-    greet("World")
-    greet("Kotlin", "Hi")
-
-    println(fibonacci(10))
-
-    val desc = describe(42)
-    println(desc)
-
+fun testEnumAndObject() {
     val color = Color.RED
     when (color) {
         Color.RED -> println("Red!")
         Color.GREEN -> println("Green!")
         Color.BLUE -> println("Blue!")
     }
+    Config.debug = true
+    println(Config.maxRetries)
+}
 
-    val nums = intArrayOf(10, 20, 30)
+fun testFunctions() {
+    val result = add(10, 20)
+    println(result)
+    greet("World")
+    greet("Kotlin", "Hi")
+    println(fibonacci(10))
+    println(describe(42))
+}
+
+fun testStringTemplates() {
+    val v = Vec2(3.0f, 4.0f)
+    val rect = Rect(Vec2(0.0f, 0.0f), Vec2(10.0f, 5.0f))
+    println("Rect: $rect")
+    val info = "v=$v len2=${v.lengthSquared()}"
+    println(info)
+}
+
+fun testArrays() {
+    val points = arrayOf(Vec2(1.0f, 2.0f), Vec2(3.0f, 4.0f), Vec2(5.0f, 6.0f))
+    for (pt in points) {
+        println(pt)
+    }
+    println(points.size)
+
+    val names = arrayOf("Alice", "Bob", "Charlie")
+    for (name in names) {
+        println(name)
+    }
+
+    val arr = intArrayOf(10, 20, 30)
     var sum = 0
-    for (i in 0 until nums.size) {
-        sum += nums[i]
+    for (i in 0 until arr.size) {
+        sum += arr[i]
     }
     println("sum = $sum")
 
-    for (item in nums) {
+    for (item in arr) {
         print(item)
     }
     println()
+}
 
-    Config.debug = true
-    println(Config.maxRetries)
+fun testArrayList() {
+    val nums = IntArrayList()
+    nums.add(10)
+    nums.add(20)
+    nums.add(30)
+    println(nums.size)
+    println(nums[0])
+    nums[1] = 99
+    for (n in nums) {
+        println(n)
+    }
+    nums.removeAt(0)
+    println(nums.size)
+    nums.free()
+
+    val names = mutableListOf("hello", "world")
+    println(names.size)
+    names.add("!")
+    for (s in names) {
+        println(s)
+    }
+    names.free()
+}
+
+fun testMalloc() {
+    val buf = malloc(1024)
+    println(buf)
+    val buf2 = realloc(buf, 2048)
+    free(buf2)
+}
+
+fun testTypedPointer() {
+    val ints = malloc<Int>(5)
+    for (i in 0 until 5) {
+        ints[i] = i * 10
+    }
+    println(ints[2])
+    free(ints)
+}
+
+fun main(args: Array<String>) {
+    testArgs(args)
+    testDataClasses()
+    testClassMethods()
+    testExtensions()
+    testEnumAndObject()
+    testFunctions()
+    testStringTemplates()
+    testArrays()
+    testArrayList()
+    testMalloc()
+    testTypedPointer()
 }

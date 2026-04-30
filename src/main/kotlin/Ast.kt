@@ -119,7 +119,7 @@ data class BinExpr(val left: Expr, val op: String, val right: Expr) : Expr()
 data class PrefixExpr(val op: String, val expr: Expr) : Expr()
 data class PostfixExpr(val expr: Expr, val op: String) : Expr()
 
-data class CallExpr(val callee: Expr, val args: List<Arg>) : Expr()
+data class CallExpr(val callee: Expr, val args: List<Arg>, val typeArgs: List<TypeRef> = emptyList()) : Expr()
 data class DotExpr(val obj: Expr, val name: String) : Expr()
 data class SafeDotExpr(val obj: Expr, val name: String) : Expr()
 data class IndexExpr(val obj: Expr, val index: Expr) : Expr()
