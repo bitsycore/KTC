@@ -59,26 +59,20 @@ fun main(args: Array<String>) {
     headerFile.writeText(output.header)
     sourceFile.writeText(output.source)
 
-    // ── Copy runtime if not present ──────────────────────────────────
+    // ── Copy runtime (always overwrite to keep in sync) ────────────────
     val runtimeDst = File(outDir, "ktc_runtime.h")
-    if (!runtimeDst.exists()) {
-        val runtimeSrc = object {}.javaClass.getResourceAsStream("/ktc_runtime.h")
-        if (runtimeSrc != null) {
-            runtimeDst.writeText(runtimeSrc.bufferedReader().readText())
-            println("  wrote ${runtimeDst.path}")
-        } else {
-            System.err.println("Warning: ktc_runtime.h not found in resources, copy it manually.")
-        }
+    val runtimeSrc = object {}.javaClass.getResourceAsStream("/ktc_runtime.h")
+    if (runtimeSrc != null) {
+        runtimeDst.writeText(runtimeSrc.bufferedReader().readText())
+    } else {
+        System.err.println("Warning: ktc_runtime.h not found in resources, copy it manually.")
     }
 
-    // ── Copy Kotlin stdlib compat if not present ─────────────────────
+    // ── Copy Kotlin stdlib compat (always overwrite) ─────────────────
     val stdlibDst = File(outDir, "ktc_stdlib.kt")
-    if (!stdlibDst.exists()) {
-        val stdlibSrc = object {}.javaClass.getResourceAsStream("/ktc_stdlib.kt")
-        if (stdlibSrc != null) {
-            stdlibDst.writeText(stdlibSrc.bufferedReader().readText())
-            println("  wrote ${stdlibDst.path}")
-        }
+    val stdlibSrc = object {}.javaClass.getResourceAsStream("/ktc_stdlib.kt")
+    if (stdlibSrc != null) {
+        stdlibDst.writeText(stdlibSrc.bufferedReader().readText())
     }
 
     println("  wrote ${headerFile.path}")

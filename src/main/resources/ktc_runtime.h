@@ -101,24 +101,6 @@ static inline void kt_sb_append_bool(kt_StrBuf* sb, bool v) {
     kt_sb_append_cstr(sb, v ? "true" : "false");
 }
 
-/* ═══════════════════════════ Nullable types ══════════════════════════ */
-
-#define KT_NULLABLE_DEF(T, Name)                                        \
-    typedef struct { T val; bool has; } Name;
-
-KT_NULLABLE_DEF(int32_t,   kt_Nullable_Int)
-KT_NULLABLE_DEF(int64_t,   kt_Nullable_Long)
-KT_NULLABLE_DEF(float,     kt_Nullable_Float)
-KT_NULLABLE_DEF(double,    kt_Nullable_Double)
-KT_NULLABLE_DEF(bool,      kt_Nullable_Boolean)
-KT_NULLABLE_DEF(char,      kt_Nullable_Char)
-KT_NULLABLE_DEF(kt_String, kt_Nullable_String)
-
-#define KT_NULL_VAL        {0}
-#define KT_SOME(T, v)      ((T){.val = (v), .has = true})
-#define KT_HAS(x)          ((x).has)
-#define KT_VAL(x)          ((x).val)
-
 /* ═══════════════════════════ Arena allocator ═════════════════════════ */
 
 #ifndef KT_ARENA_SIZE
@@ -182,4 +164,33 @@ static inline kt_String kt_double_to_string(char* buf, int bufsz, double v) {
 
 static inline kt_String kt_bool_to_string(bool v) {
     return v ? kt_str("true") : kt_str("false");
+}
+
+/* ═══════════════════════════ String → Number parsing ═════════════════ */
+
+/* Parse kt_String to int32_t (simple atoi-like, stops at non-digit). */
+static inline int32_t kt_str_toInt(kt_String s) {
+    char buf[32];
+    int32_t n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (size_t)n);
+    buf[n] = '\0';
+    return (int32_t)atoi(buf);
+}
+
+/* Parse kt_String to int64_t. */
+static inline int64_t kt_str_toLong(kt_String s) {
+    char buf[32];
+    int32_t n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (size_t)n);
+    buf[n] = '\0';
+    return (int64_t)atoll(buf);
+}
+
+/* Parse kt_String to double. */
+static inline double kt_str_toDouble(kt_String s) {
+    char buf[64];
+    int32_t n = s.len < 63 ? s.len : 63;
+    memcpy(buf, s.ptr, (size_t)n);
+    buf[n] = '\0';
+    return strtod(buf, NULL);
 }

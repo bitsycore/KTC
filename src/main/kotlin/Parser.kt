@@ -605,8 +605,13 @@ class Parser(private val tokens: List<Token>) {
 
     private fun parseQualifiedName(): String {
         val sb = StringBuilder(expectIdent())
-        while (at(TokenType.DOT) && peek().type == TokenType.IDENT) {
-            advance(); sb.append('.').append(advance().value)
+        while (at(TokenType.DOT)) {
+            if (peek().type == TokenType.IDENT) {
+                advance(); sb.append('.').append(advance().value)
+            } else if (peek().type == TokenType.STAR) {
+                advance(); advance(); sb.append(".*")
+                break
+            } else break
         }
         return sb.toString()
     }

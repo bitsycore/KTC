@@ -1,5 +1,7 @@
 package game
 
+import ktc.*
+
 // ── Data classes ─────────────────────────────────────────────────────
 data class Vec2(val x: Float, val y: Float)
 data class Rect(val origin: Vec2, val size: Vec2)
@@ -203,16 +205,107 @@ fun testTypedPointer() {
     free(ints)
 }
 
+fun testNullable() {
+    var x: Int? = 42
+    println(x!!)
+    x = null
+    val y = x ?: 99
+    println(y)
+
+    var name: String? = "hello"
+    println(name!!)
+    name = null
+    val fallback = name ?: "default"
+    println(fallback)
+
+    // null comparison
+    var z: Int? = 10
+    if (z != null) {
+        println(z!!)
+    }
+    z = null
+    if (z == null) {
+        println("z is null")
+    }
+}
+
+fun findValue(flag: Boolean): Int? {
+    if (flag) {
+        return 42
+    }
+    return null
+}
+
+fun showNullable(value: Int?) {
+    if (value != null) {
+        println(value!!)
+    } else {
+        println("none")
+    }
+}
+
+fun testNullableReturn() {
+    val a: Int? = findValue(true)
+    println(a!!)
+    val b: Int? = findValue(false)
+    val c = b ?: -1
+    println(c)
+    if (b == null) {
+        println("b is null")
+    }
+    // pass nullable to nullable param
+    showNullable(a)
+    showNullable(b)
+    // pass literal null
+    showNullable(null)
+    // pass non-null literal to nullable param
+    showNullable(99)
+}
+
+fun testStringOps() {
+    val s = "hello"
+    println(s.length)
+    val num = "42"
+    val n = num.toInt()
+    println(n + 8)
+    val pi = "3.14"
+    val d = pi.toDouble()
+    println(d)
+    // numeric conversions
+    val x = 65
+    val f = x.toFloat()
+    val l = x.toLong()
+    println(f)
+    println(l)
+}
+
 fun main(args: Array<String>) {
+    println("--- testArgs ---")
     testArgs(args)
+    println("--- testDataClasses ---")
     testDataClasses()
+    println("--- testClassMethods ---")
     testClassMethods()
+    println("--- testExtensions ---")
     testExtensions()
+    println("--- testEnumAndObject ---")
     testEnumAndObject()
+    println("--- testFunctions ---")
     testFunctions()
+    println("--- testStringTemplates ---")
     testStringTemplates()
+    println("--- testArrays ---")
     testArrays()
+    println("--- testArrayList ---")
     testArrayList()
+    println("--- testMalloc ---")
     testMalloc()
+    println("--- testTypedPointer ---")
     testTypedPointer()
+    println("--- testNullable ---")
+    testNullable()
+    println("--- testNullableReturn ---")
+    testNullableReturn()
+    println("--- testStringOps ---")
+    testStringOps()
 }
