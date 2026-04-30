@@ -399,6 +399,68 @@ fun testStringCompare() {
     println(a <= c)   // true
 }
 
+fun testHeap() {
+    // Heap<T> — always allocated, non-null
+    val p = malloc<Vec2>(10.0, 20.0)
+    println(p.x)       // -> access
+    println(p.y)
+    p.x = 99.0         // -> assignment
+    println(p.x)
+    println(p)          // println heap pointer (data class)
+
+    // .value() — copy to stack
+    val v = p.value()
+    println(v)
+
+    // .set() — update heap object
+    p.set(Vec2(1.0, 2.0))
+    println(p.x)
+    println(p.y)
+
+    // .copy() on data class (returns stack copy)
+    val v2 = p.copy()
+    println(v2)
+
+    // .copy(field = val) on data class
+    val v3 = p.copy(x = 77.0)
+    println(v3)
+
+    // .toHeap() — stack to heap
+    val sv = Vec2(5.0, 6.0)
+    val hp = sv.toHeap()
+    println(hp.x)
+    println(hp.y)
+    free(hp)
+    free(p)
+}
+
+fun testHeapNullable() {
+    // Heap<T>? — pointer nullable
+    var q: Heap<Vec2>? = malloc<Vec2>(3.0, 4.0)
+    if (q != null) {
+        println(q.x)
+    }
+    q = null
+    if (q == null) {
+        println("q is null")
+    }
+
+    // Heap<T?> — value nullable, pointer always allocated
+    var r: Heap<Vec2?> = malloc<Vec2>(7.0, 8.0)
+    if (r != null) {
+        println(r.x)
+    }
+    r = null
+    if (r == null) {
+        println("r value is null")
+    }
+    r.set(Vec2(11.0, 12.0))
+    if (r != null) {
+        println(r.x)
+    }
+    free(r)
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -436,4 +498,8 @@ fun main(args: Array<String>) {
     testForStep()
     println("--- testStringCompare ---")
     testStringCompare()
+    println("--- testHeap ---")
+    testHeap()
+    println("--- testHeapNullable ---")
+    testHeapNullable()
 }
