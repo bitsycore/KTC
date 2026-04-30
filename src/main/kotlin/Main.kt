@@ -107,13 +107,6 @@ fun main(args: Array<String>) {
         System.err.println("Warning: ktc_runtime.h not found in resources, copy it manually.")
     }
 
-    // ── Copy Kotlin stdlib compat (always overwrite) ─────────────────
-    val stdlibDst = File(outDir, "ktc_stdlib.kt")
-    val stdlibSrc = object {}.javaClass.getResourceAsStream("/ktc_stdlib.kt")
-    if (stdlibSrc != null) {
-        stdlibDst.writeText(stdlibSrc.bufferedReader().readText())
-    }
-
     // Print compile command
     val sourceNames = allOutputNames.joinToString(" ") { "$it.c" }
     val firstBase = allOutputNames.first()
