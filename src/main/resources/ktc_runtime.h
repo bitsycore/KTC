@@ -46,6 +46,61 @@ static inline kt_String kt_string_cat(char* buf, int bufsz, kt_String a, kt_Stri
     return (kt_String){buf, total};
 }
 
+/* ═══════════════════════════ String Builder ══════════════════════════ */
+
+typedef struct {
+    char*   ptr;
+    int32_t len;
+    int32_t cap;
+} kt_StrBuf;
+
+/* Stack-backed string builder: char buf[256]; kt_StrBuf sb = {buf, 0, 256}; */
+
+static inline kt_String kt_sb_to_string(kt_StrBuf* sb) {
+    return (kt_String){sb->ptr, sb->len};
+}
+
+static inline void kt_sb_append_str(kt_StrBuf* sb, kt_String s) {
+    int32_t n = s.len;
+    if (sb->len + n > sb->cap) n = sb->cap - sb->len;
+    if (n <= 0) return;
+    memcpy(sb->ptr + sb->len, s.ptr, (size_t)n);
+    sb->len += n;
+}
+
+static inline void kt_sb_append_cstr(kt_StrBuf* sb, const char* s) {
+    kt_sb_append_str(sb, (kt_String){s, (int32_t)strlen(s)});
+}
+
+static inline void kt_sb_append_char(kt_StrBuf* sb, char c) {
+    if (sb->len < sb->cap) sb->ptr[sb->len++] = c;
+}
+
+static inline void kt_sb_append_int(kt_StrBuf* sb, int32_t v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId32, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void kt_sb_append_long(kt_StrBuf* sb, int64_t v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId64, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void kt_sb_append_double(kt_StrBuf* sb, double v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%f", v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void kt_sb_append_bool(kt_StrBuf* sb, bool v) {
+    kt_sb_append_cstr(sb, v ? "true" : "false");
+}
+
 /* ═══════════════════════════ Typed Arrays ════════════════════════════ */
 
 #define KT_ARRAY_DEF(ElemT, Name)                                       \
@@ -114,6 +169,11 @@ static inline kt_String kt_arena_string(kt_Arena* a, const char* p, int32_t len)
     memcpy(dst, p, (size_t)len);
     dst[len] = '\0';
     return (kt_String){dst, len};
+}
+
+/* Arena-backed string builder. */
+static inline kt_StrBuf kt_sb_arena(kt_Arena* a, int32_t cap) {
+    return (kt_StrBuf){(char*)kt_arena_alloc(a, (size_t)cap), 0, cap};
 }
 
 /* ═══════════════════════════ Conversion helpers ═════════════════════ */

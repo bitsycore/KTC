@@ -1,7 +1,22 @@
 package game
 
+// ── Nested data classes ──────────────────────────────────────────────
 data class Vec2(val x: Float, val y: Float)
+data class Rect(val origin: Vec2, val size: Vec2)
 
+// ── Class with body properties (directly initialized fields) ─────────
+class Player(val name: String) {
+    var health: Int = 100
+    var score: Int = 0
+
+    fun takeDamage(amount: Int) {
+        health -= amount
+    }
+
+    fun isAlive(): Boolean = health > 0
+}
+
+// ── Class with only ctor params ──────────────────────────────────────
 class Counter(var count: Int) {
     fun increment() {
         count++
@@ -10,6 +25,18 @@ class Counter(var count: Int) {
     fun get(): Int = count
 }
 
+// ── Extension function on data class ─────────────────────────────────
+fun Vec2.lengthSquared(): Float = x * x + y * y
+
+// ── Extension function on primitive type ─────────────────────────────
+fun Int.isEven(): Boolean = this % 2 == 0
+
+// ── Extension function on class (mutates receiver) ───────────────────
+fun Player.heal(amount: Int) {
+    health += amount
+}
+
+// ── Enum, object, functions (original tests) ─────────────────────────
 enum class Color { RED, GREEN, BLUE }
 
 object Config {
@@ -47,6 +74,38 @@ fun describe(x: Int): String {
 }
 
 fun main() {
+    // ── Nested data classes ──
+    val origin = Vec2(0.0f, 0.0f)
+    val size = Vec2(10.0f, 5.0f)
+    val rect = Rect(origin, size)
+    println(rect)
+
+    // ── Class with body properties ──
+    val player = Player("Alice")
+    println(player.health)
+    player.takeDamage(30)
+    println(player.health)
+    println(player.isAlive())
+
+    // ── Extension functions ──
+    val v = Vec2(3.0f, 4.0f)
+    println(v.lengthSquared())
+
+    val n = 42
+    println(n.isEven())
+
+    player.heal(10)
+    println(player.health)
+
+    // ── String template with data class (complex template → StrBuf) ──
+    println("Rect: $rect")
+    println("Player health: ${player.health}")
+
+    // ── String template as value ──
+    val info = "v=$v len2=${v.lengthSquared()}"
+    println(info)
+
+    // ── Original tests ──
     val p = Vec2(1.0f, 2.0f)
     println(p)
 
@@ -80,8 +139,8 @@ fun main() {
     }
     println("sum = $sum")
 
-    for (v in nums) {
-        print(v)
+    for (item in nums) {
+        print(item)
     }
     println()
 

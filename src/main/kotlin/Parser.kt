@@ -37,7 +37,18 @@ class Parser(private val tokens: List<Token>) {
 
     private fun parseFunDecl(): FunDecl {
         expect(TokenType.FUN)
-        val name = expectIdent()
+        val firstName = expectIdent()
+        // Extension function: fun ReceiverType.name(...)
+        val receiver: TypeRef?
+        val name: String
+        if (at(TokenType.DOT)) {
+            advance()  // skip dot
+            receiver = TypeRef(firstName)
+            name = expectIdent()
+        } else {
+            receiver = null
+            name = firstName
+        }
         expect(TokenType.LPAREN); nesting++
         val params = parseParamList()
         expect(TokenType.RPAREN); nesting--
@@ -49,7 +60,7 @@ class Parser(private val tokens: List<Token>) {
             else -> null
         }
         skipTerminator()
-        return FunDecl(name, params, retType, body)
+        return FunDecl(name, params, retType, body, receiver)
     }
 
     private fun parseParamList(): List<Param> {

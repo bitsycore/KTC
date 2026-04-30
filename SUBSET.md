@@ -76,6 +76,51 @@ the C name, so `math.lerp(a, b, t)` becomes `math_lerp(a, b, t)`.
 `fun main()` always emits `int main(void)` regardless of package prefix.
 It is the only symbol that is never prefixed.
 
+### Extension Functions
+
+Extension functions map to free functions with the receiver as the first parameter.
+Like Go methods on types — you can add behaviour to any type without modifying it.
+
+- **Class receiver** → pointer parameter (`ClassName* self`), can mutate via `self->`
+- **Primitive receiver** → value parameter (`int32_t self`), `this` maps to `self`
+
+```kotlin
+// kotlin
+data class Vec2(val x: Float, val y: Float)
+
+fun Vec2.lengthSquared(): Float = x * x + y * y    // accesses fields directly
+
+fun Int.isEven(): Boolean = this % 2 == 0           // this = value
+
+class Player(val name: String) {
+    var health: Int = 100
+}
+
+fun Player.heal(amount: Int) {                       // mutates receiver
+    health += amount
+}
+```
+
+```c
+// c — extension functions become TypeName_method(self, ...)
+float game_Vec2_lengthSquared(game_Vec2* self) {
+    return (self->x * self->x) + (self->y * self->y);
+}
+
+bool game_Int_isEven(int32_t self) {
+    return (self % 2) == 0;
+}
+
+void game_Player_heal(game_Player* self, int32_t amount) {
+    self->health += amount;
+}
+
+// call sites:
+game_Vec2_lengthSquared(&v);   // v.lengthSquared()
+game_Int_isEven(n);            // n.isEven()
+game_Player_heal(&player, 10); // player.heal(10)
+```
+
 ---
 
 ## Supported Types
@@ -94,15 +139,55 @@ It is the only symbol that is never prefixed.
 
 ### String
 
-`String` maps to `kt_String`, a pointer + length pair (slices).
+`String` maps to `kt_String`, a pointer + length pair (like Go/Solod slices).
 String literals are zero-cost (`const char*` to static storage). Dynamic strings
-use stack buffers or arena allocation.
+use `kt_StrBuf` (a stack-backed string builder) or arena allocation.
 
 ```kotlin
 // kotlin
 val name: String = "Alice"
 val greeting = "Hello, $name!"
 ```
+
+```c
+// c — simple template → direct printf for println, kt_StrBuf for value
+kt_String name = kt_str("Alice");
+
+// as value (kt_StrBuf, no GCC extensions):
+char _t0[256];
+kt_StrBuf _t0_sb = {_t0, 0, 256};
+kt_sb_append_cstr(&_t0_sb, "Hello, ");
+kt_sb_append_str(&_t0_sb, name);
+kt_sb_append_char(&_t0_sb, '!');
+kt_String greeting = kt_sb_to_string(&_t0_sb);
+
+// for println → optimized to direct printf:
+printf("Hello, %.*s!\n", (int)name.len, name.ptr);
+```
+
+#### kt_StrBuf — String Builder
+
+`kt_StrBuf` is a stack-backed (or arena-backed) string builder. It replaces the
+old fixed-buffer `snprintf` approach for `toString` and string templates.
+
+```c
+// Stack-backed (most common):
+char buf[256];
+kt_StrBuf sb = {buf, 0, 256};
+kt_sb_append_cstr(&sb, "Hello ");
+kt_sb_append_int(&sb, 42);
+kt_String result = kt_sb_to_string(&sb);
+
+// Arena-backed (for longer-lived strings):
+kt_StrBuf sb = kt_sb_arena(&arena, 1024);
+kt_sb_append_str(&sb, name);
+kt_String result = kt_sb_to_string(&sb);
+```
+
+Key properties:
+- **No GCC extensions** — all string building is pure C11 statements
+- **Nested toString** — data class fields call their own `toString(sb)`, appending to the same buffer
+- **Zero heap allocation** — everything stays on the stack or in an explicit arena
 
 ```c
 // c
@@ -203,50 +288,82 @@ void greet(kt_String name, kt_String greeting) {
 Classes map to C structs. Constructor parameters with `val`/`var` become struct fields.
 Methods become `ClassName_method(ClassName* self, ...)` functions.
 
+**Body properties** (fields declared in the class body with initializers) are included
+in the struct and initialized in the constructor alongside constructor parameters.
+
 ```kotlin
-// kotlin
-class Counter(var count: Int) {
-    fun increment() {
-        count++
+// kotlin — constructor params + body properties
+class Player(val name: String) {
+    var health: Int = 100
+    var score: Int = 0
+
+    fun takeDamage(amount: Int) {
+        health -= amount
     }
 
-    fun get(): Int = count
-}
-
-fun main() {
-    val c = Counter(0)
-    c.increment()
-    println(c.get())
+    fun isAlive(): Boolean = health > 0
 }
 ```
 
 ```c
 // c
-typedef struct { int32_t count; } Counter;
+typedef struct {
+    kt_String name;
+    int32_t health;
+    int32_t score;
+} Player;
 
-Counter Counter_create(int32_t count) {
-    return (Counter){count};
+Player Player_create(kt_String name) {
+    Player self = {0};
+    self.name = name;
+    self.health = 100;
+    self.score = 0;
+    return self;
 }
 
-void Counter_increment(Counter* self) {
-    self->count++;
+void Player_takeDamage(Player* self, int32_t amount) {
+    self->health -= amount;
 }
 
-int32_t Counter_get(Counter* self) {
-    return self->count;
+bool Player_isAlive(Player* self) {
+    return self->health > 0;
+}
+```
+
+**Nested class fields** — classes can have other classes as fields. The struct
+simply contains the nested struct by value (stack, no pointers):
+
+```kotlin
+// kotlin
+data class Vec2(val x: Float, val y: Float)
+data class Rect(val origin: Vec2, val size: Vec2)
+```
+
+```c
+// c
+typedef struct { float x; float y; } Vec2;
+typedef struct { Vec2 origin; Vec2 size; } Rect;
+
+// equals calls nested equals
+bool Rect_equals(Rect a, Rect b) {
+    return Vec2_equals(a.origin, b.origin) && Vec2_equals(a.size, b.size);
 }
 
-int main(void) {
-    Counter c = Counter_create(0);
-    Counter_increment(&c);
-    printf("%" PRId32 "\n", Counter_get(&c));
-    return 0;
+// toString calls nested toString (same StrBuf — no extra buffers)
+void Rect_toString(Rect self, kt_StrBuf* sb) {
+    kt_sb_append_cstr(sb, "Rect(origin=");
+    Vec2_toString(self.origin, sb);
+    kt_sb_append_cstr(sb, ", size=");
+    Vec2_toString(self.size, sb);
+    kt_sb_append_char(sb, ')');
 }
 ```
 
 ### Data Classes
 
-Like classes, but the transpiler auto-generates `equals`, `toString`, and `copy`.
+Like classes, but the transpiler auto-generates `equals` and `toString`.
+`toString` uses `kt_StrBuf` (a stack-backed string builder) — no fixed buffers,
+supports nesting, and is compatible with arena allocation.
 
 ```kotlin
 // kotlin
@@ -271,16 +388,20 @@ bool Point_equals(Point a, Point b) {
     return a.x == b.x && a.y == b.y;
 }
 
-kt_String Point_toString(Point self, char* buf, int bufsz) {
-    int n = snprintf(buf, bufsz, "Point(x=%" PRId32 ", y=%" PRId32 ")", self.x, self.y);
-    return (kt_String){buf, n};
+void Point_toString(Point self, kt_StrBuf* sb) {
+    kt_sb_append_cstr(sb, "Point(x=");
+    kt_sb_append_int(sb, self.x);
+    kt_sb_append_cstr(sb, ", y=");
+    kt_sb_append_int(sb, self.y);
+    kt_sb_append_char(sb, ')');
 }
 
 int main(void) {
     Point p = Point_create(3, 4);
-    char _buf1[256];
-    kt_String _s1 = Point_toString(p, _buf1, 256);
-    printf("%.*s\n", (int)_s1.len, _s1.ptr);
+    char _buf[256];
+    kt_StrBuf _sb = {_buf, 0, 256};
+    Point_toString(p, &_sb);
+    printf("%.*s\n", (int)_sb.len, _sb.ptr);
     printf("%s\n", Point_equals(p, Point_create(3, 4)) ? "true" : "false");
     return 0;
 }
@@ -575,7 +696,6 @@ kt_arena_reset(&arena);  // free everything at once
 | Generics                          | Complexity; built-in arrays cover the main use case |
 | Interfaces                        | Requires vtable dispatch; may be added later        |
 | Inheritance / `open` / `abstract` | Requires vtable; classes are final value types      |
-| Extension functions               | Syntactic sugar that complicates method resolution  |
 | Companion objects                 | Use top-level functions or `object` instead         |
 | `try` / `catch` / `finally`       | No exception model in C; use return codes           |
 | Operator overloading              | Complexity                                          |
@@ -609,21 +729,29 @@ kt_arena_reset(&arena);  // free everything at once
 
 ```kotlin
 data class Vec2(val x: Float, val y: Float)
+data class Rect(val origin: Vec2, val size: Vec2)
 
-fun dot(a: Vec2, b: Vec2): Float = a.x * b.x + a.y * b.y
+fun Vec2.lengthSquared(): Float = x * x + y * y
+
+class Player(val name: String) {
+    var health: Int = 100
+    fun takeDamage(amount: Int) { health -= amount }
+}
+
+fun Player.heal(amount: Int) { health += amount }
 
 fun main() {
-    val a = Vec2(1.0f, 2.0f)
-    val b = Vec2(3.0f, 4.0f)
-    val d = dot(a, b)
-    println("dot = $d")
+    val r = Rect(Vec2(0.0f, 0.0f), Vec2(10.0f, 5.0f))
+    println(r)
+    println("Rect: $r")
 
-    val nums = intArrayOf(10, 20, 30)
-    var sum = 0
-    for (n in nums) {
-        sum += n
-    }
-    println("sum = $sum")
+    val v = Vec2(3.0f, 4.0f)
+    println(v.lengthSquared())
+
+    val p = Player("Alice")
+    p.takeDamage(30)
+    p.heal(10)
+    println(p.health)
 }
 ```
 
@@ -633,38 +761,73 @@ Transpiles to:
 #include "ktc_runtime.h"
 
 typedef struct { float x; float y; } Vec2;
+typedef struct { Vec2 origin; Vec2 size; } Rect;
+typedef struct { kt_String name; int32_t health; } Player;
 
-Vec2 Vec2_create(float x, float y) {
-    return (Vec2){x, y};
-}
+Vec2 Vec2_create(float x, float y) { return (Vec2){x, y}; }
 
 bool Vec2_equals(Vec2 a, Vec2 b) {
     return a.x == b.x && a.y == b.y;
 }
 
-kt_String Vec2_toString(Vec2 self, char* buf, int bufsz) {
-    int n = snprintf(buf, bufsz, "Vec2(x=%f, y=%f)", self.x, self.y);
-    return (kt_String){buf, n};
+void Vec2_toString(Vec2 self, kt_StrBuf* sb) {
+    kt_sb_append_cstr(sb, "Vec2(x=");
+    kt_sb_append_double(sb, (double)self.x);
+    kt_sb_append_cstr(sb, ", y=");
+    kt_sb_append_double(sb, (double)self.y);
+    kt_sb_append_char(sb, ')');
 }
 
-float dot(Vec2 a, Vec2 b) {
-    return a.x * b.x + a.y * b.y;
+bool Rect_equals(Rect a, Rect b) {
+    return Vec2_equals(a.origin, b.origin) && Vec2_equals(a.size, b.size);
+}
+
+void Rect_toString(Rect self, kt_StrBuf* sb) {
+    kt_sb_append_cstr(sb, "Rect(origin=");
+    Vec2_toString(self.origin, sb);     /* nested — same buffer! */
+    kt_sb_append_cstr(sb, ", size=");
+    Vec2_toString(self.size, sb);
+    kt_sb_append_char(sb, ')');
+}
+
+Player Player_create(kt_String name) {
+    Player self = {0};
+    self.name = name;
+    self.health = 100;
+    return self;
+}
+
+float Vec2_lengthSquared(Vec2* self) {
+    return (self->x * self->x) + (self->y * self->y);
+}
+
+void Player_heal(Player* self, int32_t amount) {
+    self->health += amount;
 }
 
 int main(void) {
-    Vec2 a = Vec2_create(1.0f, 2.0f);
-    Vec2 b = Vec2_create(3.0f, 4.0f);
-    float d = dot(a, b);
-    printf("dot = %f\n", d);
+    Rect r = Rect_create(Vec2_create(0.0f, 0.0f), Vec2_create(10.0f, 5.0f));
 
-    int32_t _nums_data[] = {10, 20, 30};
-    kt_IntArray nums = {_nums_data, 3};
-    int32_t sum = 0;
-    for (int32_t _i = 0; _i < nums.len; _i++) {
-        int32_t n = nums.ptr[_i];
-        sum += n;
-    }
-    printf("sum = %" PRId32 "\n", sum);
+    /* println(r) → StrBuf toString */
+    char _t0[256];
+    kt_StrBuf _t0_sb = {_t0, 0, 256};
+    Rect_toString(r, &_t0_sb);
+    printf("%.*s\n", (int)_t0_sb.len, _t0_sb.ptr);
+
+    /* println("Rect: $r") → complex template via StrBuf */
+    char _t1[256];
+    kt_StrBuf _t1_sb = {_t1, 0, 256};
+    kt_sb_append_cstr(&_t1_sb, "Rect: ");
+    Rect_toString(r, &_t1_sb);
+    printf("%.*s\n", (int)_t1_sb.len, _t1_sb.ptr);
+
+    Vec2 v = Vec2_create(3.0f, 4.0f);
+    printf("%f\n", Vec2_lengthSquared(&v));
+
+    Player p = Player_create(kt_str("Alice"));
+    Player_takeDamage(&p, 30);
+    Player_heal(&p, 10);
+    printf("%" PRId32 "\n", p.health);
     return 0;
 }
 ```

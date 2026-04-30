@@ -17,12 +17,19 @@ class CCodeGen(private val file: KtFile) {
     private fun pfx(name: String): String = if (name == "main") name else "$prefix$name"
 
     // ── Symbol tables (populated by collectDecls) ────────────────────
+    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?)
+
     private data class ClassInfo(
         val name: String, val isData: Boolean,
-        val props: List<Pair<String, TypeRef>>,      // (name, type)
+        val ctorProps: List<Pair<String, TypeRef>>,
+        val bodyProps: List<BodyProp> = emptyList(),
         val methods: MutableList<FunDecl> = mutableListOf(),
         val initBlocks: List<Block> = emptyList()
-    )
+    ) {
+        val props: List<Pair<String, TypeRef>>
+            get() = ctorProps + bodyProps.map { it.name to it.type }
+    }
+
     private data class EnumInfo(val name: String, val entries: List<String>)
     private data class ObjInfo(val name: String, val props: List<Pair<String, TypeRef>>, val methods: MutableList<FunDecl> = mutableListOf())
     private data class FunSig(val params: List<Param>, val returnType: TypeRef?)
@@ -31,6 +38,7 @@ class CCodeGen(private val file: KtFile) {
     private val enums    = mutableMapOf<String, EnumInfo>()
     private val objects  = mutableMapOf<String, ObjInfo>()
     private val funSigs  = mutableMapOf<String, FunSig>()
+    private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
 
     // ── Per-scope variable → type mapping ────────────────────────────
     private val scopes = ArrayDeque<MutableMap<String, String>>()
@@ -41,10 +49,18 @@ class CCodeGen(private val file: KtFile) {
 
     // ── Current class context (when generating methods) ──────────────
     private var currentClass: String? = null
+    private var selfIsPointer = true
 
     // ── Temp counter for stack buffers ───────────────────────────────
     private var tmpCounter = 0
     private fun tmp(): String = "_t${tmpCounter++}"
+
+    // ── Pre-statements (hoisted before the current statement) ────────
+    private val preStmts = mutableListOf<String>()
+    private fun flushPreStmts(ind: String) {
+        for (s in preStmts) impl.appendLine("$ind$s")
+        preStmts.clear()
+    }
 
     // ── Output sections ──────────────────────────────────────────────
     private val hdr   = StringBuilder()   // .h forward decls & typedefs
@@ -89,9 +105,12 @@ class CCodeGen(private val file: KtFile) {
     private fun collectDecl(d: Decl) {
         when (d) {
             is ClassDecl -> {
-                val props = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
-                val ci = ClassInfo(d.name, d.isData, props, initBlocks = d.initBlocks)
-                for (m in d.members) if (m is FunDecl) ci.methods += m
+                val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
+                val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
+                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init)
+                }
+                val ci = ClassInfo(d.name, d.isData, ctorProps, bodyProps, initBlocks = d.initBlocks)
+                for (m in d.members) if (m is FunDecl && m.receiver == null) ci.methods += m
                 classes[d.name] = ci
             }
             is EnumDecl  -> enums[d.name] = EnumInfo(d.name, d.entries)
@@ -101,7 +120,17 @@ class CCodeGen(private val file: KtFile) {
                 for (m in d.members) if (m is FunDecl) oi.methods += m
                 objects[d.name] = oi
             }
-            is FunDecl   -> funSigs[d.name] = FunSig(d.params, d.returnType)
+            is FunDecl -> {
+                if (d.receiver != null) {
+                    val recvName = d.receiver.name
+                    extensionFuns.getOrPut(recvName) { mutableListOf() }.add(d)
+                    // Register as method on the class for inference
+                    classes[recvName]?.methods?.add(d)
+                    funSigs["${recvName}.${d.name}"] = FunSig(d.params, d.returnType)
+                } else {
+                    funSigs[d.name] = FunSig(d.params, d.returnType)
+                }
+            }
             is PropDecl  -> { /* top-level props handled during emit */ }
         }
     }
@@ -113,7 +142,7 @@ class CCodeGen(private val file: KtFile) {
             is ClassDecl  -> emitClass(d)
             is EnumDecl   -> emitEnum(d)
             is ObjectDecl -> emitObject(d)
-            is FunDecl    -> emitFun(d)
+            is FunDecl    -> if (d.receiver != null) emitExtensionFun(d) else emitFun(d)
             is PropDecl   -> emitTopProp(d)
         }
     }
@@ -122,55 +151,80 @@ class CCodeGen(private val file: KtFile) {
 
     private fun emitClass(d: ClassDecl) {
         val cName = pfx(d.name)
-        val props = d.ctorParams.filter { it.isVal || it.isVar }
+        val ci = classes[d.name]!!
 
         // --- header: typedef struct ---
         hdr.appendLine("typedef struct {")
-        for (p in props) hdr.appendLine("    ${cType(p.type)} ${p.name};")
+        for ((name, type) in ci.props) hdr.appendLine("    ${cType(type)} $name;")
         hdr.appendLine("} $cName;")
         hdr.appendLine()
 
-        // --- constructor ---
-        val paramStr = props.joinToString(", ") { "${cType(it.type)} ${it.name}" }
-        hdr.appendLine("$cName ${cName}_create($paramStr);")
-        impl.appendLine("$cName ${cName}_create($paramStr) {")
-        impl.appendLine("    return ($cName){${props.joinToString(", ") { it.name }}};")
+        // --- constructor (only takes ctor params, initializes all fields) ---
+        val paramStr = ci.ctorProps.joinToString(", ") { "${cType(it.second)} ${it.first}" }
+        val paramDecl = paramStr.ifEmpty { "void" }
+        hdr.appendLine("$cName ${cName}_create($paramDecl);")
+        impl.appendLine("$cName ${cName}_create($paramDecl) {")
+        if (ci.bodyProps.isEmpty()) {
+            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { it.first }}};")
+        } else {
+            impl.appendLine("    $cName self = {0};")
+            for ((name, _) in ci.ctorProps) impl.appendLine("    self.$name = $name;")
+            for (bp in ci.bodyProps) {
+                if (bp.init != null) impl.appendLine("    self.${bp.name} = ${genExpr(bp.init)};")
+            }
+            impl.appendLine("    return self;")
+        }
         impl.appendLine("}")
         impl.appendLine()
 
         // --- data class extras: equals, toString ---
         if (d.isData) {
-            // equals
-            hdr.appendLine("bool ${cName}_equals($cName a, $cName b);")
-            impl.appendLine("bool ${cName}_equals($cName a, $cName b) {")
-            val eqs = props.joinToString(" && ") { p ->
-                val t = resolveTypeName(p.type)
-                if (t == "String") "kt_string_eq(a.${p.name}, b.${p.name})" else "a.${p.name} == b.${p.name}"
-            }
-            impl.appendLine("    return ${eqs.ifEmpty { "true" }};")
-            impl.appendLine("}")
-            impl.appendLine()
-
-            // toString
-            hdr.appendLine("kt_String ${cName}_toString($cName self, char* buf, int bufsz);")
-            impl.appendLine("kt_String ${cName}_toString($cName self, char* buf, int bufsz) {")
-            val fmt = props.joinToString(", ") { "${it.name}=${printfFmt(resolveTypeName(it.type))}" }
-            val args = props.joinToString(", ") { printfArg("self.${it.name}", resolveTypeName(it.type)) }
-            impl.appendLine("    int n = snprintf(buf, bufsz, \"${d.name}($fmt)\"${if (args.isNotEmpty()) ", $args" else ""});")
-            impl.appendLine("    return (kt_String){buf, n};")
-            impl.appendLine("}")
-            impl.appendLine()
+            emitDataClassEquals(cName, ci)
+            emitDataClassToString(d.name, cName, ci)
         }
 
         // --- methods ---
         currentClass = d.name
+        selfIsPointer = true
         pushScope()
-        for (p in props) defineVar(p.name, resolveTypeName(p.type))
+        for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
         for (m in d.members) {
-            if (m is FunDecl) emitMethod(d.name, m)
+            if (m is FunDecl && m.receiver == null) emitMethod(d.name, m)
         }
         popScope()
         currentClass = null
+    }
+
+    private fun emitDataClassEquals(cName: String, ci: ClassInfo) {
+        hdr.appendLine("bool ${cName}_equals($cName a, $cName b);")
+        impl.appendLine("bool ${cName}_equals($cName a, $cName b) {")
+        val eqs = ci.props.joinToString(" && ") { (name, type) ->
+            val t = resolveTypeName(type)
+            when {
+                t == "String" -> "kt_string_eq(a.$name, b.$name)"
+                classes[t]?.isData == true -> "${pfx(t)}_equals(a.$name, b.$name)"
+                else -> "a.$name == b.$name"
+            }
+        }
+        impl.appendLine("    return ${eqs.ifEmpty { "true" }};")
+        impl.appendLine("}")
+        impl.appendLine()
+    }
+
+    private fun emitDataClassToString(ktName: String, cName: String, ci: ClassInfo) {
+        hdr.appendLine("void ${cName}_toString($cName self, kt_StrBuf* sb);")
+        impl.appendLine("void ${cName}_toString($cName self, kt_StrBuf* sb) {")
+        impl.appendLine("    kt_sb_append_cstr(sb, \"$ktName(\");")
+        for ((i, prop) in ci.props.withIndex()) {
+            val (name, type) = prop
+            val t = resolveTypeName(type)
+            if (i > 0) impl.appendLine("    kt_sb_append_cstr(sb, \", \");")
+            impl.appendLine("    kt_sb_append_cstr(sb, \"$name=\");")
+            impl.appendLine("    ${genSbAppend("sb", "self.$name", t)}")
+        }
+        impl.appendLine("    kt_sb_append_char(sb, ')');")
+        impl.appendLine("}")
+        impl.appendLine()
     }
 
     private fun emitMethod(className: String, f: FunDecl) {
@@ -191,6 +245,47 @@ class CCodeGen(private val file: KtFile) {
 
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = true)
         popScope()
+
+        impl.appendLine("}")
+        impl.appendLine()
+    }
+
+    // ── extension function ───────────────────────────────────────────
+
+    private fun emitExtensionFun(f: FunDecl) {
+        val recvTypeName = f.receiver!!.name
+        val cRet = if (f.returnType != null) cType(f.returnType) else "void"
+        val isClassType = classes.containsKey(recvTypeName)
+        val cRecvType = cTypeStr(recvTypeName)
+        val selfParam = if (isClassType) "$cRecvType* self" else "$cRecvType self"
+        val extraParams = f.params.joinToString(", ") { "${cType(it.type)} ${it.name}" }
+        val allParams = if (extraParams.isEmpty()) selfParam else "$selfParam, $extraParams"
+        val cFnName = "${pfx(recvTypeName)}_${f.name}"
+
+        hdr.appendLine("$cRet $cFnName($allParams);")
+        impl.appendLine("$cRet $cFnName($allParams) {")
+
+        val prevClass = currentClass
+        val prevSelfIsPointer = selfIsPointer
+        if (isClassType) {
+            currentClass = recvTypeName
+            selfIsPointer = true
+        } else {
+            currentClass = null
+            selfIsPointer = false
+        }
+
+        pushScope()
+        for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+        if (isClassType) {
+            val ci = classes[recvTypeName]!!
+            for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+        }
+        if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = isClassType)
+        popScope()
+
+        currentClass = prevClass
+        selfIsPointer = prevSelfIsPointer
 
         impl.appendLine("}")
         impl.appendLine()
@@ -313,7 +408,9 @@ class CCodeGen(private val file: KtFile) {
             // Special case: intArrayOf / longArrayOf etc.
             val arrayInit = tryArrayOfInit(s.name, s.init, ct, t, ind)
             if (arrayInit != null) { impl.appendLine(arrayInit); return }
-            impl.appendLine("$ind$qual$ct ${s.name} = ${genExpr(s.init)};")
+            val expr = genExpr(s.init)
+            flushPreStmts(ind)
+            impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
         } else {
             impl.appendLine("$ind$ct ${s.name} = ${defaultVal(t)};")
         }
@@ -338,14 +435,21 @@ class CCodeGen(private val file: KtFile) {
 
     private fun emitAssign(s: AssignStmt, ind: String, method: Boolean) {
         val target = genLValue(s.target, method)
-        impl.appendLine("$ind$target ${s.op} ${genExpr(s.value)};")
+        val value = genExpr(s.value)
+        flushPreStmts(ind)
+        impl.appendLine("$ind$target ${s.op} $value;")
     }
 
     // ── return ───────────────────────────────────────────────────────
 
     private fun emitReturn(s: ReturnStmt, ind: String) {
-        if (s.value != null) impl.appendLine("${ind}return ${genExpr(s.value)};")
-        else impl.appendLine("${ind}return;")
+        if (s.value != null) {
+            val expr = genExpr(s.value)
+            flushPreStmts(ind)
+            impl.appendLine("${ind}return $expr;")
+        } else {
+            impl.appendLine("${ind}return;")
+        }
     }
 
     // ── expression statement (may be println, method call, etc.) ─────
@@ -361,10 +465,12 @@ class CCodeGen(private val file: KtFile) {
             if (name == "println") { emitPrintlnStmt(e.args, ind); return }
             if (name == "print")   { emitPrintStmt(e.args, ind); return }
         }
-        impl.appendLine("$ind${genExpr(e)};")
+        val expr = genExpr(e)
+        flushPreStmts(ind)
+        impl.appendLine("$ind$expr;")
     }
 
-    /** Emit println as C statements (possibly multi-line for data class toString). */
+    /** Emit println as C statements. */
     private fun emitPrintlnStmt(args: List<Arg>, ind: String) {
         if (args.isEmpty()) { impl.appendLine("${ind}printf(\"\\n\");"); return }
         emitPrintStmtInner(args, ind, newline = true)
@@ -379,27 +485,63 @@ class CCodeGen(private val file: KtFile) {
         val arg = args[0].expr
         val nl = if (newline) "\\n" else ""
 
-        // String template → direct printf
+        // String template
         if (arg is StrTemplateExpr) {
-            impl.appendLine("$ind${genPrintfFromTemplate(arg, nl)};")
+            if (templateNeedsStrBuf(arg)) {
+                emitPrintTemplateViaStrBuf(arg, ind, newline)
+            } else {
+                impl.appendLine("$ind${genPrintfFromTemplate(arg, nl)};")
+            }
             return
         }
 
         val t = inferExprType(arg) ?: "Int"
         val expr = genExpr(arg)
+        flushPreStmts(ind)
 
-        // data class → emit toString into buffer, then printf
+        // data class → emit toString into StrBuf, then printf
         if (classes.containsKey(t) && classes[t]!!.isData) {
             val buf = tmp()
             impl.appendLine("${ind}char ${buf}[256];")
-            impl.appendLine("${ind}kt_String ${buf}_s = ${pfx(t)}_toString($expr, $buf, 256);")
-            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_s.len, ${buf}_s.ptr);")
+            impl.appendLine("${ind}kt_StrBuf ${buf}_sb = {${buf}, 0, 256};")
+            impl.appendLine("${ind}${pfx(t)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
             return
         }
 
         val fmt = printfFmt(t) + nl
         val a = printfArg(expr, t)
         impl.appendLine("${ind}printf(\"$fmt\", $a);")
+    }
+
+    /** Check if a template contains data class expressions (need StrBuf). */
+    private fun templateNeedsStrBuf(tmpl: StrTemplateExpr): Boolean {
+        return tmpl.parts.any { part ->
+            part is ExprPart && run {
+                val t = inferExprType(part.expr) ?: "Int"
+                classes.containsKey(t)
+            }
+        }
+    }
+
+    /** Emit a println/print of a complex string template via kt_StrBuf. */
+    private fun emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: String, newline: Boolean) {
+        val buf = tmp()
+        impl.appendLine("${ind}char ${buf}[256];")
+        impl.appendLine("${ind}kt_StrBuf ${buf}_sb = {${buf}, 0, 256};")
+        for (part in tmpl.parts) {
+            when (part) {
+                is LitPart -> impl.appendLine("${ind}kt_sb_append_cstr(&${buf}_sb, \"${escapeStr(part.text)}\");")
+                is ExprPart -> {
+                    val t = inferExprType(part.expr) ?: "Int"
+                    val expr = genExpr(part.expr)
+                    flushPreStmts(ind)
+                    impl.appendLine("$ind${genSbAppend("&${buf}_sb", expr, t)}")
+                }
+            }
+        }
+        val nl = if (newline) "\\n" else ""
+        impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
     }
 
     // ── if (as statement) ────────────────────────────────────────────
@@ -509,7 +651,7 @@ class CCodeGen(private val file: KtFile) {
         is CharLit   -> "'${escapeC(e.value)}'"
         is StrLit    -> "kt_str(\"${escapeStr(e.value)}\")"
         is NullLit   -> "KT_NULL_VAL"
-        is ThisExpr  -> "(*self)"
+        is ThisExpr  -> if (selfIsPointer) "(*self)" else "self"
         is NameExpr  -> genName(e)
         is BinExpr   -> genBin(e)
         is PrefixExpr  -> "(${e.op}${genExpr(e.expr)})"
@@ -599,7 +741,7 @@ class CCodeGen(private val file: KtFile) {
         // Constructor call (known class)
         if (classes.containsKey(name)) {
             val ci = classes[name]!!
-            val filledArgs = fillDefaults(args, ci.props.map { Param(it.first, it.second) }, ci.props.associate {
+            val filledArgs = fillDefaults(args, ci.ctorProps.map { Param(it.first, it.second) }, ci.ctorProps.associate {
                 // find matching ctor param default
                 val cp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == name })
                     ?.ctorParams?.find { p -> p.name == it.first }
@@ -637,7 +779,7 @@ class CCodeGen(private val file: KtFile) {
         // Array .size
         if (method == "size" && recvType?.endsWith("Array") == true) return "$recv.len"
 
-        // Class method
+        // Class method or extension function on class type
         if (recvType != null && classes.containsKey(recvType)) {
             val allArgs = if (argStr.isEmpty()) "&$recv" else "&$recv, $argStr"
             return "${pfx(recvType)}_$method($allArgs)"
@@ -649,6 +791,15 @@ class CCodeGen(private val file: KtFile) {
         // Enum → field access
         if (recvType != null && enums.containsKey(recvType)) {
             return "${pfx(recvType)}_$method"
+        }
+
+        // Extension function on non-class type (Int, String, etc.)
+        if (recvType != null) {
+            val extFun = extensionFuns[recvType]?.find { it.name == method }
+            if (extFun != null) {
+                val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+                return "${pfx(recvType)}_$method($allArgs)"
+            }
         }
 
         return "$recv.$method($argStr)"   // fallback
@@ -715,7 +866,7 @@ class CCodeGen(private val file: KtFile) {
         return sb.toString()
     }
 
-    // ── println / print ──────────────────────────────────────────────
+    // ── println / print (expression context — rare) ──────────────────
 
     private fun genPrintln(args: List<Arg>): String {
         if (args.isEmpty()) return "printf(\"\\n\")"
@@ -739,10 +890,13 @@ class CCodeGen(private val file: KtFile) {
         val t = inferExprType(arg) ?: "Int"
         val expr = genExpr(arg)
 
-        // data class → toString
+        // data class → use preStmts for toString buffer
         if (classes.containsKey(t) && classes[t]!!.isData) {
             val buf = tmp()
-            return "({\n        char ${buf}[256];\n        kt_String ${buf}_s = ${pfx(t)}_toString($expr, $buf, 256);\n        printf(\"%.*s$nl\", (int)${buf}_s.len, ${buf}_s.ptr);\n    })"
+            preStmts += "char ${buf}[256];"
+            preStmts += "kt_StrBuf ${buf}_sb = {${buf}, 0, 256};"
+            preStmts += "${pfx(t)}_toString($expr, &${buf}_sb);"
+            return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
         }
 
         val fmt = printfFmt(t) + nl
@@ -768,25 +922,23 @@ class CCodeGen(private val file: KtFile) {
         return "printf(\"$fmt\"$argsStr)"
     }
 
-    // ── string template (returns kt_String) ──────────────────────────
+    // ── string template (returns kt_String via preStmts) ─────────────
 
     private fun genStrTemplate(e: StrTemplateExpr): String {
         val buf = tmp()
-        val fmt = StringBuilder()
-        val argsList = mutableListOf<String>()
+        preStmts += "char ${buf}[256];"
+        preStmts += "kt_StrBuf ${buf}_sb = {${buf}, 0, 256};"
         for (part in e.parts) {
             when (part) {
-                is LitPart -> fmt.append(escapeStr(part.text))
+                is LitPart -> preStmts += "kt_sb_append_cstr(&${buf}_sb, \"${escapeStr(part.text)}\");"
                 is ExprPart -> {
                     val t = inferExprType(part.expr) ?: "Int"
-                    fmt.append(printfFmt(t))
-                    argsList += printfArg(genExpr(part.expr), t)
+                    val expr = genExpr(part.expr)
+                    preStmts += genSbAppend("&${buf}_sb", expr, t)
                 }
             }
         }
-        val argsStr = if (argsList.isNotEmpty()) ", " + argsList.joinToString(", ") else ""
-        // Use GCC statement expression to stay within an expression context
-        return "({ char ${buf}[256]; int ${buf}_n = snprintf($buf, 256, \"$fmt\"$argsStr); (kt_String){$buf, ${buf}_n}; })"
+        return "kt_sb_to_string(&${buf}_sb)"
     }
 
     // ── toString dispatch ────────────────────────────────────────────
@@ -794,12 +946,49 @@ class CCodeGen(private val file: KtFile) {
     private fun genToString(recv: String, type: String): String {
         if (classes.containsKey(type) && classes[type]!!.isData) {
             val buf = tmp()
-            return "({ char ${buf}[256]; ${pfx(type)}_toString($recv, $buf, 256); })"
+            preStmts += "char ${buf}[256];"
+            preStmts += "kt_StrBuf ${buf}_sb = {${buf}, 0, 256};"
+            preStmts += "${pfx(type)}_toString($recv, &${buf}_sb);"
+            return "kt_sb_to_string(&${buf}_sb)"
         }
         return when (type) {
-            "Int"    -> "({ char ${tmp()}[32]; int ${tmp()}_n = snprintf(${tmp()}, 32, \"%\" PRId32, $recv); (kt_String){${tmp()}, ${tmp()}_n}; })"
+            "Int" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[32];"
+                preStmts += "kt_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+                preStmts += "kt_sb_append_int(&${buf}_sb, $recv);"
+                "kt_sb_to_string(&${buf}_sb)"
+            }
+            "Long" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[32];"
+                preStmts += "kt_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+                preStmts += "kt_sb_append_long(&${buf}_sb, $recv);"
+                "kt_sb_to_string(&${buf}_sb)"
+            }
             "String" -> recv
-            else     -> "kt_str(\"<$type>\")"
+            else -> "kt_str(\"<$type>\")"
+        }
+    }
+
+    // ── StrBuf append helper ─────────────────────────────────────────
+
+    private fun genSbAppend(sbRef: String, expr: String, type: String): String {
+        return when (type) {
+            "Int" -> "kt_sb_append_int($sbRef, $expr);"
+            "Long" -> "kt_sb_append_long($sbRef, $expr);"
+            "Float" -> "kt_sb_append_double($sbRef, (double)$expr);"
+            "Double" -> "kt_sb_append_double($sbRef, $expr);"
+            "Boolean" -> "kt_sb_append_bool($sbRef, $expr);"
+            "Char" -> "kt_sb_append_char($sbRef, $expr);"
+            "String" -> "kt_sb_append_str($sbRef, $expr);"
+            else -> {
+                if (classes.containsKey(type) && classes[type]!!.isData) {
+                    "${pfx(type)}_toString($expr, $sbRef);"
+                } else {
+                    "kt_sb_append_cstr($sbRef, \"<$type>\");"
+                }
+            }
         }
     }
 
@@ -929,9 +1118,16 @@ class CCodeGen(private val file: KtFile) {
         if (method == "toLong") return "Long"
         if (method == "toFloat") return "Float"
         if (method == "toDouble") return "Double"
-        val ci = classes[recvType] ?: return null
-        val m = ci.methods.find { it.name == method } ?: return null
-        return if (m.returnType != null) resolveTypeName(m.returnType) else "Unit"
+        // Class method
+        val ci = classes[recvType]
+        if (ci != null) {
+            val m = ci.methods.find { it.name == method }
+            if (m != null) return if (m.returnType != null) resolveTypeName(m.returnType) else "Unit"
+        }
+        // Extension function on non-class type
+        val extFun = extensionFuns[recvType]?.find { it.name == method }
+        if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
+        return null
     }
 
     private fun inferDotType(e: DotExpr): String? {
@@ -1027,12 +1223,7 @@ class CCodeGen(private val file: KtFile) {
     private fun printfArg(expr: String, t: String): String = when (t) {
         "Boolean" -> "($expr) ? \"true\" : \"false\""
         "String"  -> "(int)($expr).len, ($expr).ptr"
-        else -> {
-            if (classes.containsKey(t) && classes[t]!!.isData) {
-                // need toString buffer — this gets complex in expr position
-                "(int)${pfx(t)}_toString_inline($expr).len, ${pfx(t)}_toString_inline($expr).ptr"
-            } else expr
-        }
+        else -> expr
     }
 
     private fun escapeC(c: Char): String = when (c) {

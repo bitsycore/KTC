@@ -24,7 +24,8 @@ data class FunDecl(
     val name: String,
     val params: List<Param>,
     val returnType: TypeRef?,
-    val body: Block?
+    val body: Block?,
+    val receiver: TypeRef? = null
 ) : Decl()
 
 data class ClassDecl(
