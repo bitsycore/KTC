@@ -279,6 +279,56 @@ fun testStringOps() {
     println(l)
 }
 
+fun testExprIfWhen() {
+    // simple expression if → ternary
+    val a = 10
+    val b = 20
+    val max = if (a > b) a else b
+    println(max)
+
+    // multi-statement expression if → temp var
+    val result = if (a > 5) {
+        val doubled = a * 2
+        doubled + 1
+    } else {
+        a - 1
+    }
+    println(result)
+
+    // simple expression when → nested ternary
+    val grade = 85
+    val letter = when {
+        grade >= 90 -> "A"
+        grade >= 80 -> "B"
+        grade >= 70 -> "C"
+        else -> "F"
+    }
+    println(letter)
+
+    // when with subject
+    val color = 2
+    val name = when (color) {
+        1 -> "red"
+        2 -> "green"
+        3 -> "blue"
+        else -> "unknown"
+    }
+    println(name)
+
+    // multi-statement when branch → temp var
+    val score = 95
+    val msg = when {
+        score >= 90 -> {
+            val bonus = score - 90
+            bonus + 100
+        }
+        else -> {
+            0
+        }
+    }
+    println(msg)
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -308,4 +358,6 @@ fun main(args: Array<String>) {
     testNullableReturn()
     println("--- testStringOps ---")
     testStringOps()
+    println("--- testExprIfWhen ---")
+    testExprIfWhen()
 }

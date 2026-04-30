@@ -1311,31 +1311,140 @@ class CCodeGen(private val file: KtFile) {
     // ── if expression (as C ternary or temp) ─────────────────────────
 
     private fun genIfExpr(e: IfExpr): String {
-        if (e.els == null) return "(${genExpr(e.cond)} ? ${genBlockExpr(e.then)} : 0)"
-        return "(${genExpr(e.cond)} ? ${genBlockExpr(e.then)} : ${genBlockExpr(e.els)})"
+        // Simple case: both branches are single expressions → ternary
+        val thenExpr = blockAsSingleExpr(e.then)
+        val elseExpr = if (e.els != null) blockAsSingleExpr(e.els) else null
+        if (thenExpr != null && (e.els == null || elseExpr != null)) {
+            val thenStr = genExpr(thenExpr)
+            val elseStr = if (elseExpr != null) genExpr(elseExpr) else "0"
+            return "(${genExpr(e.cond)} ? $thenStr : $elseStr)"
+        }
+
+        // Complex case: multi-statement bodies → hoist to temp
+        val t = tmp()
+        val retType = inferIfExprType(e) ?: "Int"
+        val ct = cTypeStr(retType)
+        preStmts += "$ct $t;"
+        preStmts += "if (${genExpr(e.cond)}) {"
+        emitBlockIntoTemp(e.then, t, "    ")
+        if (e.els != null) {
+            preStmts += "} else {"
+            emitBlockIntoTemp(e.els, t, "    ")
+        }
+        preStmts += "}"
+        return t
     }
 
-    private fun genBlockExpr(b: Block): String {
-        // If block has a single ExprStmt, use its expr directly
-        val last = b.stmts.lastOrNull()
-        if (b.stmts.size == 1 && last is ExprStmt) return genExpr(last.expr)
-        if (last is ReturnStmt && last.value != null) return genExpr(last.value)
-        return "0"   // fallback for complex blocks — should use temp vars in full impl
+    /** Try to extract a single expression from a block (last stmt as expr). */
+    private fun blockAsSingleExpr(b: Block): Expr? {
+        if (b.stmts.size == 1) {
+            val s = b.stmts[0]
+            if (s is ExprStmt) return s.expr
+        }
+        return null
     }
 
-    // ── when expression (nested ternary) ─────────────────────────────
-
-    private fun genWhenExpr(e: WhenExpr): String {
-        val sb = StringBuilder()
-        for (br in e.branches) {
-            if (br.conds == null) {
-                sb.append(genBlockExpr(br.body))
+    /** Emit block statements into preStmts, assigning last expression to tempVar. */
+    private fun emitBlockIntoTemp(b: Block, tempVar: String, indent: String) {
+        for ((i, s) in b.stmts.withIndex()) {
+            if (i == b.stmts.lastIndex) {
+                // Last statement: assign its value to temp
+                val expr = when (s) {
+                    is ExprStmt -> s.expr
+                    is ReturnStmt -> s.value
+                    else -> null
+                }
+                if (expr != null) {
+                    preStmts += "$indent$tempVar = ${genExpr(expr)};"
+                } else {
+                    // Non-expression last statement — just emit it
+                    emitStmtToPreStmts(s, indent)
+                }
             } else {
-                val cond = br.conds.joinToString(" || ") { genWhenCond(it, e.subject) }
-                sb.append("($cond) ? ${genBlockExpr(br.body)} : ")
+                emitStmtToPreStmts(s, indent)
             }
         }
-        return sb.toString()
+    }
+
+    /** Emit a statement into preStmts (for hoisting into if/when expression bodies). */
+    private fun emitStmtToPreStmts(s: Stmt, indent: String) {
+        when (s) {
+            is ExprStmt -> {
+                val expr = genExpr(s.expr)
+                preStmts += "$indent$expr;"
+            }
+            is VarDeclStmt -> {
+                val t = if (s.type != null) resolveTypeName(s.type) else (inferExprType(s.init) ?: "Int")
+                val ct = cTypeStr(t)
+                val initExpr = if (s.init != null) genExpr(s.init) else defaultVal(t)
+                preStmts += "$indent$ct ${s.name} = $initExpr;"
+                defineVar(s.name, t)
+            }
+            else -> preStmts += "$indent/* unsupported stmt in expr block */;"
+        }
+    }
+
+    private fun inferIfExprType(e: IfExpr): String? {
+        val thenType = inferBlockType(e.then)
+        if (thenType != null) return thenType
+        if (e.els != null) return inferBlockType(e.els)
+        return null
+    }
+
+    private fun inferBlockType(b: Block): String? {
+        val last = b.stmts.lastOrNull() ?: return null
+        return when (last) {
+            is ExprStmt -> inferExprType(last.expr)
+            is ReturnStmt -> if (last.value != null) inferExprType(last.value) else null
+            else -> null
+        }
+    }
+
+    // ── when expression (nested ternary or temp) ──────────────────────
+
+    private fun genWhenExpr(e: WhenExpr): String {
+        // Check if all branches are single-expression → nested ternary
+        val allSimple = e.branches.all { blockAsSingleExpr(it.body) != null }
+        if (allSimple) {
+            val sb = StringBuilder()
+            for (br in e.branches) {
+                val expr = genExpr(blockAsSingleExpr(br.body)!!)
+                if (br.conds == null) {
+                    sb.append(expr)
+                } else {
+                    val cond = br.conds.joinToString(" || ") { genWhenCond(it, e.subject) }
+                    sb.append("($cond) ? $expr : ")
+                }
+            }
+            return sb.toString()
+        }
+
+        // Complex case: hoist to temp
+        val t = tmp()
+        val retType = inferWhenExprType(e) ?: "Int"
+        val ct = cTypeStr(retType)
+        preStmts += "$ct $t;"
+        for ((bi, br) in e.branches.withIndex()) {
+            if (br.conds == null) {
+                if (bi > 0) preStmts += "} else {"
+                else preStmts += "{"
+            } else {
+                val condStr = br.conds.joinToString(" || ") { genWhenCond(it, e.subject) }
+                val keyword = if (bi == 0) "if" else "} else if"
+                preStmts += "$keyword ($condStr) {"
+            }
+            emitBlockIntoTemp(br.body, t, "    ")
+        }
+        preStmts += "}"
+        return t
+    }
+
+    private fun inferWhenExprType(e: WhenExpr): String? {
+        for (br in e.branches) {
+            val t = inferBlockType(br.body)
+            if (t != null) return t
+        }
+        return null
     }
 
     // ── println / print (expression context — rare) ──────────────────
