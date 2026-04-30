@@ -40,6 +40,9 @@ class CCodeGen(private val file: KtFile) {
     private val funSigs  = mutableMapOf<String, FunSig>()
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
 
+    // Track class/enum types used in Array<T> so we emit KT_ARRAY_DEF for them
+    private val classArrayTypes = mutableSetOf<String>()
+
     // ── Per-scope variable → type mapping ────────────────────────────
     private val scopes = ArrayDeque<MutableMap<String, String>>()
     private fun pushScope() { scopes.addLast(mutableMapOf()) }
@@ -84,8 +87,32 @@ class CCodeGen(private val file: KtFile) {
         }
         if (file.imports.isNotEmpty()) hdr.appendLine()
 
-        // Emit declarations in order
-        for (d in file.decls) emitDecl(d)
+        // Pre-scan for Array<T> type references to discover class array types early
+        scanForClassArrayTypes()
+
+        // Emit struct/enum/object declarations first (defines the element types)
+        for (d in file.decls) when (d) {
+            is ClassDecl  -> emitClass(d)
+            is EnumDecl   -> emitEnum(d)
+            is ObjectDecl -> emitObject(d)
+            else -> {}
+        }
+
+        // Emit KT_ARRAY_DEF for class types used in Array<T>
+        if (classArrayTypes.isNotEmpty()) {
+            hdr.appendLine("/* ── Class array typedefs ── */")
+            for (elem in classArrayTypes) {
+                hdr.appendLine("KT_ARRAY_DEF(${pfx(elem)}, ${pfx(elem)}Array)")
+            }
+            hdr.appendLine()
+        }
+
+        // Emit top-level functions and properties
+        for (d in file.decls) when (d) {
+            is FunDecl  -> if (d.receiver != null) emitExtensionFun(d) else emitFun(d)
+            is PropDecl -> emitTopProp(d)
+            else -> {}
+        }
 
         val srcName = prefix.trimEnd('_').ifEmpty { "main" }
         val src = StringBuilder()
@@ -132,6 +159,58 @@ class CCodeGen(private val file: KtFile) {
                 }
             }
             is PropDecl  -> { /* top-level props handled during emit */ }
+        }
+    }
+
+    /** Pre-scan AST for Array<T> type references to populate classArrayTypes. */
+    private fun scanForClassArrayTypes() {
+        val primitives = setOf("Int", "Long", "Float", "Double", "Boolean", "Char", "String")
+        fun checkType(t: TypeRef?) {
+            if (t == null) return
+            if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
+                val elem = t.typeArgs[0].name
+                if (elem !in primitives) classArrayTypes.add(elem)
+            }
+        }
+        fun scanExpr(e: Expr?) {
+            if (e == null) return
+            if (e is CallExpr) {
+                val name = (e.callee as? NameExpr)?.name
+                if (name == "arrayOf" && e.args.isNotEmpty()) {
+                    // Try to detect class constructors in args
+                    val firstArg = e.args[0].expr
+                    if (firstArg is CallExpr) {
+                        val argName = (firstArg.callee as? NameExpr)?.name
+                        if (argName != null && classes.containsKey(argName)) {
+                            classArrayTypes.add(argName)
+                        }
+                    }
+                }
+            }
+        }
+        for (d in file.decls) {
+            when (d) {
+                is FunDecl -> {
+                    for (p in d.params) checkType(p.type)
+                    d.returnType?.let { checkType(it) }
+                }
+                is ClassDecl -> {
+                    for (p in d.ctorParams) checkType(p.type)
+                    for (m in d.members) if (m is FunDecl) {
+                        for (p in m.params) checkType(p.type)
+                        m.returnType?.let { checkType(it) }
+                    }
+                    for (m in d.members) if (m is PropDecl) {
+                        checkType(m.type)
+                        scanExpr(m.init)
+                    }
+                }
+                is PropDecl -> {
+                    checkType(d.type)
+                    scanExpr(d.init)
+                }
+                else -> {}
+            }
         }
     }
 
@@ -341,16 +420,36 @@ class CCodeGen(private val file: KtFile) {
 
     private fun emitFun(f: FunDecl) {
         val isMain = f.name == "main"
+        val isMainWithArgs = isMain && f.params.size == 1 &&
+                f.params[0].type.name == "Array" &&
+                f.params[0].type.typeArgs.singleOrNull()?.name == "String"
+
         val cRet  = if (isMain) "int" else if (f.returnType != null) cType(f.returnType) else "void"
         val cName = if (isMain) "main" else pfx(f.name)
-        val params = if (isMain && f.params.isEmpty()) "void"
-                     else f.params.joinToString(", ") { "${cType(it.type)} ${it.name}" }
+        val params = when {
+            isMainWithArgs -> "int argc, char** argv"
+            isMain         -> "void"
+            else           -> f.params.joinToString(", ") { "${cType(it.type)} ${it.name}" }
+        }
 
         hdr.appendLine("$cRet $cName($params);")
         impl.appendLine("$cRet $cName($params) {")
 
         pushScope()
-        for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+        if (isMainWithArgs) {
+            // Convert argc/argv → kt_StringArray (skip argv[0] = program name)
+            val argName = f.params[0].name
+            impl.appendLine("    kt_String _args_buf[256];")
+            impl.appendLine("    int32_t _nargs = (argc > 1) ? (int32_t)(argc - 1) : 0;")
+            impl.appendLine("    if (_nargs > 256) _nargs = 256;")
+            impl.appendLine("    for (int32_t _i = 0; _i < _nargs; _i++) {")
+            impl.appendLine("        _args_buf[_i] = (kt_String){argv[_i + 1], (int32_t)strlen(argv[_i + 1])};")
+            impl.appendLine("    }")
+            impl.appendLine("    kt_StringArray $argName = {_args_buf, _nargs};")
+            defineVar(argName, "StringArray")
+        } else {
+            for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+        }
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ")
         if (isMain) impl.appendLine("    return 0;")
         popScope()
@@ -423,6 +522,11 @@ class CCodeGen(private val file: KtFile) {
             "intArrayOf" -> "int32_t"; "longArrayOf" -> "int64_t"
             "floatArrayOf" -> "float"; "doubleArrayOf" -> "double"
             "booleanArrayOf" -> "bool"; "charArrayOf" -> "char"
+            "arrayOf" -> {
+                // Infer element type from first argument or from declared type
+                val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"
+                cTypeStr(elemKt)
+            }
             else -> return null
         }
         val args = init.args.joinToString(", ") { genExpr(it.expr) }
@@ -730,6 +834,9 @@ class CCodeGen(private val file: KtFile) {
                 // handled in emitVarDecl; if used as expr, wrap in compound literal
                 return genArrayOfExpr(name, args)
             }
+            "arrayOf" -> {
+                return genArrayOfExpr(name, args)
+            }
             "IntArray" -> return genNewArray("int32_t", "kt_IntArray", args)
             "LongArray" -> return genNewArray("int64_t", "kt_LongArray", args)
             "FloatArray" -> return genNewArray("float", "kt_FloatArray", args)
@@ -995,17 +1102,33 @@ class CCodeGen(private val file: KtFile) {
     // ── arrayOf helpers ──────────────────────────────────────────────
 
     private fun genArrayOfExpr(name: String, args: List<Arg>): String {
-        val elemType = when (name) {
-            "intArrayOf" -> "int32_t"; "longArrayOf" -> "int64_t"
-            "floatArrayOf" -> "float"; "doubleArrayOf" -> "double"
-            "booleanArrayOf" -> "bool"; "charArrayOf" -> "char"
-            else -> "int32_t"
-        }
-        val arrType = when (name) {
-            "intArrayOf" -> "kt_IntArray"; "longArrayOf" -> "kt_LongArray"
-            "floatArrayOf" -> "kt_FloatArray"; "doubleArrayOf" -> "kt_DoubleArray"
-            "booleanArrayOf" -> "kt_BooleanArray"; "charArrayOf" -> "kt_CharArray"
-            else -> "kt_IntArray"
+        val elemType: String
+        val arrType: String
+        if (name == "arrayOf") {
+            // Infer from first argument
+            val elemKt = if (args.isNotEmpty()) inferExprType(args[0].expr) ?: "Int" else "Int"
+            elemType = cTypeStr(elemKt)
+            val arrKt = when (elemKt) {
+                "Int" -> "IntArray"; "Long" -> "LongArray"
+                "Float" -> "FloatArray"; "Double" -> "DoubleArray"
+                "Boolean" -> "BooleanArray"; "Char" -> "CharArray"
+                "String" -> "StringArray"
+                else -> { classArrayTypes.add(elemKt); "${elemKt}Array" }
+            }
+            arrType = cTypeStr(arrKt)
+        } else {
+            elemType = when (name) {
+                "intArrayOf" -> "int32_t"; "longArrayOf" -> "int64_t"
+                "floatArrayOf" -> "float"; "doubleArrayOf" -> "double"
+                "booleanArrayOf" -> "bool"; "charArrayOf" -> "char"
+                else -> "int32_t"
+            }
+            arrType = when (name) {
+                "intArrayOf" -> "kt_IntArray"; "longArrayOf" -> "kt_LongArray"
+                "floatArrayOf" -> "kt_FloatArray"; "doubleArrayOf" -> "kt_DoubleArray"
+                "booleanArrayOf" -> "kt_BooleanArray"; "charArrayOf" -> "kt_CharArray"
+                else -> "kt_IntArray"
+            }
         }
         val vals = args.joinToString(", ") { genExpr(it.expr) }
         val n = args.size
@@ -1104,6 +1227,17 @@ class CCodeGen(private val file: KtFile) {
             if (name == "doubleArrayOf" || name == "DoubleArray") return "DoubleArray"
             if (name == "booleanArrayOf" || name == "BooleanArray") return "BooleanArray"
             if (name == "charArrayOf" || name == "CharArray") return "CharArray"
+            if (name == "arrayOf") {
+                // Infer element type from first argument
+                val elemType = if (e.args.isNotEmpty()) inferExprType(e.args[0].expr) ?: "Int" else "Int"
+                return when (elemType) {
+                    "Int" -> "IntArray"; "Long" -> "LongArray"
+                    "Float" -> "FloatArray"; "Double" -> "DoubleArray"
+                    "Boolean" -> "BooleanArray"; "Char" -> "CharArray"
+                    "String" -> "StringArray"
+                    else -> { classArrayTypes.add(elemType); "${elemType}Array" }
+                }
+            }
             funSigs[name]?.returnType?.let { return resolveTypeName(it) }
         }
         if (e.callee is DotExpr) return inferMethodReturnType(e.callee, e.args)
@@ -1172,10 +1306,34 @@ class CCodeGen(private val file: KtFile) {
         "DoubleArray"  -> "kt_DoubleArray"
         "BooleanArray" -> "kt_BooleanArray"
         "CharArray"    -> "kt_CharArray"
-        else -> pfx(t)   // class/enum/object type
+        "StringArray"  -> "kt_StringArray"
+        else -> {
+            // Class array types: "Vec2Array" → "game_Vec2Array" (prefixed)
+            if (t.endsWith("Array") && t.length > 5) {
+                val elem = t.removeSuffix("Array")
+                if (classArrayTypes.contains(elem)) return "${pfx(elem)}Array"
+            }
+            pfx(t)   // class/enum/object type
+        }
     }
 
-    private fun resolveTypeName(t: TypeRef?): String = t?.name ?: "Int"
+    private fun resolveTypeName(t: TypeRef?): String {
+        if (t == null) return "Int"
+        if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
+            val elem = t.typeArgs[0].name
+            return when (elem) {
+                "Int"     -> "IntArray"
+                "Long"    -> "LongArray"
+                "Float"   -> "FloatArray"
+                "Double"  -> "DoubleArray"
+                "Boolean" -> "BooleanArray"
+                "Char"    -> "CharArray"
+                "String"  -> "StringArray"
+                else      -> { classArrayTypes.add(elem); "${elem}Array" }
+            }
+        }
+        return t.name
+    }
 
     private fun defaultVal(t: String): String = when (t) {
         "Int", "Long" -> "0"
@@ -1194,7 +1352,15 @@ class CCodeGen(private val file: KtFile) {
         "DoubleArray"  -> "double"
         "BooleanArray" -> "bool"
         "CharArray"    -> "char"
-        else           -> "int32_t"
+        "StringArray"  -> "kt_String"
+        else -> {
+            // Class array: "Vec2Array" → element type "game_Vec2"
+            if (arrType != null && arrType.endsWith("Array") && arrType.length > 5) {
+                val elem = arrType.removeSuffix("Array")
+                if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return pfx(elem)
+            }
+            "int32_t"
+        }
     }
 
     private fun arrayElementKtType(arrType: String?): String = when (arrType) {
@@ -1204,7 +1370,15 @@ class CCodeGen(private val file: KtFile) {
         "DoubleArray"  -> "Double"
         "BooleanArray" -> "Boolean"
         "CharArray"    -> "Char"
-        else           -> "Int"
+        "StringArray"  -> "String"
+        else -> {
+            // Class array: "Vec2Array" → element Kotlin type "Vec2"
+            if (arrType != null && arrType.endsWith("Array") && arrType.length > 5) {
+                val elem = arrType.removeSuffix("Array")
+                if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return elem
+            }
+            "Int"
+        }
     }
 
     // ═══════════════════════════ printf helpers ═══════════════════════

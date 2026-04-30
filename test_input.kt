@@ -73,7 +73,13 @@ fun describe(x: Int): String {
     }
 }
 
-fun main() {
+fun main(args: Array<String>) {
+    // ── Command-line arguments ──
+    println(args.size)
+    for (arg in args) {
+        println(arg)
+    }
+
     // ── Nested data classes ──
     val origin = Vec2(0.0f, 0.0f)
     val size = Vec2(10.0f, 5.0f)
