@@ -10,11 +10,21 @@ package com.bitsycore
  *
  * `fun main()` is never prefixed — always emits `int main(void)`.
  */
-class CCodeGen(private val file: KtFile) {
+class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = listOf()) {
 
     // ── Package prefix ───────────────────────────────────────────────
     private val prefix: String = file.pkg?.replace('.', '_')?.plus("_") ?: ""
-    private fun pfx(name: String): String = if (name == "main") name else "$prefix$name"
+
+    // Map symbol name → its C prefix (for cross-file references)
+    private val symbolPrefix = mutableMapOf<String, String>()
+
+    private fun pfx(name: String): String {
+        if (name == "main") return name
+        // Look up if this symbol belongs to a different package
+        val sp = symbolPrefix[name]
+        if (sp != null) return "$sp$name"
+        return "$prefix$name"
+    }
 
     // ── Symbol tables (populated by collectDecls) ────────────────────
     private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?)
@@ -58,6 +68,18 @@ class CCodeGen(private val file: KtFile) {
     private var currentClass: String? = null
     private var selfIsPointer = true
 
+    /** Returns the class name if `type` is a heap pointer to a known class, else null. */
+    private fun heapClassName(type: String?): String? {
+        if (type == null) return null
+        val t = type.removeSuffix("?")
+        if (!t.endsWith("*")) return null
+        val base = t.dropLast(1)
+        return if (classes.containsKey(base)) base else null
+    }
+
+    /** True if the internal type is a heap class pointer (nullable or not). Uses NULL not $has. */
+    private fun isHeapPointerType(type: String?): Boolean = heapClassName(type) != null
+
     // ── Nullable return tracking ─────────────────────────────────────
     private var currentFnReturnsNullable = false
     private var currentFnReturnType: String = ""
@@ -92,10 +114,13 @@ class CCodeGen(private val file: KtFile) {
         // Imports → #include (skip ktc stdlib imports — they're JVM-only)
         for (imp in file.imports) {
             if (imp.startsWith("ktc")) continue  // ktc stdlib is built into the runtime
-            val path = imp.replace('.', '_')
-            hdr.appendLine("#include \"$path/$path.h\"")
+            // import foo.bar.* → #include "foo_bar.h"
+            // import foo.bar.Baz → #include "foo_bar.h"
+            val parts = imp.removeSuffix(".*").split('.')
+            val headerName = parts.joinToString("_")
+            hdr.appendLine("#include \"$headerName.h\"")
         }
-        if (file.imports.isNotEmpty()) hdr.appendLine()
+        if (file.imports.any { !it.startsWith("ktc") }) hdr.appendLine()
 
         // Pre-scan for Array<T> type references to discover class array types early
         scanForClassArrayTypes()
@@ -130,7 +155,36 @@ class CCodeGen(private val file: KtFile) {
     // ═══════════════════════════ Collect declarations (pre-pass) ═════
 
     private fun collectDecls() {
-        for (d in file.decls) collectDecl(d)
+        // Collect from all files for cross-reference resolution
+        for (f in allFiles) {
+            val fpfx = f.pkg?.replace('.', '_')?.plus("_") ?: ""
+            for (d in f.decls) {
+                collectDecl(d)
+                // Record the prefix for cross-file symbols
+                when (d) {
+                    is ClassDecl -> symbolPrefix[d.name] = fpfx
+                    is EnumDecl -> symbolPrefix[d.name] = fpfx
+                    is ObjectDecl -> symbolPrefix[d.name] = fpfx
+                    is FunDecl -> {
+                        if (d.receiver == null) symbolPrefix[d.name] = fpfx
+                    }
+                    else -> {}
+                }
+            }
+        }
+        // Current file's symbols use current prefix (overwrite any from allFiles)
+        for (d in file.decls) {
+            collectDecl(d)
+            when (d) {
+                is ClassDecl -> symbolPrefix[d.name] = prefix
+                is EnumDecl -> symbolPrefix[d.name] = prefix
+                is ObjectDecl -> symbolPrefix[d.name] = prefix
+                is FunDecl -> {
+                    if (d.receiver == null) symbolPrefix[d.name] = prefix
+                }
+                else -> {}
+            }
+        }
     }
 
     private fun collectDecl(d: Decl) {
@@ -314,6 +368,12 @@ class CCodeGen(private val file: KtFile) {
             emitDataClassToString(d.name, cName, ci)
         }
 
+        // --- heap constructor: ClassName_new(args) → ClassName* ---
+        emitHeapNew(cName, ci)
+
+        // --- toHeap: ClassName_toHeap(value) → ClassName* ---
+        emitToHeap(cName)
+
         // --- methods ---
         currentClass = d.name
         selfIsPointer = true
@@ -354,6 +414,30 @@ class CCodeGen(private val file: KtFile) {
             impl.appendLine("    ${genSbAppend("sb", "\$self.$name", t)}")
         }
         impl.appendLine("    kt_sb_append_char(sb, ')');")
+        impl.appendLine("}")
+        impl.appendLine()
+    }
+
+    /** Generate ClassName_new(args) → ClassName* (heap constructor). */
+    private fun emitHeapNew(cName: String, ci: ClassInfo) {
+        val paramStr = expandCtorParams(ci.ctorProps)
+        val paramDecl = paramStr.ifEmpty { "void" }
+        hdr.appendLine("$cName* ${cName}_new($paramDecl);")
+        impl.appendLine("$cName* ${cName}_new($paramDecl) {")
+        impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
+        impl.appendLine("    *\$p = ${cName}_create(${ci.ctorProps.joinToString(", ") { it.first }});")
+        impl.appendLine("    return \$p;")
+        impl.appendLine("}")
+        impl.appendLine()
+    }
+
+    /** Generate ClassName_toHeap(value) → ClassName* (stack→heap copy). */
+    private fun emitToHeap(cName: String) {
+        hdr.appendLine("$cName* ${cName}_toHeap($cName \$v);")
+        impl.appendLine("$cName* ${cName}_toHeap($cName \$v) {")
+        impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
+        impl.appendLine("    *\$p = \$v;")
+        impl.appendLine("    return \$p;")
         impl.appendLine("}")
         impl.appendLine()
     }
@@ -643,6 +727,9 @@ class CCodeGen(private val file: KtFile) {
     private fun emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) {
         val t = if (s.type != null) resolveTypeName(s.type) else (inferExprType(s.init) ?: "Int")
         val isNullable = s.type?.nullable == true || s.init is NullLit
+                // Heap<T?> → treat as nullable on the pointer
+                || (s.type != null && s.type.name == "Heap" && s.type.typeArgs.isNotEmpty() && s.type.typeArgs[0].nullable)
+        val isHeapPtr = isHeapPointerType(t) || isHeapPointerType("${t}?")
         defineVar(s.name, if (isNullable) "${t}?" else t)
         val ct = cTypeStr(t)
         // Don't const class types, Pointer, typed pointers, nullable, or ArrayList — they need mutable addresses
@@ -651,7 +738,16 @@ class CCodeGen(private val file: KtFile) {
             // Special case: intArrayOf / longArrayOf etc.
             val arrayInit = tryArrayOfInit(s.name, s.init, ct, t, ind)
             if (arrayInit != null) { impl.appendLine(arrayInit); return }
-            if (isNullable) {
+            if (isNullable && isHeapPtr) {
+                // Heap pointer nullable: use NULL, no $has
+                if (s.init is NullLit) {
+                    impl.appendLine("$ind$ct ${s.name} = NULL;")
+                } else {
+                    val expr = genExpr(s.init)
+                    flushPreStmts(ind)
+                    impl.appendLine("$ind$ct ${s.name} = $expr;")
+                }
+            } else if (isNullable) {
                 if (s.init is NullLit) {
                     impl.appendLine("$ind$ct ${s.name} = ${defaultVal(t)};")
                     impl.appendLine("${ind}bool ${s.name}\$has = false;")
@@ -674,8 +770,13 @@ class CCodeGen(private val file: KtFile) {
                 impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
             }
         } else {
-            impl.appendLine("$ind$ct ${s.name} = ${defaultVal(t)};")
-            if (isNullable) impl.appendLine("${ind}bool ${s.name}\$has = false;")
+            if (isNullable && isHeapPtr) {
+                impl.appendLine("$ind$ct ${s.name} = NULL;")
+            } else {
+                impl.appendLine("$ind$ct ${s.name} = ${defaultVal(t)};")
+                if (isNullable) impl.appendLine("${ind}bool ${s.name}\$has = false;")
+            }
+        }
         }
     }
 
@@ -725,16 +826,22 @@ class CCodeGen(private val file: KtFile) {
         val varName = (s.target as? NameExpr)?.name
         val varType = if (varName != null) lookupVar(varName) else null
         val isNullableTarget = varType != null && varType.endsWith("?")
+        val isHeapPtr = isHeapPointerType(varType)
 
         if (isNullableTarget && s.value is NullLit) {
-            val baseType = varType.orEmpty().removeSuffix("?")
-            impl.appendLine("$ind$target = ${defaultVal(baseType)};")
-            impl.appendLine("$ind${target}\$has = false;")
+            if (isHeapPtr) {
+                // Heap pointer: assign NULL
+                impl.appendLine("$ind$target = NULL;")
+            } else {
+                val baseType = varType.orEmpty().removeSuffix("?")
+                impl.appendLine("$ind$target = ${defaultVal(baseType)};")
+                impl.appendLine("$ind${target}\$has = false;")
+            }
         } else {
             val value = genExpr(s.value)
             flushPreStmts(ind)
             impl.appendLine("$ind$target ${s.op} $value;")
-            if (isNullableTarget) {
+            if (isNullableTarget && !isHeapPtr) {
                 impl.appendLine("$ind${target}\$has = true;")
             }
         }
@@ -858,9 +965,69 @@ class CCodeGen(private val file: KtFile) {
 
     // ── if (as statement) ────────────────────────────────────────────
 
+    /**
+     * Detect smart-cast candidates from a condition expression.
+     * Returns a list of (varName, nonNullType) pairs for variables proven non-null.
+     */
+    private fun extractSmartCasts(cond: Expr): List<Pair<String, String>> {
+        val casts = mutableListOf<Pair<String, String>>()
+        when {
+            // x != null
+            cond is BinExpr && cond.op == "!=" && cond.right is NullLit && cond.left is NameExpr -> {
+                val name = cond.left.name
+                val type = lookupVar(name)
+                if (type != null && type.endsWith("?")) {
+                    casts.add(name to type.dropLast(1))
+                }
+            }
+            // null != x
+            cond is BinExpr && cond.op == "!=" && cond.left is NullLit && cond.right is NameExpr -> {
+                val name = cond.right.name
+                val type = lookupVar(name)
+                if (type != null && type.endsWith("?")) {
+                    casts.add(name to type.dropLast(1))
+                }
+            }
+            // x == null (inverse — smart cast applies to else branch)
+            // handled by caller
+        }
+        return casts
+    }
+
+    /** Detect smart-casts for the else branch (condition that proves null in the then branch). */
+    private fun extractElseSmartCasts(cond: Expr): List<Pair<String, String>> {
+        val casts = mutableListOf<Pair<String, String>>()
+        when {
+            // x == null → in else branch, x is non-null
+            cond is BinExpr && cond.op == "==" && cond.right is NullLit && cond.left is NameExpr -> {
+                val name = cond.left.name
+                val type = lookupVar(name)
+                if (type != null && type.endsWith("?")) {
+                    casts.add(name to type.dropLast(1))
+                }
+            }
+            cond is BinExpr && cond.op == "==" && cond.left is NullLit && cond.right is NameExpr -> {
+                val name = cond.right.name
+                val type = lookupVar(name)
+                if (type != null && type.endsWith("?")) {
+                    casts.add(name to type.dropLast(1))
+                }
+            }
+        }
+        return casts
+    }
+
     private fun emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
         impl.appendLine("${ind}if (${genExpr(e.cond)}) {")
+        // Smart cast: narrow nullable types in then-branch
+        val thenCasts = extractSmartCasts(e.cond)
+        if (thenCasts.isNotEmpty()) {
+            pushScope()
+            for ((name, nonNullType) in thenCasts) defineVar(name, nonNullType)
+        }
         emitBlock(e.then, ind, method)
+        if (thenCasts.isNotEmpty()) popScope()
+
         if (e.els != null) {
             // check for else-if chain
             val single = e.els.stmts.singleOrNull()
@@ -870,7 +1037,14 @@ class CCodeGen(private val file: KtFile) {
                 return
             }
             impl.appendLine("$ind} else {")
+            // Smart cast: narrow nullable types in else-branch (x == null → else has x non-null)
+            val elseCasts = extractElseSmartCasts(e.cond)
+            if (elseCasts.isNotEmpty()) {
+                pushScope()
+                for ((name, nonNullType) in elseCasts) defineVar(name, nonNullType)
+            }
             emitBlock(e.els, ind, method)
+            if (elseCasts.isNotEmpty()) popScope()
         }
         impl.appendLine("$ind}")
     }
@@ -911,26 +1085,39 @@ class CCodeGen(private val file: KtFile) {
 
     private fun emitFor(s: ForStmt, ind: String, method: Boolean) {
         val iter = s.iter
+        // Unwrap "step" wrapper: (rangeExpr step N)
+        val step: String?
+        val rangeExpr: Expr
+        if (iter is BinExpr && iter.op == "step") {
+            step = genExpr(iter.right)
+            rangeExpr = iter.left
+        } else {
+            step = null
+            rangeExpr = iter
+        }
         when {
             // for (i in a..b)   inclusive range
-            iter is BinExpr && iter.op == ".." -> {
-                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(iter.left)}; ${s.varName} <= ${genExpr(iter.right)}; ${s.varName}++) {")
+            rangeExpr is BinExpr && rangeExpr.op == ".." -> {
+                val inc = if (step != null) "${s.varName} += $step" else "${s.varName}++"
+                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} <= ${genExpr(rangeExpr.right)}; $inc) {")
                 pushScope(); defineVar(s.varName, "Int")
                 emitBlock(s.body, ind, method)
                 popScope()
                 impl.appendLine("$ind}")
             }
             // for (i in a until b)
-            iter is BinExpr && iter.op == "until" -> {
-                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(iter.left)}; ${s.varName} < ${genExpr(iter.right)}; ${s.varName}++) {")
+            rangeExpr is BinExpr && rangeExpr.op == "until" -> {
+                val inc = if (step != null) "${s.varName} += $step" else "${s.varName}++"
+                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} < ${genExpr(rangeExpr.right)}; $inc) {")
                 pushScope(); defineVar(s.varName, "Int")
                 emitBlock(s.body, ind, method)
                 popScope()
                 impl.appendLine("$ind}")
             }
             // for (i in a downTo b)
-            iter is BinExpr && iter.op == "downTo" -> {
-                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(iter.left)}; ${s.varName} >= ${genExpr(iter.right)}; ${s.varName}--) {")
+            rangeExpr is BinExpr && rangeExpr.op == "downTo" -> {
+                val dec = if (step != null) "${s.varName} -= $step" else "${s.varName}--"
+                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} >= ${genExpr(rangeExpr.right)}; $dec) {")
                 pushScope(); defineVar(s.varName, "Int")
                 emitBlock(s.body, ind, method)
                 popScope()
@@ -938,9 +1125,9 @@ class CCodeGen(private val file: KtFile) {
             }
             // for (item in array/arrayList)  — iterate over elements
             else -> {
-                val arrExpr = genExpr(iter)
+                val arrExpr = genExpr(rangeExpr)
                 val idx = tmp()
-                val arrType = inferExprType(iter)
+                val arrType = inferExprType(rangeExpr)
                 if (arrType != null && arrType.endsWith("ArrayList")) {
                     // ArrayList: use .len and .ptr[idx]
                     val elemKt = arrType.removeSuffix("ArrayList")
@@ -1040,6 +1227,10 @@ class CCodeGen(private val file: KtFile) {
         if (e.op == "!=" && lt == "String") {
             return "!kt_string_eq(${genExpr(e.left)}, ${genExpr(e.right)})"
         }
+        // String <, >, <=, >= → kt_string_cmp
+        if (lt == "String" && e.op in listOf("<", ">", "<=", ">=")) {
+            return "(kt_string_cmp(${genExpr(e.left)}, ${genExpr(e.right)}) ${e.op} 0)"
+        }
         // String + → kt_string_cat
         if (e.op == "+" && (lt == "String" || inferExprType(e.right) == "String")) {
             return genStringConcat(e)
@@ -1070,7 +1261,15 @@ class CCodeGen(private val file: KtFile) {
             "print"   -> return genPrint(args)
             "malloc"  -> {
                 if (e.typeArgs.isNotEmpty()) {
-                    val elemC = cTypeStr(e.typeArgs[0].name)
+                    val typeName = e.typeArgs[0].name
+                    // Class heap constructor: malloc<MyClass>(args) → MyClass_new(args)
+                    if (classes.containsKey(typeName)) {
+                        val cName = pfx(typeName)
+                        val argStr = args.joinToString(", ") { genExpr(it.expr) }
+                        return "${cName}_new($argStr)"
+                    }
+                    // Primitive typed malloc: malloc<Int>(n) → (int32_t*)malloc(...)
+                    val elemC = cTypeStr(typeName)
                     return "($elemC*)malloc(sizeof($elemC) * (size_t)(${genExpr(args[0].expr)}))"
                 }
                 return "malloc((size_t)(${genExpr(args[0].expr)}))"
@@ -1246,8 +1445,28 @@ class CCodeGen(private val file: KtFile) {
         }
 
         // ArrayList .size via property access (handled by genDot below)
-        // Class method or extension function on class type
+
+        // Heap class pointer: method calls pass pointer directly
+        val heapBase = heapClassName(recvType)
+        if (heapBase != null) {
+            // .toHeap() on heap pointer is identity (already on heap), but shouldn't normally happen
+            if (method == "copy" && classes[heapBase]?.isData == true) {
+                return genDataClassCopy(recv, heapBase, args, heap = true)
+            }
+            val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+            return "${pfx(heapBase)}_$method($allArgs)"
+        }
+
+        // Class method or extension function on class type (stack value)
         if (recvType != null && classes.containsKey(recvType)) {
+            // .copy() on data class
+            if (method == "copy" && classes[recvType]?.isData == true) {
+                return genDataClassCopy(recv, recvType, args, heap = false)
+            }
+            // .toHeap() → ClassName_toHeap(value)
+            if (method == "toHeap") {
+                return "${pfx(recvType)}_toHeap($recv)"
+            }
             val allArgs = if (argStr.isEmpty()) "&$recv" else "&$recv, $argStr"
             return "${pfx(recvType)}_$method($allArgs)"
         }
@@ -1298,6 +1517,11 @@ class CCodeGen(private val file: KtFile) {
         // ArrayList .size
         if (e.name == "size" && recvType?.endsWith("ArrayList") == true) return "$recv.len"
         if (e.name == "length" && recvType == "String") return "$recv.len"
+
+        // Heap class pointer: p->field
+        if (heapClassName(recvType) != null) {
+            return "$recv->${e.name}"
+        }
 
         return "$recv.${e.name}"
     }
@@ -1905,6 +2129,10 @@ class CCodeGen(private val file: KtFile) {
             return "${elem}ArrayList"
         }
         if (t.name == "Pointer" && t.typeArgs.isNotEmpty()) {
+            return "${t.typeArgs[0].name}*"
+        }
+        // Heap<MyClass> → "MyClass*"; Heap<MyClass?> treated same as Heap<MyClass>?
+        if (t.name == "Heap" && t.typeArgs.isNotEmpty()) {
             return "${t.typeArgs[0].name}*"
         }
         return t.name

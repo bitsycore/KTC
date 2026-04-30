@@ -5,61 +5,100 @@ import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
-        System.err.println("Usage: ktc <file.kt> [-o <output_dir>]")
-        System.err.println("  Transpiles a Kotlin subset file to C11.")
+        System.err.println("Usage: ktc <file.kt...> [-o <output_dir>]")
+        System.err.println("  Transpiles Kotlin subset files to C11.")
         exitProcess(1)
     }
 
-    val inputPath = args[0]
-    val outputDir = if (args.size >= 3 && args[1] == "-o") args[2] else "."
-    val inputFile = File(inputPath)
+    // Parse args: collect .kt files and -o flag
+    val inputPaths = mutableListOf<String>()
+    var outputDir = "."
+    var i = 0
+    while (i < args.size) {
+        if (args[i] == "-o" && i + 1 < args.size) {
+            outputDir = args[i + 1]
+            i += 2
+        } else {
+            inputPaths += args[i]
+            i++
+        }
+    }
 
-    if (!inputFile.exists()) {
-        System.err.println("Error: file not found: $inputPath")
+    if (inputPaths.isEmpty()) {
+        System.err.println("Error: no input files specified")
         exitProcess(1)
     }
 
-    val source = inputFile.readText()
-
-    // ── Lex ──────────────────────────────────────────────────────────
-    val tokens: List<Token>
-    try {
-        tokens = Lexer(source).tokenize()
-    } catch (e: Exception) {
-        System.err.println("Lexer error: ${e.message}")
-        exitProcess(1)
+    // Resolve input files
+    val inputFiles = mutableListOf<File>()
+    for (path in inputPaths) {
+        val f = File(path)
+        if (f.exists()) {
+            inputFiles += f
+        } else {
+            System.err.println("Error: file not found: $path")
+            exitProcess(1)
+        }
     }
 
-    // ── Parse ────────────────────────────────────────────────────────
-    val ast: KtFile
-    try {
-        ast = Parser(tokens).parseFile()
-    } catch (e: Exception) {
-        System.err.println("Parser error: ${e.message}")
-        exitProcess(1)
+    // ── Lex & Parse all files ────────────────────────────────────────
+    val parsedFiles = mutableListOf<Pair<File, KtFile>>()
+    for (inputFile in inputFiles) {
+        val source = inputFile.readText()
+        val tokens: List<Token>
+        try {
+            tokens = Lexer(source).tokenize()
+        } catch (e: Exception) {
+            System.err.println("Lexer error in ${inputFile.name}: ${e.message}")
+            exitProcess(1)
+        }
+        val ast: KtFile
+        try {
+            ast = Parser(tokens).parseFile()
+        } catch (e: Exception) {
+            System.err.println("Parser error in ${inputFile.name}: ${e.message}")
+            exitProcess(1)
+        }
+        parsedFiles += inputFile to ast
     }
 
-    // ── Generate C ───────────────────────────────────────────────────
-    val output: CCodeGen.COutput
-    try {
-        output = CCodeGen(ast).generate()
-    } catch (e: Exception) {
-        System.err.println("CodeGen error: ${e.message}")
-        exitProcess(1)
-    }
+    // ── Group files by package ───────────────────────────────────────
+    // Files with the same package are merged into a single output unit.
+    // Files with different packages produce separate .c/.h outputs.
+    val byPackage = parsedFiles.groupBy { it.second.pkg ?: it.first.nameWithoutExtension }
 
-    // ── Determine output file names from package ─────────────────────
-    val baseName = ast.pkg?.replace('.', '_') ?: inputFile.nameWithoutExtension
     val outDir = File(outputDir)
     outDir.mkdirs()
 
-    val headerFile = File(outDir, "$baseName.h")
-    val sourceFile = File(outDir, "$baseName.c")
+    val allAsts = parsedFiles.map { it.second }
+    val allOutputNames = mutableListOf<String>()
 
-    headerFile.writeText(output.header)
-    sourceFile.writeText(output.source)
+    for ((pkg, group) in byPackage) {
+        // Merge all files in the same package into one KtFile
+        val mergedImports = group.flatMap { it.second.imports }.distinct()
+        val mergedDecls = group.flatMap { it.second.decls }
+        val mergedFile = KtFile(group.first().second.pkg, mergedImports, mergedDecls)
 
-    // ── Copy runtime (always overwrite to keep in sync) ────────────────
+        val output: CCodeGen.COutput
+        try {
+            output = CCodeGen(mergedFile, allAsts).generate()
+        } catch (e: Exception) {
+            System.err.println("CodeGen error in package '$pkg': ${e.message}")
+            e.printStackTrace()
+            exitProcess(1)
+        }
+
+        val baseName = mergedFile.pkg?.replace('.', '_') ?: pkg
+        val headerFile = File(outDir, "$baseName.h")
+        val sourceFile = File(outDir, "$baseName.c")
+        headerFile.writeText(output.header)
+        sourceFile.writeText(output.source)
+        allOutputNames += baseName
+        println("  wrote ${headerFile.path}")
+        println("  wrote ${sourceFile.path}")
+    }
+
+    // ── Copy runtime (always overwrite to keep in sync) ──────────────
     val runtimeDst = File(outDir, "ktc_runtime.h")
     val runtimeSrc = object {}.javaClass.getResourceAsStream("/ktc_runtime.h")
     if (runtimeSrc != null) {
@@ -75,7 +114,8 @@ fun main(args: Array<String>) {
         stdlibDst.writeText(stdlibSrc.bufferedReader().readText())
     }
 
-    println("  wrote ${headerFile.path}")
-    println("  wrote ${sourceFile.path}")
-    println("Done. Compile with:  cc -std=c11 -o ${baseName} ${sourceFile.name}")
+    // Print compile command
+    val sourceNames = allOutputNames.joinToString(" ") { "$it.c" }
+    val firstBase = allOutputNames.first()
+    println("Done. Compile with:  cc -std=c11 -o $firstBase $sourceNames")
 }

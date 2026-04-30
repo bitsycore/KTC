@@ -329,6 +329,76 @@ fun testExprIfWhen() {
     println(msg)
 }
 
+fun testSmartCast() {
+    // Smart cast: x != null → use x directly without !!
+    var x: Int? = 42
+    if (x != null) {
+        println(x)  // should work without !! — smart cast to Int
+    }
+
+    // Smart cast: x == null → else branch has non-null x
+    var y: Int? = 99
+    if (y == null) {
+        println("y is null")
+    } else {
+        println(y)  // smart cast in else branch
+    }
+
+    // Null path
+    var z: Int? = null
+    if (z != null) {
+        println(z)
+    } else {
+        println("z is null")
+    }
+
+    // Smart cast with string
+    var s: String? = "hello"
+    if (s != null) {
+        println(s)
+    }
+}
+
+fun testForStep() {
+    // for with step on range
+    var sum = 0
+    for (i in 0..10 step 2) {
+        sum = sum + i
+    }
+    println(sum) // 0+2+4+6+8+10 = 30
+
+    // for with step on until
+    var sum2 = 0
+    for (i in 0 until 10 step 3) {
+        sum2 = sum2 + i
+    }
+    println(sum2) // 0+3+6+9 = 18
+
+    // for with step on downTo
+    var sum3 = 0
+    for (i in 10 downTo 0 step 2) {
+        sum3 = sum3 + i
+    }
+    println(sum3) // 10+8+6+4+2+0 = 30
+}
+
+fun testStringCompare() {
+    val a = "apple"
+    val b = "banana"
+    println(a < b)    // true
+    println(a > b)    // false
+    println(a <= b)   // true
+    println(a >= b)   // false
+    println(a == b)   // false
+    println(a != b)   // true
+
+    // same string
+    val c = "apple"
+    println(a == c)   // true
+    println(a >= c)   // true
+    println(a <= c)   // true
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -360,4 +430,10 @@ fun main(args: Array<String>) {
     testStringOps()
     println("--- testExprIfWhen ---")
     testExprIfWhen()
+    println("--- testSmartCast ---")
+    testSmartCast()
+    println("--- testForStep ---")
+    testForStep()
+    println("--- testStringCompare ---")
+    testStringCompare()
 }
