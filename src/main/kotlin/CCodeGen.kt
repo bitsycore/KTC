@@ -177,7 +177,6 @@ class CCodeGen(private val file: KtFile) {
             if (e is CallExpr) {
                 val name = (e.callee as? NameExpr)?.name
                 if (name == "arrayOf" && e.args.isNotEmpty()) {
-                    // Try to detect class constructors in args
                     val firstArg = e.args[0].expr
                     if (firstArg is CallExpr) {
                         val argName = (firstArg.callee as? NameExpr)?.name
@@ -186,19 +185,35 @@ class CCodeGen(private val file: KtFile) {
                         }
                     }
                 }
+                // Recurse into args
+                for (arg in e.args) scanExpr(arg.expr)
             }
         }
+        fun scanStmt(s: Stmt) {
+            when (s) {
+                is VarDeclStmt -> { checkType(s.type); scanExpr(s.init) }
+                is ExprStmt -> scanExpr(s.expr)
+                is ForStmt -> { scanExpr(s.iter); s.body.stmts.forEach(::scanStmt) }
+                is WhileStmt -> s.body.stmts.forEach(::scanStmt)
+                is DoWhileStmt -> s.body.stmts.forEach(::scanStmt)
+                is ReturnStmt -> scanExpr(s.value)
+                else -> {}
+            }
+        }
+        fun scanBody(body: Block?) { body?.stmts?.forEach(::scanStmt) }
         for (d in file.decls) {
             when (d) {
                 is FunDecl -> {
                     for (p in d.params) checkType(p.type)
                     d.returnType?.let { checkType(it) }
+                    scanBody(d.body)
                 }
                 is ClassDecl -> {
                     for (p in d.ctorParams) checkType(p.type)
                     for (m in d.members) if (m is FunDecl) {
                         for (p in m.params) checkType(p.type)
                         m.returnType?.let { checkType(it) }
+                        scanBody(m.body)
                     }
                     for (m in d.members) if (m is PropDecl) {
                         checkType(m.type)
@@ -215,16 +230,6 @@ class CCodeGen(private val file: KtFile) {
     }
 
     // ═══════════════════════════ Emit declarations ════════════════════
-
-    private fun emitDecl(d: Decl) {
-        when (d) {
-            is ClassDecl  -> emitClass(d)
-            is EnumDecl   -> emitEnum(d)
-            is ObjectDecl -> emitObject(d)
-            is FunDecl    -> if (d.receiver != null) emitExtensionFun(d) else emitFun(d)
-            is PropDecl   -> emitTopProp(d)
-        }
-    }
 
     // ── class / data class ───────────────────────────────────────────
 
@@ -1287,7 +1292,8 @@ class CCodeGen(private val file: KtFile) {
     // ═══════════════════════════ C type mapping ═══════════════════════
 
     private fun cType(t: TypeRef): String {
-        val base = cTypeStr(t.name)
+        val resolved = resolveTypeName(t)
+        val base = cTypeStr(resolved)
         return if (t.nullable) "kt_Nullable_${t.name}" else base
     }
 

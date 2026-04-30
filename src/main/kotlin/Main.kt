@@ -1,12 +1,13 @@
 package com.bitsycore
 
 import java.io.File
+import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
         System.err.println("Usage: ktc <file.kt> [-o <output_dir>]")
         System.err.println("  Transpiles a Kotlin subset file to C11.")
-        System.exit(1)
+        exitProcess(1)
     }
 
     val inputPath = args[0]
@@ -15,7 +16,7 @@ fun main(args: Array<String>) {
 
     if (!inputFile.exists()) {
         System.err.println("Error: file not found: $inputPath")
-        System.exit(1)
+        exitProcess(1)
     }
 
     val source = inputFile.readText()
@@ -26,8 +27,7 @@ fun main(args: Array<String>) {
         tokens = Lexer(source).tokenize()
     } catch (e: Exception) {
         System.err.println("Lexer error: ${e.message}")
-        System.exit(1)
-        return
+        exitProcess(1)
     }
 
     // ── Parse ────────────────────────────────────────────────────────
@@ -36,8 +36,7 @@ fun main(args: Array<String>) {
         ast = Parser(tokens).parseFile()
     } catch (e: Exception) {
         System.err.println("Parser error: ${e.message}")
-        System.exit(1)
-        return
+        exitProcess(1)
     }
 
     // ── Generate C ───────────────────────────────────────────────────
@@ -46,8 +45,7 @@ fun main(args: Array<String>) {
         output = CCodeGen(ast).generate()
     } catch (e: Exception) {
         System.err.println("CodeGen error: ${e.message}")
-        System.exit(1)
-        return
+        exitProcess(1)
     }
 
     // ── Determine output file names from package ─────────────────────

@@ -80,6 +80,19 @@ fun main(args: Array<String>) {
         println(arg)
     }
 
+    // ── Array<T> with class type ──
+    val points = arrayOf(Vec2(1.0f, 2.0f), Vec2(3.0f, 4.0f), Vec2(5.0f, 6.0f))
+    for (pt in points) {
+        println(pt)
+    }
+    println(points.size)
+
+    // ── Array<String> via arrayOf ──
+    val names = arrayOf("Alice", "Bob", "Charlie")
+    for (name in names) {
+        println(name)
+    }
+
     // ── Nested data classes ──
     val origin = Vec2(0.0f, 0.0f)
     val size = Vec2(10.0f, 5.0f)
