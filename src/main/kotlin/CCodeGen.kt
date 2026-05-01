@@ -73,6 +73,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── Current class context (when generating methods) ──────────────
     private var currentClass: String? = null
     private var selfIsPointer = true
+    private var currentExtRecvType: String? = null
 
     /** Returns the class name if `type` is a heap pointer to a known class, else null.
      *  Works for all Heap variants: "T*", "T*?", "T*#" */
@@ -565,6 +566,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         val prevClass = currentClass
         val prevSelfIsPointer = selfIsPointer
+        val prevExtRecvType = currentExtRecvType
+        currentExtRecvType = recvTypeName
         if (isClassType) {
             currentClass = recvTypeName
             selfIsPointer = true
@@ -587,6 +590,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         currentClass = prevClass
         selfIsPointer = prevSelfIsPointer
+        currentExtRecvType = prevExtRecvType
 
         impl.appendLine("}")
         impl.appendLine()
@@ -829,7 +833,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 f.params[0].type.typeArgs.singleOrNull()?.name == "String"
 
         val returnsNullable = !isMain && f.returnType != null && f.returnType.nullable
-        val cRet  = if (isMain) "int" else if (f.returnType != null) cType(f.returnType) else "void"
+        val cRet  = if (isMain) "int" else if (returnsNullable) "bool" else if (f.returnType != null) cType(f.returnType) else "void"
         val cName = if (isMain) "main" else pfx(f.name)
         val params = when {
             isMainWithArgs -> "int argc, char** argv"
@@ -837,7 +841,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else           -> {
                 val base = expandParams(f.params)
                 if (returnsNullable) {
-                    if (base.isEmpty()) "bool* \$has_out" else "$base, bool* \$has_out"
+                    val outType = cType(f.returnType!!)
+                    val outParam = "$outType* \$out"
+                    if (base.isEmpty()) outParam else "$base, $outParam"
                 } else base
             }
         }
@@ -877,6 +883,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val lastStmt = f.body?.stmts?.lastOrNull()
         if (lastStmt !is ReturnStmt) emitDeferredBlocks("    ")
         if (isMain) impl.appendLine("    return 0;")
+        else if (returnsNullable && lastStmt !is ReturnStmt) impl.appendLine("    return false;")
         popScope()
 
         deferStack.clear()
@@ -934,7 +941,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 isHeapPointerType(t) &&
                 (s.type?.nullable == true || s.init is NullLit)
         val isNullable = !isHeapValNull && !isHeapPtrNull &&
-                (s.type?.nullable == true || s.init is NullLit)
+                (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init))
 
         // Register type in scope
         defineVar(s.name, when {
@@ -996,10 +1003,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         impl.appendLine("$ind$ct ${s.name} = ${defaultVal(t)};")
                         impl.appendLine("${ind}bool ${s.name}\$has = false;")
                     } else if (isNullableReturningCall(s.init)) {
-                        impl.appendLine("${ind}bool ${s.name}\$has;")
-                        val expr = genExprWithNullableOut(s.init, "${s.name}\$has")
+                        impl.appendLine("$ind$ct ${s.name};")
+                        val expr = genExprWithNullableOut(s.init, s.name)
                         flushPreStmts(ind)
-                        impl.appendLine("$ind$ct ${s.name} = $expr;")
+                        impl.appendLine("${ind}bool ${s.name}\$has = $expr;")
                     } else {
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
@@ -1109,14 +1116,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return funSigs[name]?.returnType?.nullable == true
     }
 
-    /** Generate a call expression that returns nullable, appending &hasVar as extra arg. */
-    private fun genExprWithNullableOut(e: Expr, hasVar: String): String {
+    /** Generate a call expression that returns nullable, appending &outVar as extra arg.
+     *  The function returns bool (has value), and writes the value through the out pointer. */
+    private fun genExprWithNullableOut(e: Expr, outVar: String): String {
         if (e !is CallExpr) return genExpr(e)
         val name = (e.callee as? NameExpr)?.name ?: return genExpr(e)
         val cName = pfx(name)
         val sig = funSigs[name]
         val args = expandCallArgs(e.args, sig?.params)
-        val extraArg = "&$hasVar"
+        val extraArg = "&$outVar"
         val allArgs = if (args.isEmpty()) extraArg else "$args, $extraArg"
         return "$cName($allArgs)"
     }
@@ -1199,20 +1207,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (currentFnReturnsNullable) {
             if (s.value == null || s.value is NullLit) {
                 emitDeferredBlocks(ind)
-                impl.appendLine("$ind*\$has_out = false;")
-                impl.appendLine("${ind}return ${defaultVal(currentFnReturnBaseType())};")
+                impl.appendLine("${ind}return false;")
             } else {
                 val expr = genExpr(s.value)
                 flushPreStmts(ind)
                 if (deferStack.isNotEmpty()) {
                     val t = tmp()
                     impl.appendLine("$ind${cTypeStr(currentFnReturnBaseType())} $t = $expr;")
-                    impl.appendLine("$ind*\$has_out = true;")
+                    impl.appendLine("$ind*\$out = $t;")
                     emitDeferredBlocks(ind)
-                    impl.appendLine("${ind}return $t;")
+                    impl.appendLine("${ind}return true;")
                 } else {
-                    impl.appendLine("$ind*\$has_out = true;")
-                    impl.appendLine("${ind}return $expr;")
+                    impl.appendLine("$ind*\$out = $expr;")
+                    impl.appendLine("${ind}return true;")
                 }
             }
         } else {
@@ -1263,6 +1270,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (isHeapValueNullable(recvVarType)) {
                     impl.appendLine("$ind${recvVarName}\$has = true;")
                 }
+                return
+            }
+        }
+        // Safe method call as statement: a?.print() → if (a$has) { String_print(a); }
+        if (e is CallExpr && e.callee is SafeDotExpr) {
+            val safe = e.callee
+            val recvName = (safe.obj as? NameExpr)?.name
+            val recvType = if (recvName != null) lookupVar(recvName) else null
+            if (recvType != null && recvType.endsWith("?")) {
+                val dotExpr = DotExpr(safe.obj, safe.name)
+                val callExpr = genMethodCall(dotExpr, e.args)
+                flushPreStmts(ind)
+                impl.appendLine("${ind}if (${recvName}\$has) { $callExpr; }")
                 return
             }
         }
@@ -1779,9 +1799,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val ct = cTypeStr(retType)
             val t = tmp()
             val hasVar = "${t}\$has"
-            preStmts += "bool $hasVar;"
-            val allArgs = if (expandedArgs.isEmpty()) "&$hasVar" else "$expandedArgs, &$hasVar"
-            preStmts += "$ct $t = ${pfx(name)}($allArgs);"
+            preStmts += "$ct $t;"
+            val allArgs = if (expandedArgs.isEmpty()) "&$t" else "$expandedArgs, &$t"
+            preStmts += "bool $hasVar = ${pfx(name)}($allArgs);"
             defineVar(t, "${retType}?")
             return t
         }
@@ -1840,7 +1860,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun genMethodCall(dot: DotExpr, args: List<Arg>): String {
-        val recvType = inferExprType(dot.obj)
+        val recvType = inferExprType(dot.obj)?.removeSuffix("?")
         val recv = genExpr(dot.obj)
         val method = dot.name
         val argStr = args.joinToString(", ") { genExpr(it.expr) }
@@ -2011,9 +2031,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): String {
         val recv = genExpr(dot.obj)
-        val argStr = args.joinToString(", ") { genExpr(it.expr) }
-        // x?.method(args) → x$has ? x.method(args) : defaultVal
-        return "(${recv}\$has ? /* ${dot.name}($argStr) */ 0 : 0)"  // TODO: proper dispatch
+        val recvName = (dot.obj as? NameExpr)?.name
+        // x?.method(args) → x$has ? ClassName_method(x, args) : defaultVal
+        val dotExpr = DotExpr(dot.obj, dot.name)
+        val call = genMethodCall(dotExpr, args)
+        return "(${recvName}\$has ? $call : 0)"
     }
 
     // ── dot access (property, enum) ──────────────────────────────────
@@ -2453,7 +2475,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is CharLit  -> "Char"
         is StrLit, is StrTemplateExpr -> "String"
         is NullLit  -> null
-        is ThisExpr -> currentClass
+        is ThisExpr -> currentExtRecvType ?: currentClass
         is NameExpr -> lookupVar(e.name) ?: run {
             // Could be enum type
             if (enums.containsKey(e.name)) e.name else null
