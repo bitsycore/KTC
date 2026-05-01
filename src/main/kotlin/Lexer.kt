@@ -190,6 +190,7 @@ class Lexer(private val src: String) {
             c == '[' -> { advance(); emit(TokenType.LBRACKET, "[") }
             c == ']' -> { advance(); emit(TokenType.RBRACKET, "]") }
             c == ',' -> { advance(); emit(TokenType.COMMA, ",") }
+            c == ':' && nc == ':' -> { advance(); advance(); emit(TokenType.COLON_COLON, "::") }
             c == ':' -> { advance(); emit(TokenType.COLON, ":") }
             c == ';' -> { advance(); emit(TokenType.SEMICOLON, ";") }
             c == '.' && nc == '.' -> { advance(); advance(); emit(TokenType.DOT_DOT, "..") }

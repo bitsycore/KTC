@@ -89,6 +89,28 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun isHeapPtrNullable(type: String?): Boolean =
         type != null && type.endsWith("*?") && heapClassName(type) != null
 
+    /** True if type is a function pointer type: "Fun(P1,P2)->R" */
+    private fun isFuncType(t: String): Boolean = t.startsWith("Fun(")
+
+    /** Parse a function type string "Fun(P1,P2)->R" into (paramTypes, returnType) */
+    private fun parseFuncType(t: String): Pair<List<String>, String> {
+        // Format: Fun(P1,P2,...)->R
+        val inner = t.removePrefix("Fun(")
+        val parenEnd = inner.indexOf(")->")
+        val paramStr = inner.substring(0, parenEnd)
+        val retType = inner.substring(parenEnd + 3)
+        val params = if (paramStr.isEmpty()) emptyList() else paramStr.split(",")
+        return params to retType
+    }
+
+    /** Emit a C function pointer declaration: "retType (*name)(paramTypes)" */
+    private fun cFuncPtrDecl(t: String, name: String): String {
+        val (params, ret) = parseFuncType(t)
+        val cRet = cTypeStr(ret)
+        val cParams = if (params.isEmpty()) "void" else params.joinToString(", ") { cTypeStr(it) }
+        return "$cRet (*$name)($cParams)"
+    }
+
     // ── Nullable return tracking ─────────────────────────────────────
     private var currentFnReturnsNullable = false
     private var currentFnReturnType: String = ""
@@ -329,7 +351,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("typedef struct {")
         for ((name, type) in ci.props) {
             val resolved = resolveTypeName(type)
-            if (isArrayType(resolved)) {
+            if (isFuncType(resolved)) {
+                hdr.appendLine("    ${cFuncPtrDecl(resolved, name)};")
+            } else if (isArrayType(resolved)) {
                 hdr.appendLine("    ${cTypeStr(resolved)} $name;")
                 hdr.appendLine("    int32_t ${name}\$len;")
             } else if (type.nullable) {
@@ -749,6 +773,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             isNullable     -> "${t}?"                  // "Int?" etc.
             else           -> t
         })
+
+        // ── Function pointer type: special declaration syntax ──
+        if (isFuncType(t)) {
+            if (s.init != null) {
+                val expr = genExpr(s.init)
+                flushPreStmts(ind)
+                impl.appendLine("$ind${cFuncPtrDecl(t, s.name)} = $expr;")
+            } else {
+                impl.appendLine("$ind${cFuncPtrDecl(t, s.name)} = NULL;")
+            }
+            return
+        }
 
         val ct = cTypeStr(t)
         // Don't const class types, Pointer, typed pointers, nullable, or ArrayList
@@ -1264,6 +1300,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is StrTemplateExpr -> genStrTemplate(e)
         is IsCheckExpr -> "/* is-check */ true"
         is CastExpr    -> "(${cType(e.type)})(${genExpr(e.expr)})"
+        is FunRefExpr  -> pfx(e.name)    // ::functionName → C function pointer
     }
 
     // ── names (may resolve to enum, object field, self->field) ───────
@@ -1404,6 +1441,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val typeName = "${arrayListCPrefix(arrayListElem)}ArrayList"
             val cap = if (args.isNotEmpty()) genExpr(args[0].expr) else "16"
             return "${typeName}_create($cap)"
+        }
+
+        // Function pointer call: variable with function type → just call it
+        val varType = lookupVar(name)
+        if (varType != null && isFuncType(varType)) {
+            val argStr = args.joinToString(", ") { genExpr(it.expr) }
+            return "$name($argStr)"
         }
 
         // Constructor call (known class)
@@ -2044,6 +2088,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is ElvisExpr -> (inferExprType(e.left) ?: inferExprType(e.right))?.removeSuffix("?")?.removeSuffix("#")
         is IsCheckExpr -> "Boolean"
         is CastExpr -> e.type.name
+        is FunRefExpr -> {
+            // Look up the function signature and build a Fun(...)->R type string
+            val sig = funSigs[e.name]
+            if (sig != null) {
+                val params = sig.params.joinToString(",") { resolveTypeName(it.type) }
+                val ret = if (sig.returnType != null) resolveTypeName(sig.returnType) else "Unit"
+                "Fun($params)->$ret"
+            } else null
+        }
     }
 
     private fun inferCallType(e: CallExpr): String? {
@@ -2175,7 +2228,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val parts = mutableListOf<String>()
         for ((name, type) in props) {
             val resolved = resolveTypeName(type)
-            if (isArrayType(resolved)) {
+            if (isFuncType(resolved)) {
+                parts += cFuncPtrDecl(resolved, name)
+            } else if (isArrayType(resolved)) {
                 parts += "${cTypeStr(resolved)} $name"
                 parts += "int32_t ${name}\$len"
             } else if (type.nullable) {
@@ -2198,7 +2253,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val parts = mutableListOf<String>()
         for (p in params) {
             val resolved = resolveTypeName(p.type)
-            if (isArrayType(resolved)) {
+            if (isFuncType(resolved)) {
+                parts += cFuncPtrDecl(resolved, p.name)
+            } else if (isArrayType(resolved)) {
                 parts += "${cTypeStr(resolved)} ${p.name}"
                 parts += "int32_t ${p.name}\$len"
             } else if (p.type.nullable) {
@@ -2212,6 +2269,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun cTypeStr(t: String): String = when {
+        // Function pointer type — can't be expressed as a simple type, use void* as fallback
+        // (actual declarations use cFuncPtrDecl which embeds the variable name)
+        t.startsWith("Fun(") -> "void*"
         // Strip nullable marker — handled by companion $has variable
         t.endsWith("?") -> cTypeStr(t.dropLast(1))
         // Strip heap-value-nullable marker — also handled by $has
@@ -2260,6 +2320,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun resolveTypeName(t: TypeRef?): String {
         if (t == null) return "Int"
+        // Function type: (P1, P2) -> R → "Fun(P1,P2)->R"
+        if (t.funcParams != null) {
+            val params = t.funcParams.joinToString(",") { resolveTypeName(it) }
+            val ret = resolveTypeName(t.funcReturn)
+            return "Fun($params)->$ret"
+        }
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
             val elem = t.typeArgs[0].name
             return when (elem) {

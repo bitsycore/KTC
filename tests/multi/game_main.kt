@@ -8,13 +8,12 @@ class Test {
 }
 
 fun main() {
-    val a = malloc<Test>(10)
+    val a = malloc<Test>()
     println(a)
-    val pts = Point(1f, 2f)
+    val pts = Point(1, 2)
     println(pts)
     
     val b = Vec3(4.0f, 5.0f, 6.0f)
-    println(a)
     println(b)
-    //println(dot(a, b))
+    println(dot(b, b))
 }

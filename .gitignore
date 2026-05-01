@@ -43,4 +43,7 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### KtC test output ###
 /test_out/
+/tests/out/

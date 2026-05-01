@@ -461,6 +461,34 @@ fun testHeapNullable() {
     free(r)
 }
 
+fun addTwo(a: Int, b: Int): Int {
+    return a + b
+}
+
+fun mulTwo(a: Int, b: Int): Int {
+    return a * b
+}
+
+fun applyOp(x: Int, y: Int, op: (Int, Int) -> Int): Int {
+    return op(x, y)
+}
+
+fun testFunPtr() {
+    // Direct function pointer variable
+    val f: (Int, Int) -> Int = ::addTwo
+    println(f(3, 4))
+
+    // Pass function reference as argument
+    println(applyOp(5, 6, ::addTwo))
+    println(applyOp(5, 6, ::mulTwo))
+
+    // Reassign function pointer
+    var g: (Int, Int) -> Int = ::addTwo
+    println(g(10, 20))
+    g = ::mulTwo
+    println(g(10, 20))
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -502,4 +530,6 @@ fun main(args: Array<String>) {
     testHeap()
     println("--- testHeapNullable ---")
     testHeapNullable()
+    println("--- testFunPtr ---")
+    testFunPtr()
 }

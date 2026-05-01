@@ -5,7 +5,9 @@ package com.bitsycore
 data class TypeRef(
     val name: String,
     val nullable: Boolean = false,
-    val typeArgs: List<TypeRef> = emptyList()
+    val typeArgs: List<TypeRef> = emptyList(),
+    val funcParams: List<TypeRef>? = null,   // non-null → this is a function type: (params) -> returnType
+    val funcReturn: TypeRef? = null           // return type when funcParams != null
 )
 
 // ═══════════════════════════ File ═══════════════════════════
@@ -131,6 +133,7 @@ data class NotNullExpr(val expr: Expr) : Expr()   // !!
 data class ElvisExpr(val left: Expr, val right: Expr) : Expr()   // ?:
 data class IsCheckExpr(val expr: Expr, val type: TypeRef, val negated: Boolean) : Expr()
 data class CastExpr(val expr: Expr, val type: TypeRef) : Expr()
+data class FunRefExpr(val name: String) : Expr()   // ::functionName
 
 // ═══════════════════════════ Helpers ═══════════════════════════
 

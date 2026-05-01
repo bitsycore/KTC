@@ -409,6 +409,7 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.STRING_LIT) -> StrLit(advance().value)
             at(TokenType.STR_TMPL_START) -> parseStringTemplate()
             at(TokenType.IDENT)      -> NameExpr(advance().value)
+            at(TokenType.COLON_COLON) -> { advance(); FunRefExpr(expectIdent()) }
             at(TokenType.IF)         -> parseIfExpr()
             at(TokenType.WHEN)       -> parseWhenExpr()
             at(TokenType.LPAREN)     -> { advance(); nesting++; skipNL(); val e = parseExpr(); skipNL(); expect(TokenType.RPAREN); nesting--; e }
@@ -539,6 +540,27 @@ class Parser(private val tokens: List<Token>) {
     }
 
     private fun parseTypeRef(): TypeRef {
+        // Function type: (T, T, ...) -> R
+        if (at(TokenType.LPAREN)) {
+            val saved = pos
+            try {
+                advance(); nesting++; skipNL()
+                val paramTypes = mutableListOf<TypeRef>()
+                while (!at(TokenType.RPAREN) && !at(TokenType.EOF)) {
+                    paramTypes += parseTypeRef()
+                    if (at(TokenType.COMMA)) { advance(); skipNL() } else break
+                }
+                expect(TokenType.RPAREN); nesting--; skipNL()
+                if (at(TokenType.ARROW)) {
+                    advance(); skipNL()
+                    val retType = parseTypeRef()
+                    val nullable = if (at(TokenType.QUESTION)) { advance(); true } else false
+                    return TypeRef("Function", nullable, emptyList(), paramTypes, retType)
+                }
+            } catch (_: Exception) { }
+            // Not a function type — rollback (shouldn't normally happen in type position)
+            pos = saved
+        }
         val name = parseQualifiedName()
         val typeArgs = if (at(TokenType.LT)) {
             advance(); nesting++; skipNL()
@@ -633,6 +655,7 @@ class Parser(private val tokens: List<Token>) {
         TokenType.STRING_LIT, TokenType.CHAR_LIT, TokenType.STR_TMPL_START,
         TokenType.TRUE, TokenType.FALSE, TokenType.NULL, TokenType.THIS,
         TokenType.IDENT, TokenType.LPAREN, TokenType.IF, TokenType.WHEN,
+        TokenType.COLON_COLON,
         TokenType.MINUS, TokenType.EXCL, TokenType.PLUS_PLUS, TokenType.MINUS_MINUS -> true
         else -> false
     }

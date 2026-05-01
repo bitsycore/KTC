@@ -15,7 +15,7 @@ enum class TokenType {
     CLASS, DATA, OBJECT, ENUM,
     IF, ELSE, WHEN,
     FOR, WHILE, DO,
-    RETURN, BREAK, CONTINUE,
+    RETURN, BREAK, CONTINUE, DEFER,
     IN, IS, AS,
     NULL, TRUE, FALSE,
     THIS, INIT,
@@ -38,7 +38,7 @@ enum class TokenType {
     LPAREN, RPAREN,
     LBRACE, RBRACE,
     LBRACKET, RBRACKET,
-    COMMA, COLON, SEMICOLON,
+    COMMA, COLON, COLON_COLON, SEMICOLON,
 
     // Special
     NEWLINE, EOF
@@ -72,6 +72,7 @@ val KEYWORDS: Map<String, TokenType> = mapOf(
     "return"   to TokenType.RETURN,
     "break"    to TokenType.BREAK,
     "continue" to TokenType.CONTINUE,
+    "defer"    to TokenType.DEFER,
     "in"       to TokenType.IN,
     "is"       to TokenType.IS,
     "as"       to TokenType.AS,
