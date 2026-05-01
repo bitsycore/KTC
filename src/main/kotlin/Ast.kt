@@ -37,7 +37,7 @@ data class ClassDecl(
     val ctorParams: List<CtorParam>,
     val members: List<Decl>,
     val initBlocks: List<Block>,
-    val superInterfaces: List<String> = emptyList(),
+    val superInterfaces: List<TypeRef> = emptyList(),
     val typeParams: List<String> = emptyList()
 ) : Decl()
 
@@ -48,7 +48,10 @@ data class EnumDecl(
 
 data class InterfaceDecl(
     val name: String,
-    val methods: List<FunDecl>
+    val methods: List<FunDecl>,
+    val properties: List<PropDecl> = emptyList(),
+    val typeParams: List<String> = emptyList(),
+    val superInterfaces: List<TypeRef> = emptyList()
 ) : Decl()
 
 data class ObjectDecl(

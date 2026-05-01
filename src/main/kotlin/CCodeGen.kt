@@ -47,7 +47,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private data class ObjInfo(val name: String, val props: List<Pair<String, TypeRef>>, val methods: MutableList<FunDecl> = mutableListOf())
     private data class FunSig(val params: List<Param>, val returnType: TypeRef?)
 
-    private data class IfaceInfo(val name: String, val methods: List<FunDecl>)
+    private data class IfaceInfo(
+        val name: String,
+        val methods: List<FunDecl>,
+        val properties: List<PropDecl> = emptyList(),
+        val typeParams: List<String> = emptyList(),
+        val superInterfaces: List<TypeRef> = emptyList()
+    )
 
     private val classes  = mutableMapOf<String, ClassInfo>()
     private val enums    = mutableMapOf<String, EnumInfo>()
@@ -82,6 +88,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── Generics (monomorphization) ──────────────────────────────────
     // Store original ClassDecl for generic classes so we can re-emit per instantiation
     private val genericClassDecls = mutableMapOf<String, ClassDecl>()
+    // Store original InterfaceDecl for generic interfaces so we can monomorphize them
+    private val genericIfaceDecls = mutableMapOf<String, InterfaceDecl>()
     // Active type parameter substitution map during monomorphized emission (e.g. {T → Int})
     private var typeSubst: Map<String, String> = emptyMap()
     // Track all discovered concrete instantiations: "MyList" → [["Int"], ["Float"]]
@@ -313,15 +321,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         scanForGenericFunCalls()
 
         // Emit interface vtable struct + fat pointer type BEFORE classes
-        for (d in file.decls) if (d is InterfaceDecl) emitInterface(d)
+        // Non-generic interfaces first (they only use primitive types in signatures)
+        val emittedIfaceNames = mutableSetOf<String>()
+        for (d in file.decls) if (d is InterfaceDecl && d.typeParams.isEmpty()) {
+            emitInterface(d)
+            emittedIfaceNames += d.name
+        }
 
-        // Emit struct/enum/object declarations first (defines the element types)
+        // Emit struct/enum/object declarations (defines the element types needed by generic interfaces)
         // Skip generic templates — they are emitted per concrete instantiation
         for (d in file.decls) when (d) {
             is ClassDecl  -> if (d.typeParams.isEmpty()) emitClass(d)
             is EnumDecl   -> emitEnum(d)
             is ObjectDecl -> emitObject(d)
             else -> {}
+        }
+
+        // Emit monomorphized generic interfaces AFTER class structs so types are available
+        for ((name, info) in interfaces) {
+            // Emit only monomorphized copies (not already emitted above as non-generic AST decl)
+            if (name !in emittedIfaceNames && info.typeParams.isEmpty()
+                && genericIfaceDecls.values.none { it.name == name }) {
+                emitIfaceInfo(info)
+            }
         }
 
         // Emit monomorphized generic class instantiations
@@ -338,8 +360,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         // Emit static vtable instances + wrapping functions for interface implementations
-        for (d in file.decls) if (d is ClassDecl && d.superInterfaces.isNotEmpty()) {
+        // Non-generic classes:
+        for (d in file.decls) if (d is ClassDecl && d.typeParams.isEmpty() && d.superInterfaces.isNotEmpty()) {
             emitClassInterfaceVtables(d)
+        }
+        // Monomorphized generic classes:
+        for ((baseName, instantiations) in genericInstantiations) {
+            val templateDecl = genericClassDecls[baseName] ?: continue
+            if (templateDecl.superInterfaces.isEmpty()) continue
+            for (typeArgs in instantiations) {
+                val mangledName = mangledGenericName(baseName, typeArgs)
+                val ci = classes[mangledName] ?: continue
+                val subst = ci.typeParams.ifEmpty { templateDecl.typeParams }.zip(typeArgs).toMap()
+                    .ifEmpty { genericTypeBindings[mangledName] ?: emptyMap() }
+                val resolvedIfaces = templateDecl.superInterfaces.map { substituteTypeRef(it, subst) }
+                typeSubst = subst
+                emitInterfaceVtablesForClass(mangledName, resolvedIfaces)
+                typeSubst = emptyMap()
+            }
         }
 
         // Emit ArrayList struct + methods for each element type used
@@ -422,10 +460,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 for (m in d.members) if (m is FunDecl && m.receiver == null) ci.methods += m
                 classes[d.name] = ci
                 if (d.typeParams.isNotEmpty()) genericClassDecls[d.name] = d
-                if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces
+                if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces.map { it.name }
             }
             is EnumDecl  -> enums[d.name] = EnumInfo(d.name, d.entries)
-            is InterfaceDecl -> interfaces[d.name] = IfaceInfo(d.name, d.methods)
+            is InterfaceDecl -> {
+                interfaces[d.name] = IfaceInfo(d.name, d.methods, d.properties, d.typeParams, d.superInterfaces)
+                if (d.typeParams.isNotEmpty()) {
+                    genericIfaceDecls[d.name] = d
+                    allGenericTypeParamNames += d.typeParams
+                }
+            }
             is ObjectDecl -> {
                 val props = d.members.filterIsInstance<PropDecl>().map { it.name to (it.type ?: TypeRef("Int")) }
                 val oi = ObjInfo(d.name, props)
@@ -712,7 +756,61 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
                 // Store type bindings for resolving method return types later
                 genericTypeBindings[mangledName] = subst
+
+                // Resolve super interfaces with type substitution
+                if (templateDecl.superInterfaces.isNotEmpty()) {
+                    val resolvedIfaces = templateDecl.superInterfaces.map { ifaceRef ->
+                        val resolved = substituteTypeRef(ifaceRef, subst)
+                        resolveIfaceName(resolved)
+                    }
+                    classInterfaces[mangledName] = resolvedIfaces
+                    // Monomorphize each generic interface
+                    for (ifaceRef in templateDecl.superInterfaces) {
+                        val resolved = substituteTypeRef(ifaceRef, subst)
+                        materializeGenericInterface(resolved)
+                    }
+                }
             }
+        }
+    }
+
+    /** Resolve an interface TypeRef to its concrete name (e.g. MutableList<Int> → "MutableList_Int"). */
+    private fun resolveIfaceName(t: TypeRef): String {
+        if (t.typeArgs.isEmpty()) return t.name
+        return mangledGenericName(t.name, t.typeArgs.map { it.name })
+    }
+
+    /**
+     * Monomorphize a generic interface template. E.g., List<Int> → creates IfaceInfo("List_Int", ...).
+     * Recursively processes super interfaces.
+     */
+    private fun materializeGenericInterface(t: TypeRef) {
+        if (t.typeArgs.isEmpty()) return  // non-generic, already registered
+        val baseName = t.name
+        val template = interfaces[baseName] ?: return
+        if (template.typeParams.isEmpty()) return  // non-generic template
+        val typeArgs = t.typeArgs.map { it.name }
+        val mangledName = mangledGenericName(baseName, typeArgs)
+        if (interfaces.containsKey(mangledName)) return  // already materialized
+        val subst = template.typeParams.zip(typeArgs).toMap()
+        // Substitute types in methods
+        val methods = template.methods.map { m ->
+            m.copy(
+                params = m.params.map { p -> p.copy(type = substituteTypeRef(p.type, subst)) },
+                returnType = m.returnType?.let { substituteTypeRef(it, subst) }
+            )
+        }
+        // Substitute types in properties
+        val properties = template.properties.map { p ->
+            p.copy(type = p.type?.let { substituteTypeRef(it, subst) })
+        }
+        // Resolve super interfaces
+        val resolvedSupers = template.superInterfaces.map { substituteTypeRef(it, subst) }
+        interfaces[mangledName] = IfaceInfo(mangledName, methods, properties, emptyList(), resolvedSupers)
+        symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
+        // Recursively monomorphize parent interfaces
+        for (superRef in resolvedSupers) {
+            materializeGenericInterface(superRef)
         }
     }
 
@@ -848,6 +946,28 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (typeArg.name in typeParams && i < templateCi.typeParams.size) {
                     val templateParam = templateCi.typeParams[i]
                     bindings[templateParam]?.let { subst[typeArg.name] = it }
+                }
+            }
+        }
+        // Generic interface param: List<T>, arg=ArrayList_Int → T=Int
+        // Look up what interface the arg class implements and extract type bindings from the mangled name
+        if (paramType.typeArgs.isNotEmpty() && genericIfaceDecls.containsKey(paramType.name)) {
+            val baseType = argType.trimEnd('*', '&', '^', '?', '#')
+            val ifaceTemplate = genericIfaceDecls[paramType.name] ?: return
+            // Check if the arg class implements a monomorphized version of this interface
+            val classIfaces = classInterfaces[baseType] ?: return
+            for (ifaceName in classIfaces) {
+                // Match monomorphized interface name like "List_Int" against template "List"
+                if (ifaceName.startsWith(paramType.name + "_")) {
+                    // Extract type args from the mangled name, e.g., "List_Int" → ["Int"]
+                    val suffix = ifaceName.removePrefix(paramType.name + "_")
+                    val extractedArgs = suffix.split("_")
+                    for ((i, typeArg) in paramType.typeArgs.withIndex()) {
+                        if (typeArg.name in typeParams && i < extractedArgs.size) {
+                            subst[typeArg.name] = extractedArgs[i]
+                        }
+                    }
+                    return
                 }
             }
         }
@@ -1090,9 +1210,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         pushScope()
         for (p in f.params) {
             val resolved = resolveTypeName(p.type)
+            val wasTypeParam = typeSubst.containsKey(p.type.name)
             defineVar(p.name, when {
                 p.type.nullable -> "${resolved}?"
-                classes.containsKey(resolved) -> "${resolved}*"
+                !wasTypeParam && classes.containsKey(resolved) -> "${resolved}*"
                 else -> resolved
             })
         }
@@ -1231,7 +1352,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      */
     private fun emitStarExtFunInstantiations(f: FunDecl) {
         val recvBaseName = f.receiver!!.name
-        val instantiations = genericInstantiations[recvBaseName] ?: return
+        val instantiations = genericInstantiations[recvBaseName]
+
+        // If the receiver is a generic interface (not a class), expand per implementing class
+        if (instantiations == null && genericIfaceDecls.containsKey(recvBaseName)) {
+            emitStarExtFunForGenericInterface(f, recvBaseName)
+            return
+        }
+        if (instantiations == null) return
         val emitted = mutableSetOf<String>()
         for (typeArgs in instantiations) {
             val mangledRecvName = mangledGenericName(recvBaseName, typeArgs)
@@ -1308,6 +1436,78 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
+    /**
+     * Expand a star-projection extension on a generic interface (e.g., List<*>.sizeOf())
+     * into concrete implementations for each class that implements a monomorphized version.
+     * For ArrayList_Int (implements List_Int) → ArrayList_Int_sizeOf
+     * For ArrayList_Vec2 (implements List_Vec2) → ArrayList_Vec2_sizeOf
+     */
+    private fun emitStarExtFunForGenericInterface(f: FunDecl, ifaceBaseName: String) {
+        val emitted = mutableSetOf<String>()
+        // Find all classes that implement a monomorphized version of this interface
+        for ((className, ifaceList) in classInterfaces) {
+            // Check if this class implements any monomorphized version of the interface
+            val matchingIface = ifaceList.find { it.startsWith("${ifaceBaseName}_") }
+            if (matchingIface == null) continue
+            val ci = classes[className] ?: continue
+            val key = "${className}_${f.name}"
+            if (!emitted.add(key)) continue
+
+            // Set up type substitution from the class's own type bindings
+            val prevSubst = typeSubst
+            typeSubst = genericTypeBindings[className] ?: emptyMap()
+
+            val cRet = if (f.returnType != null) cType(f.returnType) else "void"
+            val cRecvType = pfx(className)
+            val selfParam = "$cRecvType* \$self"
+            val extraParams = expandParams(f.params)
+            val allParams = if (extraParams.isEmpty()) selfParam else "$selfParam, $extraParams"
+            val cFnName = "${cRecvType}_${f.name}"
+
+            hdr.appendLine("$cRet $cFnName($allParams);")
+            impl.appendLine("$cRet $cFnName($allParams) {")
+
+            val prevClass = currentClass
+            val prevSelfIsPointer = selfIsPointer
+            val prevExtRecvType = currentExtRecvType
+            currentExtRecvType = className
+            currentClass = className
+            selfIsPointer = true
+
+            pushScope()
+            for (p in f.params) {
+                val resolved = resolveTypeName(p.type)
+                defineVar(p.name, when {
+                    p.type.nullable -> "${resolved}?"
+                    classes.containsKey(resolved) -> "${resolved}*"
+                    else -> resolved
+                })
+            }
+            for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+            val savedDefers = deferStack.toList(); deferStack.clear()
+            if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = true)
+            if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = true)
+            deferStack.clear(); deferStack.addAll(savedDefers)
+            popScope()
+
+            currentClass = prevClass
+            selfIsPointer = prevSelfIsPointer
+            currentExtRecvType = prevExtRecvType
+
+            impl.appendLine("}")
+            impl.appendLine()
+
+            // Register as extension function for call resolution
+            val concreteReceiver = TypeRef(className, f.receiver!!.nullable)
+            extensionFuns.getOrPut(className) { mutableListOf() }.add(
+                FunDecl(f.name, f.params, f.returnType, f.body, concreteReceiver)
+            )
+            ci.methods.add(FunDecl(f.name, f.params, f.returnType, f.body, concreteReceiver))
+
+            typeSubst = prevSubst
+        }
+    }
+
     // ── enum class ───────────────────────────────────────────────────
 
     private fun emitEnum(d: EnumDecl) {
@@ -1375,10 +1575,27 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      * } game_Drawable;
      */
     private fun emitInterface(d: InterfaceDecl) {
-        val cName = pfx(d.name)
+        val info = interfaces[d.name] ?: return
+        emitIfaceInfo(info)
+    }
+
+    /**
+     * Emit a concrete (non-generic) interface: vtable struct + fat pointer type.
+     * Handles inherited methods/properties from super interfaces.
+     */
+    private fun emitIfaceInfo(info: IfaceInfo) {
+        val cName = pfx(info.name)
+        // Collect all methods/properties including inherited from super interfaces
+        val allMethods = collectAllIfaceMethods(info)
+        val allProps = collectAllIfaceProperties(info)
         // vtable struct
         hdr.appendLine("typedef struct {")
-        for (m in d.methods) {
+        // Properties → getter function pointers
+        for (p in allProps) {
+            val ct = if (p.type != null) cType(p.type) else "int32_t"
+            hdr.appendLine("    $ct (*${p.name})(void* \$self);")
+        }
+        for (m in allMethods) {
             val cRet = if (m.returnType != null) cType(m.returnType) else "void"
             val extraParams = m.params.joinToString("") { p -> ", ${cType(p.type)} ${p.name}" }
             hdr.appendLine("    $cRet (*${m.name})(void* \$self$extraParams);")
@@ -1393,21 +1610,83 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine()
     }
 
+    /** Collect all methods for an interface, including inherited from super interfaces (depth-first). */
+    private fun collectAllIfaceMethods(info: IfaceInfo): List<FunDecl> {
+        val result = mutableListOf<FunDecl>()
+        val seen = mutableSetOf<String>()
+        fun collect(i: IfaceInfo) {
+            for (superRef in i.superInterfaces) {
+                val superName = resolveIfaceName(superRef)
+                val superInfo = interfaces[superName] ?: continue
+                collect(superInfo)
+            }
+            for (m in i.methods) {
+                if (m.name !in seen) { result += m; seen += m.name }
+            }
+        }
+        collect(info)
+        return result
+    }
+
+    /** Collect all properties for an interface, including inherited from super interfaces. */
+    private fun collectAllIfaceProperties(info: IfaceInfo): List<PropDecl> {
+        val result = mutableListOf<PropDecl>()
+        val seen = mutableSetOf<String>()
+        fun collect(i: IfaceInfo) {
+            for (superRef in i.superInterfaces) {
+                val superName = resolveIfaceName(superRef)
+                val superInfo = interfaces[superName] ?: continue
+                collect(superInfo)
+            }
+            for (p in i.properties) {
+                if (p.name !in seen) { result += p; seen += p.name }
+            }
+        }
+        collect(info)
+        return result
+    }
+
     /**
      * For each interface a class implements, emit:
-     *   1. A static const vtable instance with the class's method pointers
-     *   2. A wrapping function:  ClassName_as_IfaceName(ClassName* $self) → IfaceName
+     *   1. Property getter wrappers (for interface properties backed by class fields)
+     *   2. A static const vtable instance with the class's method/property pointers
+     *   3. A wrapping function:  ClassName_as_IfaceName(ClassName* $self) → IfaceName
      */
     private fun emitClassInterfaceVtables(d: ClassDecl) {
-        val cClass = pfx(d.name)
-        for (ifaceName in d.superInterfaces) {
+        val className = d.name
+        emitInterfaceVtablesForClass(className, d.superInterfaces)
+    }
+
+    /**
+     * Emit vtables for a concrete class name implementing the given super interfaces.
+     * Works for both non-generic and monomorphized generic classes.
+     */
+    private fun emitInterfaceVtablesForClass(className: String, superIfaceRefs: List<TypeRef>) {
+        val cClass = pfx(className)
+        for (ifaceRef in superIfaceRefs) {
+            val ifaceName = resolveIfaceName(ifaceRef)
             val iface = interfaces[ifaceName] ?: continue
             val cIface = pfx(ifaceName)
+            val allMethods = collectAllIfaceMethods(iface)
+            val allProps = collectAllIfaceProperties(iface)
+
+            // Emit property getter wrappers
+            for (p in allProps) {
+                val ct = if (p.type != null) cType(p.type) else "int32_t"
+                val getterName = "${cClass}_${p.name}_get"
+                hdr.appendLine("$ct $getterName($cClass* \$self);")
+                impl.appendLine("$ct $getterName($cClass* \$self) { return \$self->${p.name}; }")
+                impl.appendLine()
+            }
 
             // static vtable instance
             hdr.appendLine("extern const ${cIface}_vt ${cClass}_${ifaceName}_vt;")
             impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
-            for (m in iface.methods) {
+            for (p in allProps) {
+                val ct = if (p.type != null) cType(p.type) else "int32_t"
+                impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
+            }
+            for (m in allMethods) {
                 val cRet = if (m.returnType != null) cType(m.returnType) else "void"
                 val extraCast = m.params.joinToString("") { p -> ", ${cType(p.type)}" }
                 impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
@@ -1421,6 +1700,61 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             impl.appendLine("    return ($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt};")
             impl.appendLine("}")
             impl.appendLine()
+
+            // Also emit vtables for all parent interfaces (transitive)
+            // E.g., ArrayList_Int implements MutableList_Int which extends List_Int
+            // → emit ArrayList_Int_as_List_Int too
+            emitTransitiveInterfaceVtables(className, cClass, iface, allProps, allMethods)
+        }
+    }
+
+    /**
+     * For interface inheritance chains, emit vtables for parent interfaces.
+     * E.g., if ArrayList_Int implements MutableList_Int which extends List_Int,
+     * emit ArrayList_Int_as_List_Int with the List_Int subset of the vtable.
+     */
+    private fun emitTransitiveInterfaceVtables(
+        className: String, cClass: String, iface: IfaceInfo,
+        childProps: List<PropDecl>, childMethods: List<FunDecl>
+    ) {
+        for (superRef in iface.superInterfaces) {
+            val superName = resolveIfaceName(superRef)
+            val superIface = interfaces[superName] ?: continue
+            val cSuper = pfx(superName)
+            val superMethods = collectAllIfaceMethods(superIface)
+            val superProps = collectAllIfaceProperties(superIface)
+
+            // Register this class as also implementing the parent interface
+            val existing = classInterfaces[className]?.toMutableList() ?: mutableListOf()
+            if (superName !in existing) {
+                existing += superName
+                classInterfaces[className] = existing
+            }
+
+            // static vtable instance (same class methods, but only the parent's slots)
+            hdr.appendLine("extern const ${cSuper}_vt ${cClass}_${superName}_vt;")
+            impl.appendLine("const ${cSuper}_vt ${cClass}_${superName}_vt = {")
+            for (p in superProps) {
+                val ct = if (p.type != null) cType(p.type) else "int32_t"
+                impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
+            }
+            for (m in superMethods) {
+                val cRet = if (m.returnType != null) cType(m.returnType) else "void"
+                val extraCast = m.params.joinToString("") { p -> ", ${cType(p.type)}" }
+                impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+            }
+            impl.appendLine("};")
+            impl.appendLine()
+
+            // wrapping function
+            hdr.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self);")
+            impl.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self) {")
+            impl.appendLine("    return ($cSuper){(void*)\$self, &${cClass}_${superName}_vt};")
+            impl.appendLine("}")
+            impl.appendLine()
+
+            // Recurse for deeper inheritance
+            emitTransitiveInterfaceVtables(className, cClass, superIface, superProps, superMethods)
         }
     }
 
@@ -2140,7 +2474,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     emitDeferredBlocks(ind)
                     impl.appendLine("${ind}return $t;")
                 } else {
-                    impl.appendLine("${ind}return $expr;")
+                    // Auto-wrap class → interface if return type is an interface
+                    val exprType = inferExprType(s.value)
+                    val retIface = currentFnReturnType
+                    if (retIface.isNotEmpty() && interfaces.containsKey(retIface)
+                        && exprType != null && classes.containsKey(exprType)
+                        && classInterfaces[exprType]?.contains(retIface) == true) {
+                        val t = tmp()
+                        impl.appendLine("$ind${pfx(exprType)} $t = $expr;")
+                        impl.appendLine("${ind}return ${pfx(exprType)}_as_$retIface(&$t);")
+                    } else {
+                        impl.appendLine("${ind}return $expr;")
+                    }
                 }
             } else {
                 emitDeferredBlocks(ind)
@@ -2825,6 +3170,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             if (typeArgNames != null) {
                 val mangledName = "${name}_${typeArgNames.joinToString("_")}"
+                // Record for late emission if not already known
+                genericFunInstantiations.getOrPut(name) { mutableSetOf() }.add(typeArgNames)
                 // Set typeSubst so expandCallArgs resolves param types correctly (T→Int etc.)
                 val prevSubst = typeSubst
                 typeSubst = genFun.typeParams.zip(typeArgNames).toMap()
@@ -2888,8 +3235,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (paramType != null && interfaces.containsKey(paramType)) {
                 // Auto-wrap class → interface
                 val argType = inferExprType(arg.expr)
-                if (argType != null && classes.containsKey(argType) && classInterfaces[argType]?.contains(paramType) == true) {
-                    parts += "${pfx(argType)}_as_$paramType(&$expr)"
+                val baseArgType = argType?.trimEnd('*', '&', '^', '?', '#')
+                if (baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true) {
+                    // Value<T> or Heap<T> pointer: auto-deref handled by genExpr, but we need &expr for the wrapping
+                    if (argType != null && (argType.endsWith("&") || argType.endsWith("^"))) {
+                        // Value/Ptr — genExpr gives the dereferenced value via ->; we need the pointer
+                        parts += "${pfx(baseArgType)}_as_$paramType($expr)"
+                    } else if (argType != null && argType.endsWith("*")) {
+                        // Heap pointer — pass directly (it's already a pointer)
+                        parts += "${pfx(baseArgType)}_as_$paramType($expr)"
+                    } else {
+                        // Stack value — take address
+                        parts += "${pfx(baseArgType)}_as_$paramType(&$expr)"
+                    }
                 } else {
                     parts += expr
                 }
@@ -3297,6 +3655,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Ptr<T> or Value<T>: p->field (same deref as Heap)
         if (ptrClassName(recvType) != null || valueClassName(recvType) != null) {
             return "$recv->${e.name}"
+        }
+
+        // Interface property access via vtable: list.size → list.vt->size(list.obj)
+        if (recvType != null && interfaces.containsKey(recvType)) {
+            val iface = interfaces[recvType]!!
+            val allProps = collectAllIfaceProperties(iface)
+            if (allProps.any { it.name == e.name }) {
+                return "$recv.vt->${e.name}($recv.obj)"
+            }
         }
 
         return "$recv.${e.name}"
@@ -4101,6 +4468,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val parts = mutableListOf<String>()
         for (p in params) {
             val resolved = resolveTypeName(p.type)
+            // Check if the original param type was a generic type parameter (e.g., T → Vec2).
+            // If so, don't apply class-by-pointer — the interface vtable and callers expect by-value.
+            val wasTypeParam = typeSubst.containsKey(p.type.name)
             if (isFuncType(resolved)) {
                 parts += cFuncPtrDecl(resolved, p.name)
             } else if (isArrayType(resolved)) {
@@ -4109,8 +4479,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (p.type.nullable) {
                 parts += "${cTypeStr(resolved)} ${p.name}"
                 parts += "bool ${p.name}\$has"
-            } else if (classes.containsKey(resolved)) {
+            } else if (!wasTypeParam && classes.containsKey(resolved)) {
                 // Kotlin classes are reference types — pass by pointer for correct mutation semantics
+                // But NOT for generic type params (T→Vec2): interface vtable expects by-value
                 parts += "${cTypeStr(resolved)}* ${p.name}"
             } else {
                 parts += "${cType(p.type)} ${p.name}"
@@ -4207,6 +4578,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return mangledGenericName(t.name, typeArgNames)
             }
             return recordGenericInstantiation(t.name, typeArgNames)
+        }
+        // User-defined generic interface takes priority over built-in aliases
+        if (t.typeArgs.isNotEmpty() && genericIfaceDecls.containsKey(t.name)) {
+            val typeArgNames = t.typeArgs.map { resolveTypeName(it) }
+            return mangledGenericName(t.name, typeArgNames)
         }
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
             val elem = t.typeArgs[0].name

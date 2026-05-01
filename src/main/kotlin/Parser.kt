@@ -120,12 +120,12 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RPAREN); nesting--
             p
         } else emptyList()
-        // Parse super interfaces:  : Iface1, Iface2
-        val superInterfaces = mutableListOf<String>()
+        // Parse super interfaces:  : Iface1<T>, Iface2
+        val superInterfaces = mutableListOf<TypeRef>()
         if (at(TokenType.COLON)) {
             advance(); skipNL()
-            superInterfaces += expectIdent()
-            while (at(TokenType.COMMA)) { advance(); skipNL(); superInterfaces += expectIdent() }
+            superInterfaces += parseTypeRef()
+            while (at(TokenType.COMMA)) { advance(); skipNL(); superInterfaces += parseTypeRef() }
         }
         skipNL()
         val members = mutableListOf<Decl>()
@@ -188,19 +188,42 @@ class Parser(private val tokens: List<Token>) {
     private fun parseInterfaceDecl(): InterfaceDecl {
         expect(TokenType.INTERFACE)
         val name = expectIdent()
+        // Parse type parameters: interface Foo<T, U>
+        val typeParams = if (at(TokenType.LT)) {
+            advance(); nesting++; skipNL()
+            val params = mutableListOf(expectIdent())
+            while (at(TokenType.COMMA)) { advance(); skipNL(); params += expectIdent() }
+            expect(TokenType.GT); nesting--
+            params
+        } else emptyList()
+        // Parse super interfaces: : SuperIface<T>, OtherIface
+        val superInterfaces = mutableListOf<TypeRef>()
+        if (at(TokenType.COLON)) {
+            advance(); skipNL()
+            superInterfaces += parseTypeRef()
+            while (at(TokenType.COMMA)) { advance(); skipNL(); superInterfaces += parseTypeRef() }
+        }
         skipNL()
         val methods = mutableListOf<FunDecl>()
+        val properties = mutableListOf<PropDecl>()
         if (at(TokenType.LBRACE)) {
             advance(); nesting++; skipNL()
             while (!at(TokenType.RBRACE) && !at(TokenType.EOF)) {
                 skipNL(); if (at(TokenType.RBRACE)) break
-                methods += parseFunDecl()
+                // skip 'override' modifier inside interfaces
+                if (at(TokenType.OVERRIDE)) advance()
+                when {
+                    at(TokenType.FUN) -> methods += parseFunDecl()
+                    at(TokenType.VAL) -> properties += parsePropDecl(mutable = false) as PropDecl
+                    at(TokenType.VAR) -> properties += parsePropDecl(mutable = true) as PropDecl
+                    else -> error("Expected fun, val, or var in interface body at ${cur()}")
+                }
                 skipNL()
             }
             expect(TokenType.RBRACE); nesting--
         }
         skipTerminator()
-        return InterfaceDecl(name, methods)
+        return InterfaceDecl(name, methods, properties, typeParams, superInterfaces)
     }
 
     // ── object ───────────────────────────────────────────────────────
