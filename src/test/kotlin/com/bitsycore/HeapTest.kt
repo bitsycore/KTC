@@ -34,11 +34,23 @@ class HeapTest : TranspilerTestBase() {
         r.sourceContains("p->x = 99.0f;")
     }
 
-    // ── .value() → dereference ───────────────────────────────────────
+    // ── .value() → Value<T> (same pointer, no copy) ────────────────
 
     @Test fun heapValue() {
         val r = transpileMain(
             "val p = malloc<Vec2>(10.0f, 20.0f)\nval v = p.value()",
+            decls = vec2Decl
+        )
+        // .value() returns same pointer (Value<T>), NOT a dereference copy
+        r.sourceNotContains("(*p)")
+        r.sourceContains("= p;") // v = p (same pointer)
+    }
+
+    // ── .deref() → stack copy ────────────────────────────────────────
+
+    @Test fun heapDeref() {
+        val r = transpileMain(
+            "val p = malloc<Vec2>(10.0f, 20.0f)\nval v = p.deref()",
             decls = vec2Decl
         )
         r.sourceContains("(*p)")
@@ -122,5 +134,153 @@ class HeapTest : TranspilerTestBase() {
             }
         """, decls = vec2Decl)
         r.sourceContains("q != NULL")
+    }
+
+    // ── Heap .toPtr() ────────────────────────────────────────────────
+
+    @Test fun heapToPtr() {
+        val r = transpileMain(
+            "val h = malloc<Vec2>(1.0f, 2.0f)\nval p = h.toPtr()",
+            decls = vec2Decl
+        )
+        r.sourceContains("\$heap = true;")
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Ptr<T> tests
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── Ptr from stack (.toPtr()) ────────────────────────────────────
+
+    @Test fun stackToPtr() {
+        val r = transpileMain(
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()",
+            decls = vec2Decl
+        )
+        r.sourceContains("&v")
+        r.sourceContains("\$heap = false;")
+    }
+
+    // ── Ptr field access (auto-deref) ────────────────────────────────
+
+    @Test fun ptrFieldAccess() {
+        val r = transpileMain(
+            "val v = Vec2(5.0f, 6.0f)\nval p = v.toPtr()\nprintln(p.x)",
+            decls = vec2Decl
+        )
+        r.sourceContains("p->x")
+    }
+
+    // ── Ptr.isHeap() ─────────────────────────────────────────────────
+
+    @Test fun ptrIsHeap() {
+        val r = transpileMain(
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\nprintln(p.isHeap())",
+            decls = vec2Decl
+        )
+        r.sourceContains("p\$heap")
+    }
+
+    // ── Ptr.asHeap() → nullable ──────────────────────────────────────
+
+    @Test fun ptrAsHeap() {
+        val r = transpileMain("""
+            val v = Vec2(1.0f, 2.0f)
+            val p = v.toPtr()
+            val h = p.asHeap()
+        """, decls = vec2Decl)
+        r.sourceContains("p\$heap")
+    }
+
+    // ── Ptr.value() → Value<T> ───────────────────────────────────────
+
+    @Test fun ptrValue() {
+        val r = transpileMain(
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\nval vr = p.value()",
+            decls = vec2Decl
+        )
+        // value() returns same pointer
+        r.sourceNotContains("(*p)")
+    }
+
+    // ── Ptr.deref() → stack copy ─────────────────────────────────────
+
+    @Test fun ptrDeref() {
+        val r = transpileMain(
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\nval copy = p.deref()",
+            decls = vec2Decl
+        )
+        r.sourceContains("(*")
+    }
+
+    // ── Ptr.set() ────────────────────────────────────────────────────
+
+    @Test fun ptrSet() {
+        val r = transpileMain(
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\np.set(Vec2(3.0f, 4.0f))",
+            decls = vec2Decl
+        )
+        r.sourceContains("*")
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Value<T> tests
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── Value<T> from .value() — transparent field access ────────────
+
+    @Test fun valueFieldAccess() {
+        val r = transpileMain(
+            "val h = malloc<Vec2>(10.0f, 20.0f)\nval v = h.value()\nprintln(v.x)",
+            decls = vec2Decl
+        )
+        r.sourceContains("v->x")
+    }
+
+    // ── Value<T> field write ─────────────────────────────────────────
+
+    @Test fun valueFieldWrite() {
+        val r = transpileMain(
+            "val h = malloc<Vec2>(10.0f, 20.0f)\nval v = h.value()\nv.x = 99.0f",
+            decls = vec2Decl
+        )
+        r.sourceContains("v->x = 99.0f;")
+    }
+
+    // ── Value<T>.deref() → stack copy ────────────────────────────────
+
+    @Test fun valueDeref() {
+        val r = transpileMain(
+            "val h = malloc<Vec2>(10.0f, 20.0f)\nval v = h.value()\nval copy = v.deref()",
+            decls = vec2Decl
+        )
+        r.sourceContains("(*v)")
+    }
+
+    // ── Value<T> method call — transparent delegation ────────────────
+
+    @Test fun valueMethodCall() {
+        val r = transpile("""
+            package test.Main
+            class Counter(var count: Int) {
+                fun inc() { count = count + 1 }
+            }
+            fun main(args: Array<String>) {
+                val h = malloc<Counter>(0)
+                val v = h.value()
+                v.inc()
+            }
+        """)
+        r.sourceContains("test_Main_Counter_inc(v)")
+    }
+
+    // ── Explicit Value<T> type annotation ────────────────────────────
+
+    @Test fun explicitValueType() {
+        val r = transpileMain(
+            "val h = malloc<Vec2>(1.0f, 2.0f)\nval v: Value<Vec2> = h.value()\nprintln(v.x)",
+            decls = vec2Decl
+        )
+        r.sourceContains("v->x")
     }
 }
