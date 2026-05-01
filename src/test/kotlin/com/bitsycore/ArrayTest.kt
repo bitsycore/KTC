@@ -3,7 +3,7 @@ package com.bitsycore
 import kotlin.test.Test
 
 /**
- * Tests for arrays (arrayOf, intArrayOf) and ArrayList.
+ * Tests for arrays (arrayOf, intArrayOf).
  */
 class ArrayTest : TranspilerTestBase() {
 
@@ -76,58 +76,4 @@ class ArrayTest : TranspilerTestBase() {
         r.sourceContains("arr[1] = 99;")
     }
 
-    // ── ArrayList ────────────────────────────────────────────────────
-
-    @Test fun intArrayList() {
-        val r = transpileMain("""
-            val nums = IntArrayList()
-            nums.add(10)
-            nums.add(20)
-            println(nums.size)
-            println(nums[0])
-        """)
-        r.headerContains("typedef struct")
-        r.sourceContains("_add(")
-    }
-
-    @Test fun arrayListRemoveAt() {
-        val r = transpileMain("""
-            val nums = IntArrayList()
-            nums.add(10)
-            nums.removeAt(0)
-        """)
-        r.sourceContains("_removeAt(")
-    }
-
-    @Test fun arrayListFree() {
-        val r = transpileMain("""
-            val nums = IntArrayList()
-            nums.free()
-        """)
-        r.sourceContains("_free(")
-    }
-
-    // ── mutableListOf ────────────────────────────────────────────────
-
-    @Test fun mutableListOfStrings() {
-        val r = transpileMain("""
-            val names = mutableListOf("hello", "world")
-            names.add("!")
-            println(names.size)
-        """)
-        r.sourceContains("_add(")
-    }
-
-    // ── For over ArrayList ───────────────────────────────────────────
-
-    @Test fun forOverArrayList() {
-        val r = transpileMain("""
-            val nums = IntArrayList()
-            nums.add(1)
-            nums.add(2)
-            for (n in nums) { println(n) }
-            nums.free()
-        """)
-        r.sourceContains("for (")
-    }
 }
