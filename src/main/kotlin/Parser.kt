@@ -22,8 +22,11 @@ class Parser(private val tokens: List<Token>) {
         skipNL()
         // skip 'override' modifier — we just note it and continue
         if (at(TokenType.OVERRIDE)) advance()
+        // track 'operator' modifier
+        val isOperator = at(TokenType.IDENT) && cur().value == "operator"
+        if (isOperator) advance()
         return when {
-            at(TokenType.FUN)    -> parseFunDecl()
+            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator)
             at(TokenType.DATA)   -> { advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
@@ -38,7 +41,7 @@ class Parser(private val tokens: List<Token>) {
 
     // ── fun ──────────────────────────────────────────────────────────
 
-    private fun parseFunDecl(): FunDecl {
+    private fun parseFunDecl(isOperator: Boolean = false): FunDecl {
         expect(TokenType.FUN)
         // Parse optional type parameters: fun <T, U> name(...)
         val typeParams = if (at(TokenType.LT)) {
@@ -84,7 +87,7 @@ class Parser(private val tokens: List<Token>) {
             else -> null
         }
         skipTerminator()
-        return FunDecl(name, params, retType, body, receiver, typeParams)
+        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator)
     }
 
     private fun parseParamList(): List<Param> {
@@ -215,8 +218,11 @@ class Parser(private val tokens: List<Token>) {
                 skipNL(); if (at(TokenType.RBRACE)) break
                 // skip 'override' modifier inside interfaces
                 if (at(TokenType.OVERRIDE)) advance()
+                // track 'operator' modifier inside interfaces
+                val isOp = at(TokenType.IDENT) && cur().value == "operator"
+                if (isOp) advance()
                 when {
-                    at(TokenType.FUN) -> methods += parseFunDecl()
+                    at(TokenType.FUN) -> methods += parseFunDecl(isOperator = isOp)
                     at(TokenType.VAL) -> properties += parsePropDecl(mutable = false) as PropDecl
                     at(TokenType.VAR) -> properties += parsePropDecl(mutable = true) as PropDecl
                     else -> error("Expected fun, val, or var in interface body at ${cur()}")

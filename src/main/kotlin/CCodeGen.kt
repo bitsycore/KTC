@@ -2480,7 +2480,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (s.target is IndexExpr && s.op == "=") {
             val objType = inferExprType(s.target.obj)
             if (objType != null && classes.containsKey(objType)) {
-                val setMethod = classes[objType]?.methods?.find { it.name == "set" }
+                val setMethod = classes[objType]?.methods?.find { it.name == "set" && it.isOperator }
                 if (setMethod != null) {
                     val recv = genExpr(s.target.obj)
                     val idx = genExpr(s.target.index)
@@ -2492,7 +2492,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             if (objType != null && anyIndirectClassName(objType)?.let { classes.containsKey(it) } == true) {
                 val baseClass = anyIndirectClassName(objType)!!
-                val setMethod = classes[baseClass]?.methods?.find { it.name == "set" }
+                val setMethod = classes[baseClass]?.methods?.find { it.name == "set" && it.isOperator }
                 if (setMethod != null) {
                     val recv = genExpr(s.target.obj)
                     val idx = genExpr(s.target.index)
@@ -2504,8 +2504,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             if (objType != null && interfaces.containsKey(objType)) {
                 val ifaceInfo = interfaces[objType]
-                val setMethod = ifaceInfo?.methods?.find { it.name == "set" }
-                    ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "set" }
+                val setMethod = ifaceInfo?.methods?.find { it.name == "set" && it.isOperator }
+                    ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "set" && it.isOperator }
                 if (setMethod != null) {
                     val recv = genExpr(s.target.obj)
                     val idx = genExpr(s.target.index)
@@ -2996,8 +2996,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // String indexing: str[i] → str.ptr[i] (returns char)
                 "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
             } else if (objType != null && classes.containsKey(objType)) {
-                // Class with get() method → operator[] dispatch
-                val methodDecl = classes[objType]?.methods?.find { it.name == "get" }
+                // Class with operator get() method → operator[] dispatch
+                val methodDecl = classes[objType]?.methods?.find { it.name == "get" && it.isOperator }
                 if (methodDecl != null) {
                     val recv = genExpr(e.obj)
                     val idx = genExpr(e.index)
@@ -3010,9 +3010,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
                 }
             } else if (objType != null && anyIndirectClassName(objType)?.let { classes.containsKey(it) } == true) {
-                // Heap<T>/Ptr<T>/Value<T> with get() → pointer-based dispatch
+                // Heap<T>/Ptr<T>/Value<T> with operator get() → pointer-based dispatch
                 val baseClass = anyIndirectClassName(objType)!!
-                val methodDecl = classes[baseClass]?.methods?.find { it.name == "get" }
+                val methodDecl = classes[baseClass]?.methods?.find { it.name == "get" && it.isOperator }
                 if (methodDecl != null) {
                     val recv = genExpr(e.obj)
                     val idx = genExpr(e.index)
@@ -3025,10 +3025,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     "${genExpr(e.obj)}[${genExpr(e.index)}]"
                 }
             } else if (objType != null && interfaces.containsKey(objType)) {
-                // Interface with get() in vtable → operator[] dispatch
+                // Interface with operator get() in vtable → operator[] dispatch
                 val ifaceInfo = interfaces[objType]
-                val ifaceMethod = ifaceInfo?.methods?.find { it.name == "get" }
-                    ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "get" }
+                val ifaceMethod = ifaceInfo?.methods?.find { it.name == "get" && it.isOperator }
+                    ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "get" && it.isOperator }
                 if (ifaceMethod != null) {
                     val recv = genExpr(e.obj)
                     val idx = genExpr(e.index)
@@ -3140,12 +3140,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.op == "+" && (lt == "String" || inferExprType(e.right) == "String")) {
             return genStringConcat(e)
         }
-        // in / !in → contains() dispatch on class or interface
+        // in / !in → operator contains() dispatch on class or interface
         if (e.op == "in" || e.op == "!in") {
             val rt = inferExprType(e.right)
             val negated = e.op == "!in"
             if (rt != null && classes.containsKey(rt)) {
-                val containsMethod = classes[rt]?.methods?.find { it.name == "contains" || it.name == "containsKey" }
+                val containsMethod = classes[rt]?.methods?.find { (it.name == "contains" || it.name == "containsKey") && it.isOperator }
                 if (containsMethod != null) {
                     val recv = genExpr(e.right)
                     val elem = genExpr(e.left)
@@ -3155,7 +3155,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             if (rt != null && anyIndirectClassName(rt)?.let { classes.containsKey(it) } == true) {
                 val baseClass = anyIndirectClassName(rt)!!
-                val containsMethod = classes[baseClass]?.methods?.find { it.name == "contains" || it.name == "containsKey" }
+                val containsMethod = classes[baseClass]?.methods?.find { (it.name == "contains" || it.name == "containsKey") && it.isOperator }
                 if (containsMethod != null) {
                     val recv = genExpr(e.right)
                     val elem = genExpr(e.left)
@@ -3166,7 +3166,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (rt != null && interfaces.containsKey(rt)) {
                 val ifaceInfo = interfaces[rt]
                 val allMethods = collectAllIfaceMethods(ifaceInfo!!)
-                val containsMethod = allMethods.find { it.name == "contains" || it.name == "containsKey" }
+                val containsMethod = allMethods.find { (it.name == "contains" || it.name == "containsKey") && it.isOperator }
                 if (containsMethod != null) {
                     val recv = genExpr(e.right)
                     val elem = genExpr(e.left)
@@ -4606,26 +4606,26 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val t = inferExprType(e.obj) ?: return null
         // String indexing: str[i] → Char
         if (t == "String") return "Char"
-        // Class with get() method → return type of get
+        // Class with operator get() method → return type of get
         if (classes.containsKey(t)) {
-            val methodDecl = classes[t]?.methods?.find { it.name == "get" }
+            val methodDecl = classes[t]?.methods?.find { it.name == "get" && it.isOperator }
             if (methodDecl?.returnType != null) {
                 return resolveMethodReturnType(t, methodDecl.returnType)
             }
         }
-        // Heap<T>/Ptr<T>/Value<T> wrapping a class with get()
+        // Heap<T>/Ptr<T>/Value<T> wrapping a class with operator get()
         val indirectBase = anyIndirectClassName(t)
         if (indirectBase != null && classes.containsKey(indirectBase)) {
-            val methodDecl = classes[indirectBase]?.methods?.find { it.name == "get" }
+            val methodDecl = classes[indirectBase]?.methods?.find { it.name == "get" && it.isOperator }
             if (methodDecl?.returnType != null) {
                 return resolveMethodReturnType(indirectBase, methodDecl.returnType)
             }
         }
-        // Interface with get() in vtable
+        // Interface with operator get() in vtable
         if (interfaces.containsKey(t)) {
             val ifaceInfo = interfaces[t]
-            val ifaceMethod = ifaceInfo?.methods?.find { it.name == "get" }
-                ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "get" }
+            val ifaceMethod = ifaceInfo?.methods?.find { it.name == "get" && it.isOperator }
+                ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "get" && it.isOperator }
             if (ifaceMethod?.returnType != null) {
                 return resolveMethodReturnType(t, ifaceMethod.returnType)
             }

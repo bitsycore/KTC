@@ -2,14 +2,14 @@ package ktc
 
 interface Map<K, V> : Disposable {
 	val size: Int
-	fun get(key: K): V?
-	fun containsKey(key: K): Boolean
+	operator fun get(key: K): V?
+	operator fun containsKey(key: K): Boolean
 	fun isEmpty(): Boolean
 }
 
 interface MutableMap<K, V> : Map<K, V> {
 	fun put(key: K, value: V)
-	fun set(key: K, value: V)
+	operator fun set(key: K, value: V)
 	fun remove(key: K): Boolean
 	fun clear()
 }
@@ -36,7 +36,7 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		return -1
 	}
 
-	override fun get(key: K): V? {
+	override operator fun get(key: K): V? {
 		val idx = this.findSlot(key)
 		if (idx < 0) {
 			return null
@@ -44,7 +44,7 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		return vals[idx]
 	}
 
-	override fun containsKey(key: K): Boolean {
+	override operator fun containsKey(key: K): Boolean {
 		return this.findSlot(key) >= 0
 	}
 
@@ -73,7 +73,7 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		size = size + 1
 	}
 
-	override fun set(key: K, value: V) {
+	override operator fun set(key: K, value: V) {
 		this.put(key, value)
 	}
 

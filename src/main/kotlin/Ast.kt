@@ -29,7 +29,8 @@ data class FunDecl(
     val returnType: TypeRef?,
     val body: Block?,
     val receiver: TypeRef? = null,
-    val typeParams: List<String> = emptyList()
+    val typeParams: List<String> = emptyList(),
+    val isOperator: Boolean = false
 ) : Decl()
 
 data class ClassDecl(

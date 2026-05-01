@@ -2,14 +2,14 @@ package ktc
 
 interface List<T> : Disposable {
 	val size: Int
-	fun get(index: Int): T
-	fun contains(value: T): Boolean
+	operator fun get(index: Int): T
+	operator fun contains(value: T): Boolean
 	fun indexOf(value: T): Int
 }
 
 interface MutableList<T> : List<T> {
 	fun add(value: T)
-	fun set(index: Int, value: T)
+	operator fun set(index: Int, value: T)
 	fun removeAt(index: Int): T
 	fun clear()
 }
@@ -28,11 +28,11 @@ class ArrayList<T>(capacity: Int) : MutableList<T> {
 		size = size + 1
 	}
 
-	override fun get(index: Int): T {
+	override operator fun get(index: Int): T {
 		return buf[index]
 	}
 
-	override fun set(index: Int, value: T) {
+	override operator fun set(index: Int, value: T) {
 		buf[index] = value
 	}
 
@@ -45,7 +45,7 @@ class ArrayList<T>(capacity: Int) : MutableList<T> {
 		return removed
 	}
 
-	override fun contains(value: T): Boolean {
+	override operator fun contains(value: T): Boolean {
 		for (i in 0 until size) {
 			if (buf[i] == value) return true
 		}
