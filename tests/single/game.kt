@@ -551,6 +551,43 @@ fun testInterface() {
     printShape(s)
 }
 
+// ── HashMap ─────────────────────────────────────────────────────────
+fun testHashMap() {
+    // Int → Int map
+    var scores = IntIntHashMap()
+    scores.put(1, 100)
+    scores.put(2, 200)
+    scores.put(3, 300)
+    println(scores.get(1))         // 100
+    println(scores.get(2))         // 200
+    println(scores.size)           // 3
+    println(scores.containsKey(2)) // true
+    println(scores.containsKey(9)) // false
+
+    // Index operator: map[key]
+    scores[1] = 999
+    println(scores[1])             // 999
+
+    // Remove
+    scores.remove(2)
+    println(scores.size)           // 2
+    println(scores.containsKey(2)) // false
+
+    // String → Int map
+    var wordCount = StringIntHashMap()
+    wordCount.put("hello", 1)
+    wordCount.put("world", 2)
+    println(wordCount.get("hello"))       // 1
+    println(wordCount.containsKey("world")) // true
+    wordCount["hello"] = 42
+    println(wordCount["hello"])            // 42
+
+    // Cleanup
+    scores.free()
+    wordCount.free()
+    println("hashmap ok")
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -600,4 +637,6 @@ fun main(args: Array<String>) {
     testDeferReturn()
     println("--- testInterface ---")
     testInterface()
+    println("--- testHashMap ---")
+    testHashMap()
 }

@@ -22,16 +22,16 @@ import math.*       // cross-package (wildcard only)
 
 ### Primitives
 
-| Kotlin      | C type      | Notes                        |
-|-------------|-------------|------------------------------|
-| `Int`       | `int32_t`   |                              |
-| `Long`      | `int64_t`   | `123L` literal               |
-| `Float`     | `float`     | `1.0f` literal               |
-| `Double`    | `double`    | `1.0` literal                |
-| `Boolean`   | `bool`      | `true` / `false`             |
-| `Char`      | `char`      | `'x'` literal                |
-| `String`    | `kt_String` | ptr + len pair, zero-cost for literals |
-| `Unit`      | `void`      | Implicit return type         |
+| Kotlin    | C type      | Notes                                  |
+|-----------|-------------|----------------------------------------|
+| `Int`     | `int32_t`   |                                        |
+| `Long`    | `int64_t`   | `123L` literal                         |
+| `Float`   | `float`     | `1.0f` literal                         |
+| `Double`  | `double`    | `1.0` literal                          |
+| `Boolean` | `bool`      | `true` / `false`                       |
+| `Char`    | `char`      | `'x'` literal                          |
+| `String`  | `kt_String` | ptr + len pair, zero-cost for literals |
+| `Unit`    | `void`      | Implicit return type                   |
 
 ### String
 
@@ -318,6 +318,46 @@ names.free()
 
 Codegen-driven: struct + methods emitted per element type on first use. Heap-backed (`malloc` / `realloc`).
 
+### HashMap (Hash Tables)
+
+```kotlin
+// Int → Int map
+var scores = IntIntHashMap()       // default capacity 16
+scores.put(1, 100)
+scores.put(2, 200)
+println(scores.get(1))             // 100
+println(scores.size)               // 2
+println(scores.containsKey(2))     // true
+
+// Index operators
+scores[1] = 999                    // → _put
+println(scores[1])                 // → _get (999)
+
+// Remove
+scores.remove(2)
+
+// String keys
+var wordCount = StringIntHashMap()
+wordCount.put("hello", 1)
+wordCount["hello"] = 42
+println(wordCount["hello"])        // 42
+
+// Cleanup
+scores.free()
+wordCount.free()
+```
+
+**Naming convention:** `<KeyType><ValueType>HashMap` — e.g. `IntIntHashMap`, `StringIntHashMap`, `IntFloatHashMap`
+
+**Supported key types:** `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`
+**Supported value types:** Any primitive or class type known to the transpiler.
+
+**Methods:** `put`, `get` (also via `[]`), `containsKey`, `remove`, `clear`, `free`, `size`
+
+**Constructor:** `IntIntHashMap()` (default cap 16) or `IntIntHashMap(cap)` with explicit initial capacity.
+
+Codegen-driven: open-addressing hash table with linear probing, emitted per key:value type pair on first use. Grows at 50% load factor. String keys use FNV-1a hash. Heap-backed (`malloc` / `realloc`).
+
 ## Nullables
 
 ### Inline Representation
@@ -393,11 +433,11 @@ free(ints)
 
 Three variants:
 
-| Syntax         | Meaning                   | C representation              |
-|----------------|---------------------------|-------------------------------|
-| `Heap<T>`      | Always allocated, non-null| `T* p`                        |
-| `Heap<T?>`     | Always allocated, value-nullable | `T* p` + `bool p$has`   |
-| `Heap<T>?`     | Pointer-nullable          | `T* p` (NULL = absent)        |
+| Syntax     | Meaning                          | C representation       |
+|------------|----------------------------------|------------------------|
+| `Heap<T>`  | Always allocated, non-null       | `T* p`                 |
+| `Heap<T?>` | Always allocated, value-nullable | `T* p` + `bool p$has`  |
+| `Heap<T>?` | Pointer-nullable                 | `T* p` (NULL = absent) |
 
 ```kotlin
 // Allocate on heap
@@ -476,7 +516,7 @@ ktc math.kt game_vec3.kt game_main.kt -o out/
 ## What's NOT Supported
 
 - Lambdas / closures
-- Generics (except `Heap<T>`, `Array<T>`, `ArrayList<T>`)
+- Generics (except `Heap<T>`, `Array<T>`, `ArrayList<T>`, `HashMap<K,V>`)
 - Interfaces / inheritance / abstract classes
 - Suspend / coroutines
 - Try / catch / exceptions
