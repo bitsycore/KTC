@@ -1,5 +1,6 @@
 package com.bitsycore
 
+import org.junit.jupiter.api.assertThrows
 import kotlin.test.Test
 
 /**
@@ -20,7 +21,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapFieldRead() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)\nprintln(p.x)",
+            "val p = malloc<Vec2>(10.0f, 20.0f)!!\nprintln(p.x)",
             decls = vec2Decl
         )
         r.sourceContains("p->x")
@@ -38,7 +39,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapValue() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)\nval v = p.value()",
+            "val p = malloc<Vec2>(10.0f, 20.0f)!!\nval v = p.value()",
             decls = vec2Decl
         )
         // .value() returns same pointer (Value<T>), NOT a dereference copy
@@ -50,7 +51,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapDeref() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)\nval v = p.deref()",
+            "val p = malloc<Vec2>(10.0f, 20.0f)!!\nval v = p.deref()",
             decls = vec2Decl
         )
         r.sourceContains("(*p)")
@@ -94,12 +95,12 @@ class HeapTest : TranspilerTestBase() {
     }
 
     @Test fun typedPointerIndexRead() {
-        val r = transpileMain("val ints = malloc<Int>(5)\nprintln(ints[2])")
+        val r = transpileMain("val ints = malloc<Int>(5)!!\nprintln(ints[2])")
         r.sourceContains("ints[2]")
     }
 
     @Test fun typedPointerIndexWrite() {
-        val r = transpileMain("val ints = malloc<Int>(5)\nints[0] = 42")
+        val r = transpileMain("val ints = malloc<Int>(5)!!\nints[0] = 42")
         r.sourceContains("ints[0] = 42;")
     }
 
@@ -116,6 +117,25 @@ class HeapTest : TranspilerTestBase() {
     }
 
     // ── Heap<T>? — pointer nullable ──────────────────────────────────
+
+    @Test fun mallocReturnsNullable() {
+        // malloc without !! should be nullable — accessing .x should error
+        val ex = assertThrows<IllegalStateException> {
+            transpileMain("val p = malloc<Vec2>(10.0f, 20.0f)\nprintln(p.x)", decls = vec2Decl)
+        }
+        assert(ex.message!!.contains("safe"))
+    }
+
+    @Test fun mallocNullCheckSmartCast() {
+        // After null check, smart cast should allow access
+        val r = transpileMain("""
+            val p = malloc<Vec2>(10.0f, 20.0f)
+            if (p == null) return
+            println(p.x)
+        """, decls = vec2Decl)
+        r.sourceContains("p == NULL")
+        r.sourceContains("p->x")
+    }
 
     @Test fun heapPtrNullable() {
         val r = transpileMain(
@@ -140,7 +160,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapToPtr() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(1.0f, 2.0f)\nval p = h.toPtr()",
+            "val h = malloc<Vec2>(1.0f, 2.0f)!!\nval p = h.toPtr()",
             decls = vec2Decl
         )
         r.sourceContains("\$heap = true;")
@@ -231,7 +251,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun valueFieldAccess() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(10.0f, 20.0f)\nval v = h.value()\nprintln(v.x)",
+            "val h = malloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nprintln(v.x)",
             decls = vec2Decl
         )
         r.sourceContains("v->x")
@@ -241,7 +261,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun valueFieldWrite() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(10.0f, 20.0f)\nval v = h.value()\nv.x = 99.0f",
+            "val h = malloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nv.x = 99.0f",
             decls = vec2Decl
         )
         r.sourceContains("v->x = 99.0f;")
@@ -251,7 +271,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun valueDeref() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(10.0f, 20.0f)\nval v = h.value()\nval copy = v.deref()",
+            "val h = malloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nval copy = v.deref()",
             decls = vec2Decl
         )
         r.sourceContains("(*v)")
@@ -266,7 +286,7 @@ class HeapTest : TranspilerTestBase() {
                 fun inc() { count = count + 1 }
             }
             fun main(args: Array<String>) {
-                val h = malloc<Counter>(0)
+                val h = malloc<Counter>(0)!!
                 val v = h.value()
                 v.inc()
             }
@@ -278,7 +298,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun explicitValueType() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(1.0f, 2.0f)\nval v: Value<Vec2> = h.value()\nprintln(v.x)",
+            "val h = malloc<Vec2>(1.0f, 2.0f)!!\nval v: Value<Vec2> = h.value()\nprintln(v.x)",
             decls = vec2Decl
         )
         r.sourceContains("v->x")

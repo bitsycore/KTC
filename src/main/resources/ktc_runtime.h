@@ -13,6 +13,118 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+/* ═══════════════════════════ Memory tracking ═════════════════════════ */
+/*
+ * Enabled by #define KTC_MEM_TRACK before including this header.
+ * Intercepts malloc/calloc/realloc/free via macros.
+ * Call ktc_mem_report() at program exit to print alloc/free summary + leaks.
+ */
+
+#ifdef KTC_MEM_TRACK
+
+#ifndef KTC_MEM_MAX
+#define KTC_MEM_MAX 8192
+#endif
+
+typedef struct {
+    void*       ptr;
+    size_t      size;
+    const char* file;
+    int         line;
+    bool        active;   /* true = still allocated */
+} ktc_MemRecord;
+
+static ktc_MemRecord ktc_mem_records[KTC_MEM_MAX];
+static int32_t ktc_mem_count    = 0;
+static int32_t ktc_mem_allocs   = 0;
+static int32_t ktc_mem_frees    = 0;
+static size_t  ktc_mem_bytes    = 0;   /* current live bytes */
+
+static inline void ktc_mem_record_alloc(void* p, size_t sz, const char* file, int line) {
+    ktc_mem_allocs++;
+    ktc_mem_bytes += sz;
+    if (ktc_mem_count < KTC_MEM_MAX) {
+        ktc_mem_records[ktc_mem_count++] = (ktc_MemRecord){p, sz, file, line, true};
+    }
+}
+
+static inline void* ktc_malloc(size_t sz, const char* file, int line) {
+    void* p = (malloc)(sz);
+    ktc_mem_record_alloc(p, sz, file, line);
+    return p;
+}
+
+static inline void* ktc_calloc(size_t n, size_t sz, const char* file, int line) {
+    void* p = (calloc)(n, sz);
+    ktc_mem_record_alloc(p, n * sz, file, line);
+    return p;
+}
+
+static inline void* ktc_realloc(void* old, size_t sz, const char* file, int line) {
+    /* mark old allocation as freed */
+    for (int i = ktc_mem_count - 1; i >= 0; i--) {
+        if (ktc_mem_records[i].ptr == old && ktc_mem_records[i].active) {
+            ktc_mem_records[i].active = false;
+            ktc_mem_bytes -= ktc_mem_records[i].size;
+            ktc_mem_frees++;
+            break;
+        }
+    }
+    void* p = (realloc)(old, sz);
+    ktc_mem_record_alloc(p, sz, file, line);
+    return p;
+}
+
+static inline void ktc_free(void* p, const char* file, int line) {
+    if (!p) return;
+    for (int i = ktc_mem_count - 1; i >= 0; i--) {
+        if (ktc_mem_records[i].ptr == p && ktc_mem_records[i].active) {
+            ktc_mem_records[i].active = false;
+            ktc_mem_bytes -= ktc_mem_records[i].size;
+            ktc_mem_frees++;
+            (free)(p);
+            return;
+        }
+    }
+    /* unknown or double-free */
+    fprintf(stderr, "[mem] WARNING: free(%p) unknown pointer at %s:%d\n", p, file, line);
+    ktc_mem_frees++;
+    (free)(p);
+}
+
+static inline void ktc_mem_report(void) {
+    int leaks = 0;
+    size_t leaked_bytes = 0;
+    fprintf(stderr, "\n====== ktc memory report ======\n");
+    fprintf(stderr, "  total allocs : %d\n", ktc_mem_allocs);
+    fprintf(stderr, "  total frees  : %d\n", ktc_mem_frees);
+    fprintf(stderr, "  balance      : %d\n", ktc_mem_allocs - ktc_mem_frees);
+    for (int i = 0; i < ktc_mem_count; i++) {
+        if (ktc_mem_records[i].active) {
+            if (leaks == 0) fprintf(stderr, "\n  LEAKS:\n");
+            fprintf(stderr, "    %p  %6zu bytes  %s:%d\n",
+                ktc_mem_records[i].ptr, ktc_mem_records[i].size,
+                ktc_mem_records[i].file, ktc_mem_records[i].line);
+            leaks++;
+            leaked_bytes += ktc_mem_records[i].size;
+        }
+    }
+    if (leaks == 0) {
+        fprintf(stderr, "  status       : OK, no leaks\n");
+    } else {
+        fprintf(stderr, "  leaked       : %d allocs, %zu bytes\n", leaks, leaked_bytes);
+    }
+    fprintf(stderr, "===============================\n");
+}
+
+/* Macro overrides — must come AFTER the tracking functions */
+#define malloc(sz)        ktc_malloc(sz, __FILE__, __LINE__)
+#define calloc(n, sz)     ktc_calloc(n, sz, __FILE__, __LINE__)
+#define realloc(p, sz)    ktc_realloc(p, sz, __FILE__, __LINE__)
+#define free(p)           ktc_free(p, __FILE__, __LINE__)
+
+#endif /* KTC_MEM_TRACK */
+
 /* ═══════════════════════════ String ══════════════════════════════════ */
 
 typedef struct {

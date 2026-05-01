@@ -5,19 +5,24 @@ import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
-        System.err.println("Usage: ktc <file.kt...> [-o <output_dir>]")
+        System.err.println("Usage: ktc <file.kt...> [-o <output_dir>] [--mem-track]")
         System.err.println("  Transpiles Kotlin subset files to C11.")
+        System.err.println("  --mem-track  Enable allocation tracking (alloc/free counts + leak report)")
         exitProcess(1)
     }
 
-    // Parse args: collect .kt files and -o flag
+    // Parse args: collect .kt files and flags
     val inputPaths = mutableListOf<String>()
     var outputDir = "."
+    var memTrack = false
     var i = 0
     while (i < args.size) {
         if (args[i] == "-o" && i + 1 < args.size) {
             outputDir = args[i + 1]
             i += 2
+        } else if (args[i] == "--mem-track") {
+            memTrack = true
+            i++
         } else {
             inputPaths += args[i]
             i++
@@ -83,7 +88,8 @@ fun main(args: Array<String>) {
 
         val output: CCodeGen.COutput
         try {
-            output = CCodeGen(mergedFile, allAsts, mergedSourceLines).generate()
+            val srcName = if (group.size == 1) group.first().file.name else "$pkg.kt"
+            output = CCodeGen(mergedFile, allAsts, mergedSourceLines, memTrack = memTrack, sourceFileName = srcName).generate()
         } catch (e: Exception) {
             System.err.println("CodeGen error in package '$pkg': ${e.message}")
             exitProcess(1)

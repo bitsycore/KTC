@@ -10,7 +10,7 @@ package com.bitsycore
  *
  * `fun main()` is never prefixed — always emits `int main(void)`.
  */
-class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = listOf(), private val sourceLines: List<String> = emptyList()) {
+class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = listOf(), private val sourceLines: List<String> = emptyList(), private val memTrack: Boolean = false, private val sourceFileName: String = "") {
 
     // ── Package prefix ───────────────────────────────────────────────
     private val prefix: String = file.pkg?.replace('.', '_')?.plus("_") ?: ""
@@ -256,6 +256,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private var tmpCounter = 0
     private fun tmp(): String = "\$${tmpCounter++}"
 
+    // ── Memory tracking helpers (Kotlin source attribution) ──────────
+    /** Kotlin source location string for current statement, e.g. `"File.kt", 42` */
+    private fun ktSrc(): String = "\"$sourceFileName\", $currentStmtLine"
+    private fun tMalloc(sizeExpr: String) = if (memTrack) "ktc_malloc($sizeExpr, ${ktSrc()})" else "malloc($sizeExpr)"
+    private fun tCalloc(nExpr: String, sizeExpr: String) = if (memTrack) "ktc_calloc($nExpr, $sizeExpr, ${ktSrc()})" else "calloc($nExpr, $sizeExpr)"
+    private fun tRealloc(ptrExpr: String, sizeExpr: String) = if (memTrack) "ktc_realloc($ptrExpr, $sizeExpr, ${ktSrc()})" else "realloc($ptrExpr, $sizeExpr)"
+    private fun tFree(ptrExpr: String) = if (memTrack) "ktc_free($ptrExpr, ${ktSrc()})" else "free($ptrExpr)"
+
     // ── Pre-statements (hoisted before the current statement) ────────
     private val preStmts = mutableListOf<String>()
     private fun flushPreStmts(ind: String) {
@@ -275,6 +283,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         collectDecls()
 
         hdr.appendLine("#pragma once")
+        if (memTrack) hdr.appendLine("#define KTC_MEM_TRACK")
         hdr.appendLine("#include \"ktc_runtime.h\"")
         hdr.appendLine()
 
@@ -1028,7 +1037,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName* ${cName}_new($paramDecl);")
         impl.appendLine("$cName* ${cName}_new($paramDecl) {")
         impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
-        impl.appendLine("    *\$p = ${cName}_create(${ci.ctorProps.joinToString(", ") { it.first }});")
+        impl.appendLine("    if (\$p) *\$p = ${cName}_create(${ci.ctorProps.joinToString(", ") { it.first }});")
         impl.appendLine("    return \$p;")
         impl.appendLine("}")
         impl.appendLine()
@@ -1039,7 +1048,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName* ${cName}_toHeap($cName \$v);")
         impl.appendLine("$cName* ${cName}_toHeap($cName \$v) {")
         impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
-        impl.appendLine("    *\$p = \$v;")
+        impl.appendLine("    if (\$p) *\$p = \$v;")
         impl.appendLine("    return \$p;")
         impl.appendLine("}")
         impl.appendLine()
@@ -1525,6 +1534,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit deferred blocks at end unless last stmt was a return (already emitted there)
         val lastStmt = f.body?.stmts?.lastOrNull()
         if (lastStmt !is ReturnStmt) emitDeferredBlocks("    ")
+        if (isMain && memTrack) impl.appendLine("    ktc_mem_report();")
         if (isMain) impl.appendLine("    return 0;")
         else if (returnsNullable && lastStmt !is ReturnStmt) impl.appendLine("    return false;")
         popScope()
@@ -1601,6 +1611,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val inferredNullable = s.type == null && tRaw.endsWith("?")
         val inferredPtr = s.type == null && (tRaw.endsWith("^") || tRaw.endsWith("^?") || tRaw.endsWith("^#"))
         val t = if (inferredNullable) tRaw.removeSuffix("?") else tRaw
+        // malloc/calloc/realloc return nullable pointers (may return NULL)
+        val isAlloc = s.type == null && isAllocCall(s.init)
 
         // Indirect type flags — covers Heap<T>, Ptr<T>, Value<T>
         val isHeapValNull = t.endsWith("*#")
@@ -1609,12 +1621,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val isAnyValNull  = isHeapValNull || isPtrValNull || isValValNull   // value-nullable, $has
 
         val isHeapPtrNull = !isAnyValNull && isHeapPointerType(t) &&
-                (s.type?.nullable == true || s.init is NullLit)
+                (s.type?.nullable == true || s.init is NullLit || inferredNullable || isAlloc)
         val isPtrPtrNull  = !isAnyValNull && isPtrType(t) &&
-                (s.type?.nullable == true || s.init is NullLit)
+                (s.type?.nullable == true || s.init is NullLit || inferredNullable)
         val isValPtrNull  = !isAnyValNull && isValueType(t) &&
-                (s.type?.nullable == true || s.init is NullLit)
-        val isAnyPtrNull  = isHeapPtrNull || isPtrPtrNull || isValPtrNull   // pointer-nullable, NULL
+                (s.type?.nullable == true || s.init is NullLit || inferredNullable)
+        // Raw pointer nullable: "Int*", "Pointer" etc. — not class-based, uses NULL
+        val isRawPtrNull  = !isAnyValNull && !isHeapPointerType(t) && !isPtrType(t) && !isValueType(t) &&
+                (t.endsWith("*") || t == "Pointer") && (inferredNullable || isAlloc)
+        val isAnyPtrNull  = isHeapPtrNull || isPtrPtrNull || isValPtrNull || isRawPtrNull  // pointer-nullable, NULL
 
         val isNullable = !isAnyValNull && !isAnyPtrNull &&
                 (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init)
@@ -1816,6 +1831,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e !is CallExpr) return false
         val name = (e.callee as? NameExpr)?.name ?: return false
         return funSigs[name]?.returnType?.nullable == true
+    }
+
+    /** Check if an expression is a malloc/calloc/realloc call (returns nullable pointer). */
+    private fun isAllocCall(e: Expr?): Boolean {
+        if (e !is CallExpr) return false
+        val name = (e.callee as? NameExpr)?.name ?: return false
+        return name in setOf("malloc", "calloc", "realloc")
     }
 
     /** Generate a call expression that returns nullable, appending &outVar as extra arg.
@@ -2445,28 +2467,35 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                         val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                         val elemC = cTypeStr(elemName)
-                        return "($elemC*)malloc(sizeof($elemC) * (size_t)(${genExpr(args[0].expr)}))"
+                        return "($elemC*)${tMalloc("sizeof($elemC) * (size_t)(${genExpr(args[0].expr)})")}"
                     }
                     var typeName = typeSubst[ta.name] ?: ta.name
                     // Resolve generic class: malloc<MyList<Int>>(...) → MyList_Int_new(...)
                     if (ta.typeArgs.isNotEmpty() && classes.containsKey(typeName) && classes[typeName]!!.isGeneric) {
                         typeName = mangledGenericName(typeName, ta.typeArgs.map { it.name })
                     }
-                    // Class heap constructor: malloc<MyClass>(args) → MyClass_new(args)
+                    // Class heap constructor: malloc<MyClass>(args) → inline alloc + create
                     if (classes.containsKey(typeName)) {
                         val cName = pfx(typeName)
                         val argStr = args.joinToString(", ") { genExpr(it.expr) }
+                        if (memTrack) {
+                            // Inline: allocate with Kotlin source, then init via _create
+                            val t = tmp()
+                            preStmts += "$cName* $t = ($cName*)${tMalloc("sizeof($cName)")};"
+                            preStmts += "if ($t) *$t = ${cName}_create($argStr);"
+                            return t
+                        }
                         return "${cName}_new($argStr)"
                     }
                     // malloc<T>() with no args → single element: (T*)malloc(sizeof(T))
                     val elemC = cTypeStr(typeName)
                     if (args.isEmpty()) {
-                        return "($elemC*)malloc(sizeof($elemC))"
+                        return "($elemC*)${tMalloc("sizeof($elemC)")}"
                     }
                     // malloc<T>(n) → array allocation: (T*)malloc(sizeof(T) * (size_t)(n))
-                    return "($elemC*)malloc(sizeof($elemC) * (size_t)(${genExpr(args[0].expr)}))"
+                    return "($elemC*)${tMalloc("sizeof($elemC) * (size_t)(${genExpr(args[0].expr)})")}"
                 }
-                return "malloc((size_t)(${genExpr(args[0].expr)}))"
+                return tMalloc("(size_t)(${genExpr(args[0].expr)})")
             }
             "calloc"  -> {
                 if (e.typeArgs.isNotEmpty()) {
@@ -2477,9 +2506,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         typeSubst[ta.name] ?: ta.name
                     }
                     val elemC = cTypeStr(elemName)
-                    return "($elemC*)calloc((size_t)(${genExpr(args[0].expr)}), sizeof($elemC))"
+                    return "($elemC*)${tCalloc("(size_t)(${genExpr(args[0].expr)})", "sizeof($elemC)")}"
                 }
-                return "calloc((size_t)(${genExpr(args[0].expr)}), (size_t)(${genExpr(args[1].expr)}))"
+                return tCalloc("(size_t)(${genExpr(args[0].expr)})", "(size_t)(${genExpr(args[1].expr)})")
             }
             "realloc" -> {
                 if (e.typeArgs.isNotEmpty()) {
@@ -2490,11 +2519,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         typeSubst[ta.name] ?: ta.name
                     }
                     val elemC = cTypeStr(elemName)
-                    return "($elemC*)realloc(${genExpr(args[0].expr)}, sizeof($elemC) * (size_t)(${genExpr(args[1].expr)}))"
+                    return "($elemC*)${tRealloc(genExpr(args[0].expr), "sizeof($elemC) * (size_t)(${genExpr(args[1].expr)})")}"
                 }
-                return "realloc(${genExpr(args[0].expr)}, (size_t)(${genExpr(args[1].expr)}))"
+                return tRealloc(genExpr(args[0].expr), "(size_t)(${genExpr(args[1].expr)})")
             }
-            "free"    -> return "free(${genExpr(args[0].expr)})"
+            "free"    -> return tFree(genExpr(args[0].expr))
             "mutableListOf", "arrayListOf" -> {
                 return genMutableListOf(args)
             }
@@ -3870,24 +3899,37 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val inner = t.typeArgs[0]
             // Pointer<Array<Int>> → "Int*" (element type pointer, same C representation)
             if (inner.name == "Array" && inner.typeArgs.isNotEmpty()) {
-                return "${inner.typeArgs[0].name}*"
+                return "${resolveTypeName(inner.typeArgs[0])}*"
             }
-            return "${inner.name}*"
+            return "${resolveTypeName(inner)}*"
         }
-        // Heap<MyClass> → "MyClass*"; Heap<MyClass?> → "MyClass*#" (value-nullable)
+        // Heap<MyClass> → "MyClass*"; Heap<MyClass?> → "MyClass*#"
+        // Heap<Array<T>> → same C type as Array<T> (already a pointer)
         if (t.name == "Heap" && t.typeArgs.isNotEmpty()) {
             val inner = t.typeArgs[0]
-            return if (inner.nullable) "${inner.name}*#" else "${inner.name}*"
+            if (inner.name == "Array") {
+                return resolveTypeName(inner)
+            }
+            val resolved = resolveTypeName(inner)
+            return if (inner.nullable) "${resolved}*#" else "${resolved}*"
         }
         // Ptr<MyClass> → "MyClass^"; Ptr<MyClass?> → "MyClass^#"
         if (t.name == "Ptr" && t.typeArgs.isNotEmpty()) {
             val inner = t.typeArgs[0]
-            return if (inner.nullable) "${inner.name}^#" else "${inner.name}^"
+            if (inner.name == "Array") {
+                return resolveTypeName(inner)
+            }
+            val resolved = resolveTypeName(inner)
+            return if (inner.nullable) "${resolved}^#" else "${resolved}^"
         }
         // Value<MyClass> → "MyClass&"; Value<MyClass?> → "MyClass&#"
         if (t.name == "Value" && t.typeArgs.isNotEmpty()) {
             val inner = t.typeArgs[0]
-            return if (inner.nullable) "${inner.name}&#" else "${inner.name}&"
+            if (inner.name == "Array") {
+                return resolveTypeName(inner)
+            }
+            val resolved = resolveTypeName(inner)
+            return if (inner.nullable) "${resolved}&#" else "${resolved}&"
         }
         if ((t.name == "HashMap" || t.name == "MutableMap") && t.typeArgs.size == 2) {
             val keyKt = resolveTypeName(t.typeArgs[0])

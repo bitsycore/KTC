@@ -5,12 +5,12 @@ package TestProject.Main
 class MutableList<T>(var capacity: Int) {
 
 	var size: Int = 0
-	var buf: Pointer<Array<T>> = malloc<Array<T>>(capacity)
+	var buf: Heap<Array<T>> = malloc<Array<T>>(capacity)!!
 
 	fun add(value: T) {
 		if (size >= capacity) {
 			capacity = capacity * 2
-			buf = realloc<Array<T>>(buf, capacity)
+			buf = realloc<Array<T>>(buf, capacity)!!
 		}
 		buf[size] = value
 		size = size + 1
@@ -54,6 +54,7 @@ class MutableList<T>(var capacity: Int) {
 	fun dispose() {
 		free(buf)
 	}
+
 }
 
 fun createMutableListInt(capacity: Int = 8): MutableList<Int> {
@@ -71,7 +72,8 @@ fun MutableList<*>.sizeOf(): Int {
 // ── main ─────────────────────────────────────────────────────────────
 
 fun main(args: Array<String>) {
-	val list = malloc<MutableList<Int>>(8)
+	val list = malloc<MutableList<Int>>(8)!!
+	
 	val v = list.value()
 
 	v.add(10)
