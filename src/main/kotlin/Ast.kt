@@ -15,7 +15,8 @@ data class TypeRef(
 data class KtFile(
     val pkg: String?,
     val imports: List<String>,
-    val decls: List<Decl>
+    val decls: List<Decl>,
+    val sourceFile: String = ""
 )
 
 // ═══════════════════════════ Declarations ═══════════════════════════

@@ -69,7 +69,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val starExtFunDecls = mutableListOf<FunDecl>()
     // Concrete instantiations of generic functions: mangledName → (FunDecl, typeSubst)
     private val genericFunInstantiations = mutableMapOf<String, MutableSet<List<String>>>()
-
+    // Maps mangled generic function name → concrete class return type when the declared return
+    // type is an interface but the body returns a concrete class (enables stack return)
+    private val genericFunConcreteReturn = mutableMapOf<String, String>()
     /** Check if a method on baseType has a nullable receiver declaration. */
     private fun hasNullableReceiverExt(baseType: String, method: String): Boolean {
         return extensionFuns[baseType]?.any { it.name == method && it.receiver?.nullable == true } == true
@@ -92,6 +94,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val genericClassDecls = mutableMapOf<String, ClassDecl>()
     // Store original InterfaceDecl for generic interfaces so we can monomorphize them
     private val genericIfaceDecls = mutableMapOf<String, InterfaceDecl>()
+    // Track which source file a generic declaration came from (for mem-track attribution)
+    private val declSourceFile = mutableMapOf<String, String>()
     // Active type parameter substitution map during monomorphized emission (e.g. {T → Int})
     private var typeSubst: Map<String, String> = emptyMap()
     // Track all discovered concrete instantiations: "MyList" → [["Int"], ["Float"]]
@@ -235,6 +239,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ── Source location tracking for error messages ──────────────────
     private var currentStmtLine: Int = 0
+    /** Mutable source file name for mem-track attribution.
+     *  Overridden when emitting generic instantiations from other packages (e.g. stdlib). */
+    private var currentSourceFile: String = sourceFileName
 
     /** Throw an error with source context around the given line. */
     private fun codegenError(msg: String): Nothing {
@@ -271,7 +278,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ── Memory tracking helpers (Kotlin source attribution) ──────────
     /** Kotlin source location string for current statement, e.g. `"File.kt", 42` */
-    private fun ktSrc(): String = "\"$sourceFileName\", $currentStmtLine"
+    private fun ktSrc(): String = "\"$currentSourceFile\", $currentStmtLine"
     private fun tMalloc(sizeExpr: String) = if (memTrack) "ktc_malloc($sizeExpr, ${ktSrc()})" else "malloc($sizeExpr)"
     private fun tCalloc(nExpr: String, sizeExpr: String) = if (memTrack) "ktc_calloc($nExpr, $sizeExpr, ${ktSrc()})" else "calloc($nExpr, $sizeExpr)"
     private fun tRealloc(ptrExpr: String, sizeExpr: String) = if (memTrack) "ktc_realloc($ptrExpr, $sizeExpr, ${ktSrc()})" else "realloc($ptrExpr, $sizeExpr)"
@@ -331,6 +338,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         scanGenericFunBodiesForInstantiations()
         materializeGenericInstantiations()
 
+        // Pre-compute concrete return types for generic functions returning interfaces
+        // (enables returning concrete class by value on stack instead of heap-allocating)
+        computeGenericFunConcreteReturns()
+
         // Emit interface vtable struct + fat pointer type BEFORE classes
         // Non-generic interfaces first (they only use primitive types in signatures)
         val emittedIfaceNames = mutableSetOf<String>()
@@ -376,7 +387,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val templateCi = classes[baseName] ?: continue
                 // Set type substitution for this instantiation
                 typeSubst = templateCi.typeParams.zip(typeArgs).toMap()
+                // Switch source file attribution for mem-track
+                val prevSourceFile = currentSourceFile
+                declSourceFile[baseName]?.let { currentSourceFile = it }
                 emitGenericClass(templateDecl, mangledName)
+                currentSourceFile = prevSourceFile
                 typeSubst = emptyMap()
             }
         }
@@ -440,6 +455,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val fpfx = f.pkg?.replace('.', '_')?.plus("_") ?: ""
             for (d in f.decls) {
                 collectDecl(d)
+                // Record the source file for generic declarations (for mem-track attribution)
+                if (f.sourceFile.isNotEmpty()) {
+                    when (d) {
+                        is ClassDecl -> if (d.typeParams.isNotEmpty()) declSourceFile[d.name] = f.sourceFile
+                        is FunDecl -> if (d.typeParams.isNotEmpty()) declSourceFile[d.name] = f.sourceFile
+                        else -> {}
+                    }
+                }
                 // Record the prefix for cross-file symbols
                 when (d) {
                     is ClassDecl -> symbolPrefix[d.name] = fpfx
@@ -1085,6 +1108,62 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     /**
+     * Pre-compute concrete return types for generic functions whose declared return
+     * type is an interface but whose body returns a concrete class instance.
+     * This enables returning the class by value (on the stack) instead of heap-allocating.
+     */
+    private fun computeGenericFunConcreteReturns() {
+        for ((funName, instantiations) in genericFunInstantiations) {
+            val funDecl = genericFunDecls.find { it.name == funName } ?: continue
+            if (funDecl.returnType == null) continue
+            for (typeArgs in instantiations) {
+                val subst = funDecl.typeParams.zip(typeArgs).toMap()
+                val prevSubst = typeSubst
+                typeSubst = subst
+                val resolvedReturn = resolveTypeName(funDecl.returnType)
+                if (interfaces.containsKey(resolvedReturn)) {
+                    val concrete = inferConcreteReturnClass(funDecl.body, subst)
+                    if (concrete != null) {
+                        val mangledName = "${funName}_${typeArgs.joinToString("_")}"
+                        genericFunConcreteReturn[mangledName] = concrete
+                    }
+                }
+                typeSubst = prevSubst
+            }
+        }
+    }
+
+    /**
+     * Scan a function body to determine the concrete class returned.
+     * Traces return statements back to var declarations with class constructor inits.
+     */
+    private fun inferConcreteReturnClass(body: Block?, subst: Map<String, String>): String? {
+        if (body == null) return null
+        val varInits = mutableMapOf<String, Expr?>()
+        for (s in body.stmts) {
+            if (s is VarDeclStmt) varInits[s.name] = s.init
+        }
+        for (s in body.stmts) {
+            if (s is ReturnStmt && s.value is NameExpr) {
+                val varName = (s.value as NameExpr).name
+                val init = varInits[varName]
+                if (init is CallExpr) {
+                    val calleeName = (init.callee as? NameExpr)?.name
+                    if (calleeName != null && classes.containsKey(calleeName) && classes[calleeName]!!.isGeneric) {
+                        val resolvedArgs = init.typeArgs.map { subst[it.name] ?: it.name }
+                        val mangledName = mangledGenericName(calleeName, resolvedArgs)
+                        if (classes.containsKey(mangledName)) return mangledName
+                    }
+                    if (calleeName != null && classes.containsKey(calleeName) && !classes[calleeName]!!.isGeneric) {
+                        return calleeName
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    /**
      * Match a parameter type against a concrete argument type to infer type params.
      * E.g., param=MutableList<T>, argType="MutableList_Int", typeParams={T} → subst[T]=Int
      */
@@ -1475,6 +1554,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      */
     private fun emitGenericFunInstantiations(f: FunDecl) {
         val instantiations = genericFunInstantiations[f.name] ?: return
+        // Switch source file attribution for mem-track if this function came from another file
+        val prevSourceFile = currentSourceFile
+        declSourceFile[f.name]?.let { currentSourceFile = it }
         for (typeArgs in instantiations) {
             val subst = f.typeParams.zip(typeArgs).toMap()
             val prevSubst = typeSubst
@@ -1483,7 +1565,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
             // Resolve return type and params under substitution
             val returnsArray = f.returnType != null && isArrayType(resolveTypeName(f.returnType))
-            val cRet = if (f.returnType != null) cType(f.returnType) else "void"
+            // If we pre-computed a concrete class return for this instantiation, use it
+            val concreteRet = genericFunConcreteReturn[mangledName]
+            val cRet = if (concreteRet != null) {
+                "${pfx(concreteRet)}"
+            } else if (f.returnType != null) cType(f.returnType) else "void"
             val cName = pfx(mangledName)
             val baseParams = expandParams(f.params)
             val params = if (returnsArray) {
@@ -1496,10 +1582,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val prevReturnsArray = currentFnReturnsArray
             val prevReturnType = currentFnReturnType
             currentFnReturnsArray = returnsArray
-        currentFnReturnType = if (f.returnType != null) {
-            val base = resolveTypeName(f.returnType)
-            if (f.returnType.nullable && !base.endsWith("?")) "${base}?" else base
-        } else ""
+            currentFnReturnType = if (concreteRet != null) {
+                concreteRet
+            } else if (f.returnType != null) {
+                val base = resolveTypeName(f.returnType)
+                if (f.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+            } else ""
 
             pushScope()
             for (p in f.params) {
@@ -1524,6 +1612,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
             typeSubst = prevSubst
         }
+        currentSourceFile = prevSourceFile
     }
 
     /**
@@ -2490,9 +2579,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (retIface.isNotEmpty() && interfaces.containsKey(retIface)
                         && exprType != null && classes.containsKey(exprType)
                         && classInterfaces[exprType]?.contains(retIface) == true) {
+                        // Heap-allocate the class so the interface fat pointer outlives this scope
                         val t = tmp()
-                        impl.appendLine("$ind${pfx(exprType)} $t = $expr;")
-                        impl.appendLine("${ind}return ${pfx(exprType)}_as_$retIface(&$t);")
+                        val cExprType = pfx(exprType)
+                        impl.appendLine("$ind${cExprType}* $t = ${tMalloc("sizeof($cExprType)")};")
+                        impl.appendLine("$ind*$t = $expr;")
+                        impl.appendLine("${ind}return ${cExprType}_as_$retIface($t);")
                     } else {
                         impl.appendLine("${ind}return $expr;")
                     }
@@ -4211,6 +4303,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (inferredSubst.size == genFun.typeParams.size) genFun.typeParams.map { inferredSubst[it]!! } else null
                 }
                 if (typeArgNames != null) {
+                    // Check if this instantiation has a known concrete return type
+                    val mangledName = "${name}_${typeArgNames.joinToString("_")}"
+                    val concreteRet = genericFunConcreteReturn[mangledName]
+                    if (concreteRet != null) return concreteRet
                     val subst = genFun.typeParams.zip(typeArgNames).toMap()
                     val saved = typeSubst
                     typeSubst = subst

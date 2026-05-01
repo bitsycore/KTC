@@ -60,7 +60,7 @@ fun main(args: Array<String>) {
                 val source = res.bufferedReader().readText()
                 try {
                     val tokens = Lexer(source).tokenize()
-                    val ast = Parser(tokens).parseFile()
+                    val ast = Parser(tokens).parseFile().copy(sourceFile = name)
                     // Use a virtual File for the ParsedSource
                     parsedFiles += ParsedSource(File("stdlib/$name"), ast, source.lines())
                 } catch (e: Exception) {
@@ -82,7 +82,7 @@ fun main(args: Array<String>) {
         }
         val ast: KtFile
         try {
-            ast = Parser(tokens).parseFile()
+            ast = Parser(tokens).parseFile().copy(sourceFile = inputFile.name)
         } catch (e: Exception) {
             System.err.println("Parser error in ${inputFile.name}: ${e.message}")
             exitProcess(1)
