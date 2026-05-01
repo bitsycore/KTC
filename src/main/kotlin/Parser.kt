@@ -20,11 +20,14 @@ class Parser(private val tokens: List<Token>) {
 
     private fun parseDecl(): Decl {
         skipNL()
+        // skip 'override' modifier — we just note it and continue
+        if (at(TokenType.OVERRIDE)) advance()
         return when {
             at(TokenType.FUN)    -> parseFunDecl()
             at(TokenType.DATA)   -> { advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
+            at(TokenType.INTERFACE) -> parseInterfaceDecl()
             at(TokenType.OBJECT) -> parseObjectDecl()
             at(TokenType.VAL)    -> parsePropDecl(mutable = false)
             at(TokenType.VAR)    -> parsePropDecl(mutable = true)
@@ -88,6 +91,13 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RPAREN); nesting--
             p
         } else emptyList()
+        // Parse super interfaces:  : Iface1, Iface2
+        val superInterfaces = mutableListOf<String>()
+        if (at(TokenType.COLON)) {
+            advance(); skipNL()
+            superInterfaces += expectIdent()
+            while (at(TokenType.COMMA)) { advance(); skipNL(); superInterfaces += expectIdent() }
+        }
         skipNL()
         val members = mutableListOf<Decl>()
         val inits = mutableListOf<Block>()
@@ -105,7 +115,7 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RBRACE); nesting--
         }
         skipTerminator()
-        return ClassDecl(name, isData, ctorParams, members, inits)
+        return ClassDecl(name, isData, ctorParams, members, inits, superInterfaces)
     }
 
     private fun parseCtorParams(): List<CtorParam> {
@@ -142,6 +152,26 @@ class Parser(private val tokens: List<Token>) {
         expect(TokenType.RBRACE); nesting--
         skipTerminator()
         return EnumDecl(name, entries)
+    }
+
+    // ── interface ─────────────────────────────────────────────────────
+
+    private fun parseInterfaceDecl(): InterfaceDecl {
+        expect(TokenType.INTERFACE)
+        val name = expectIdent()
+        skipNL()
+        val methods = mutableListOf<FunDecl>()
+        if (at(TokenType.LBRACE)) {
+            advance(); nesting++; skipNL()
+            while (!at(TokenType.RBRACE) && !at(TokenType.EOF)) {
+                skipNL(); if (at(TokenType.RBRACE)) break
+                methods += parseFunDecl()
+                skipNL()
+            }
+            expect(TokenType.RBRACE); nesting--
+        }
+        skipTerminator()
+        return InterfaceDecl(name, methods)
     }
 
     // ── object ───────────────────────────────────────────────────────

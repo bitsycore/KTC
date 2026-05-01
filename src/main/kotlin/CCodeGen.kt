@@ -44,11 +44,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private data class ObjInfo(val name: String, val props: List<Pair<String, TypeRef>>, val methods: MutableList<FunDecl> = mutableListOf())
     private data class FunSig(val params: List<Param>, val returnType: TypeRef?)
 
+    private data class IfaceInfo(val name: String, val methods: List<FunDecl>)
+
     private val classes  = mutableMapOf<String, ClassInfo>()
     private val enums    = mutableMapOf<String, EnumInfo>()
     private val objects  = mutableMapOf<String, ObjInfo>()
     private val funSigs  = mutableMapOf<String, FunSig>()
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
+    private val interfaces = mutableMapOf<String, IfaceInfo>()
+
+    // Map class name → list of interface names it implements
+    private val classInterfaces = mutableMapOf<String, List<String>>()
 
     // Track class/enum types used in Array<T> so we emit KT_ARRAY_DEF for them
     private val classArrayTypes = mutableSetOf<String>()
@@ -56,6 +62,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // Track ArrayList types used so we emit struct + methods for them
     // Each entry is the element Kotlin type, e.g. "Int", "String", "Vec2"
     private val arrayListElemTypes = mutableSetOf<String>()
+
+    // Track HashMap types used: each entry is "KeyType:ValueType", e.g. "Int:Int", "String:Int"
+    private val hashMapTypes = mutableSetOf<String>()
 
     // ── Per-scope variable → type mapping ────────────────────────────
     private val scopes = ArrayDeque<MutableMap<String, String>>()
@@ -166,6 +175,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Pre-scan for Array<T> type references to discover class array types early
         scanForClassArrayTypes()
 
+        // Emit interface vtable struct + fat pointer type BEFORE classes
+        for (d in file.decls) if (d is InterfaceDecl) emitInterface(d)
+
         // Emit struct/enum/object declarations first (defines the element types)
         for (d in file.decls) when (d) {
             is ClassDecl  -> emitClass(d)
@@ -174,8 +186,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else -> {}
         }
 
+        // Emit static vtable instances + wrapping functions for interface implementations
+        for (d in file.decls) if (d is ClassDecl && d.superInterfaces.isNotEmpty()) {
+            emitClassInterfaceVtables(d)
+        }
+
         // Emit ArrayList struct + methods for each element type used
         for (elem in arrayListElemTypes) emitArrayList(elem)
+
+        // Emit HashMap struct + methods for each key:value type pair used
+        for (kv in hashMapTypes) emitHashMap(kv)
 
         // Emit top-level functions and properties
         for (d in file.decls) when (d) {
@@ -205,6 +225,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 when (d) {
                     is ClassDecl -> symbolPrefix[d.name] = fpfx
                     is EnumDecl -> symbolPrefix[d.name] = fpfx
+                    is InterfaceDecl -> symbolPrefix[d.name] = fpfx
                     is ObjectDecl -> symbolPrefix[d.name] = fpfx
                     is FunDecl -> {
                         if (d.receiver == null) symbolPrefix[d.name] = fpfx
@@ -219,6 +240,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             when (d) {
                 is ClassDecl -> symbolPrefix[d.name] = prefix
                 is EnumDecl -> symbolPrefix[d.name] = prefix
+                is InterfaceDecl -> symbolPrefix[d.name] = prefix
                 is ObjectDecl -> symbolPrefix[d.name] = prefix
                 is FunDecl -> {
                     if (d.receiver == null) symbolPrefix[d.name] = prefix
@@ -238,8 +260,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val ci = ClassInfo(d.name, d.isData, ctorProps, bodyProps, initBlocks = d.initBlocks)
                 for (m in d.members) if (m is FunDecl && m.receiver == null) ci.methods += m
                 classes[d.name] = ci
+                if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces
             }
             is EnumDecl  -> enums[d.name] = EnumInfo(d.name, d.entries)
+            is InterfaceDecl -> interfaces[d.name] = IfaceInfo(d.name, d.methods)
             is ObjectDecl -> {
                 val props = d.members.filterIsInstance<PropDecl>().map { it.name to (it.type ?: TypeRef("Int")) }
                 val oi = ObjInfo(d.name, props)
@@ -605,6 +629,73 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
+    // ── interface ────────────────────────────────────────────────────
+
+    /**
+     * Emit a vtable struct + fat-pointer typedef for an interface.
+     *
+     * interface Drawable { fun draw(); fun area(): Float }
+     * →
+     * typedef struct {
+     *     void (*draw)(void* $self);
+     *     float (*area)(void* $self);
+     * } game_Drawable_vt;
+     *
+     * typedef struct {
+     *     void* obj;
+     *     const game_Drawable_vt* vt;
+     * } game_Drawable;
+     */
+    private fun emitInterface(d: InterfaceDecl) {
+        val cName = pfx(d.name)
+        // vtable struct
+        hdr.appendLine("typedef struct {")
+        for (m in d.methods) {
+            val cRet = if (m.returnType != null) cType(m.returnType) else "void"
+            val extraParams = m.params.joinToString("") { p -> ", ${cType(p.type)} ${p.name}" }
+            hdr.appendLine("    $cRet (*${m.name})(void* \$self$extraParams);")
+        }
+        hdr.appendLine("} ${cName}_vt;")
+        hdr.appendLine()
+        // fat pointer struct
+        hdr.appendLine("typedef struct {")
+        hdr.appendLine("    void* obj;")
+        hdr.appendLine("    const ${cName}_vt* vt;")
+        hdr.appendLine("} $cName;")
+        hdr.appendLine()
+    }
+
+    /**
+     * For each interface a class implements, emit:
+     *   1. A static const vtable instance with the class's method pointers
+     *   2. A wrapping function:  ClassName_as_IfaceName(ClassName* $self) → IfaceName
+     */
+    private fun emitClassInterfaceVtables(d: ClassDecl) {
+        val cClass = pfx(d.name)
+        for (ifaceName in d.superInterfaces) {
+            val iface = interfaces[ifaceName] ?: continue
+            val cIface = pfx(ifaceName)
+
+            // static vtable instance
+            hdr.appendLine("extern const ${cIface}_vt ${cClass}_${ifaceName}_vt;")
+            impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
+            for (m in iface.methods) {
+                val cRet = if (m.returnType != null) cType(m.returnType) else "void"
+                val extraCast = m.params.joinToString("") { p -> ", ${cType(p.type)}" }
+                impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+            }
+            impl.appendLine("};")
+            impl.appendLine()
+
+            // wrapping function: ClassName_as_IfaceName
+            hdr.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self);")
+            impl.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self) {")
+            impl.appendLine("    return ($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt};")
+            impl.appendLine("}")
+            impl.appendLine()
+        }
+    }
+
     // ── ArrayList codegen ────────────────────────────────────────────
 
     private fun emitArrayList(elemKt: String) {
@@ -816,8 +907,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         val ct = cTypeStr(t)
-        // Don't const class types, Pointer, typed pointers, nullable, or ArrayList
-        val qual = if (!s.mutable && !classes.containsKey(t) && t != "Pointer"
+        // Don't const class types, Pointer, typed pointers, nullable, ArrayList, or interface types
+        val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t) && t != "Pointer"
             && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("ArrayList")
             && !isNullable && !isHeapPtrNull && !isHeapValNull) "const " else ""
 
@@ -862,6 +953,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 // ── Non-nullable ──
                 else -> {
+                    // Interface variable initialized from implementing class → auto-wrap
+                    if (interfaces.containsKey(t) && s.init != null) {
+                        val initType = inferExprType(s.init)
+                        if (initType != null && classes.containsKey(initType) && classInterfaces[initType]?.contains(t) == true) {
+                            val backing = tmp()
+                            val expr = genExpr(s.init)
+                            flushPreStmts(ind)
+                            impl.appendLine("$ind${pfx(initType)} $backing = $expr;")
+                            impl.appendLine("$ind$ct ${s.name} = ${pfx(initType)}_as_$t(&$backing);")
+                            return
+                        }
+                    }
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)
                     impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
@@ -1536,7 +1639,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return "${pfx(name)}($expandedArgs)"
     }
 
-    /** Expand call arguments: array → (arg, arg$len); nullable → (arg, arg$has). */
+    /** Expand call arguments: array → (arg, arg$len); nullable → (arg, arg$has); class→interface wrapping. */
     private fun expandCallArgs(args: List<Arg>, params: List<Param>?): String {
         val parts = mutableListOf<String>()
         for ((i, arg) in args.withIndex()) {
@@ -1560,6 +1663,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     } else {
                         parts += "true"
                     }
+                }
+            } else if (paramType != null && interfaces.containsKey(paramType)) {
+                // Auto-wrap class → interface
+                val argType = inferExprType(arg.expr)
+                if (argType != null && classes.containsKey(argType) && classInterfaces[argType]?.contains(paramType) == true) {
+                    parts += "${pfx(argType)}_as_$paramType(&$expr)"
+                } else {
+                    parts += expr
                 }
             } else {
                 parts += expr
@@ -1645,6 +1756,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // general class method — pointer passed directly
             val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
             return "${pfx(heapBase)}_$method($allArgs)"
+        }
+
+        // Interface method dispatch → d.vt->method(d.obj, args)
+        if (recvType != null && interfaces.containsKey(recvType)) {
+            val allArgs = if (argStr.isEmpty()) "$recv.obj" else "$recv.obj, $argStr"
+            return "$recv.vt->$method($allArgs)"
         }
 
         // Class method or extension function on class type (stack value)
@@ -2226,6 +2343,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "add", "set", "removeAt", "clear", "free" -> "Unit"
                 else -> null
             }
+        }
+        // Interface method
+        val iface = interfaces[recvType]
+        if (iface != null) {
+            val m = iface.methods.find { it.name == method }
+            if (m != null) return if (m.returnType != null) resolveTypeName(m.returnType) else "Unit"
         }
         // Class method
         val ci = classes[recvType]

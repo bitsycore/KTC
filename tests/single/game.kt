@@ -516,6 +516,41 @@ fun testDeferReturn() {
     println(v)
 }
 
+// ── Interfaces ───────────────────────────────────────────────────────
+interface Shape {
+    fun area(): Float
+    fun describe(): String
+}
+
+class Circle(val radius: Float) : Shape {
+    override fun area(): Float = 3.14159f * radius * radius
+    override fun describe(): String = "Circle"
+}
+
+class Square(val side: Float) : Shape {
+    override fun area(): Float = side * side
+    override fun describe(): String = "Square"
+}
+
+fun printShape(s: Shape) {
+    println(s.describe())
+    println(s.area())
+}
+
+fun testInterface() {
+    val c = Circle(5.0f)
+    val s = Square(3.0f)
+
+    // Call via interface
+    val shape1: Shape = Circle(10.0f)
+    println(shape1.area())
+    println(shape1.describe())
+
+    // Pass class → interface param (auto-wrap)
+    printShape(c)
+    printShape(s)
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -563,4 +598,6 @@ fun main(args: Array<String>) {
     testDefer()
     println("--- testDeferReturn ---")
     testDeferReturn()
+    println("--- testInterface ---")
+    testInterface()
 }

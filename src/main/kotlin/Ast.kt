@@ -35,12 +35,18 @@ data class ClassDecl(
     val isData: Boolean,
     val ctorParams: List<CtorParam>,
     val members: List<Decl>,
-    val initBlocks: List<Block>
+    val initBlocks: List<Block>,
+    val superInterfaces: List<String> = emptyList()
 ) : Decl()
 
 data class EnumDecl(
     val name: String,
     val entries: List<String>
+) : Decl()
+
+data class InterfaceDecl(
+    val name: String,
+    val methods: List<FunDecl>
 ) : Decl()
 
 data class ObjectDecl(
