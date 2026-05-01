@@ -2,15 +2,15 @@ package TestProject.Main
 
 // ── MutableListInt ─ ArrayList<Int> built with malloc/realloc ────────
 
-class MutableListInt(var capacity: Int) {
+class MutableList<T>(var capacity: Int) {
 
 	var size: Int = 0
-	var buf: Pointer<Array<Int>> = malloc<Array<Int>>(capacity)
+	var buf: Pointer<Array<T>> = malloc<Array<T>>(capacity)
 
-	fun add(value: Int) {
+	fun add(value: T) {
 		if (size >= capacity) {
 			capacity = capacity * 2
-			buf = realloc<Int>(buf, capacity)
+			buf = realloc<Array<T>>(buf, capacity)
 		}
 		buf[size] = value
 		size = size + 1
@@ -20,11 +20,11 @@ class MutableListInt(var capacity: Int) {
 		return buf[index]
 	}
 
-	fun set(index: Int, value: Int) {
+	fun set(index: Int, value: T) {
 		buf[index] = value
 	}
 
-	fun removeAt(index: Int): Int {
+	fun removeAt(index: Int): T {
 		val removed = buf[index]
 		for (i in index until size - 1) {
 			buf[i] = buf[i + 1]
@@ -33,14 +33,14 @@ class MutableListInt(var capacity: Int) {
 		return removed
 	}
 
-	fun contains(value: Int): Boolean {
+	fun contains(value: T): Boolean {
 		for (i in 0 until size) {
 			if (buf[i] == value) return true
 		}
 		return false
 	}
 
-	fun indexOf(value: Int): Int {
+	fun indexOf(value: T): Int {
 		for (i in 0 until size) {
 			if (buf[i] == value) return i
 		}
@@ -56,14 +56,22 @@ class MutableListInt(var capacity: Int) {
 	}
 }
 
-fun createMutableListInt(capacity: Int = 8): MutableListInt {
-	return MutableListInt(capacity)
+fun createMutableListInt(capacity: Int = 8): MutableList<Int> {
+	return MutableList<Int>(capacity)
+}
+
+fun <T> sizeOfList(list: MutableList<T>): Int {
+	return list.size
+}
+
+fun MutableList<*>.sizeOf(): Int {
+	return size
 }
 
 // ── main ─────────────────────────────────────────────────────────────
 
 fun main(args: Array<String>) {
-	val list = malloc<MutableListInt>(8)
+	val list = malloc<MutableList<Int>>(8)
 	val v = list.value()
 
 	v.add(10)
@@ -74,6 +82,12 @@ fun main(args: Array<String>) {
 
 	println("size:")
 	println(v.size)
+
+	println("sizeOfList")
+	println(sizeOfList(v))
+
+	println("MutableList.sizeOf")
+	println(v.sizeOf())
 
 	println("get(0), get(2):")
 	println(v.get(0))

@@ -34,10 +34,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val ctorProps: List<Pair<String, TypeRef>>,
         val bodyProps: List<BodyProp> = emptyList(),
         val methods: MutableList<FunDecl> = mutableListOf(),
-        val initBlocks: List<Block> = emptyList()
+        val initBlocks: List<Block> = emptyList(),
+        val typeParams: List<String> = emptyList()
     ) {
         val props: List<Pair<String, TypeRef>>
             get() = ctorProps + bodyProps.map { it.name to it.type }
+        val isGeneric get() = typeParams.isNotEmpty()
     }
 
     private data class EnumInfo(val name: String, val entries: List<String>)
@@ -52,6 +54,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val funSigs  = mutableMapOf<String, FunSig>()
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
     private val interfaces = mutableMapOf<String, IfaceInfo>()
+
+    // Generic functions: fun <T> name(...) — stored as templates
+    private val genericFunDecls = mutableListOf<FunDecl>()
+    // Star-projection extension functions: fun Foo<*>.name() — stored for expansion
+    private val starExtFunDecls = mutableListOf<FunDecl>()
+    // Concrete instantiations of generic functions: mangledName → (FunDecl, typeSubst)
+    private val genericFunInstantiations = mutableMapOf<String, MutableSet<List<String>>>()
 
     /** Check if a method on baseType has a nullable receiver declaration. */
     private fun hasNullableReceiverExt(baseType: String, method: String): Boolean {
@@ -68,12 +77,41 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // Each entry is the element Kotlin type, e.g. "Int", "String", "Vec2"
     private val arrayListElemTypes = mutableSetOf<String>()
 
+    // ── Generics (monomorphization) ──────────────────────────────────
+    // Store original ClassDecl for generic classes so we can re-emit per instantiation
+    private val genericClassDecls = mutableMapOf<String, ClassDecl>()
+    // Active type parameter substitution map during monomorphized emission (e.g. {T → Int})
+    private var typeSubst: Map<String, String> = emptyMap()
+    // Track all discovered concrete instantiations: "MyList" → [["Int"], ["Float"]]
+    private val genericInstantiations = mutableMapOf<String, MutableSet<List<String>>>()
+    // All known type parameter names from generic classes and functions (e.g. "T", "U")
+    // Used to prevent registering type params as concrete instantiations
+    private val allGenericTypeParamNames = mutableSetOf<String>()
+
+    /** Mangle a generic class name with concrete type args: MyList + [Int] → "MyList_Int" */
+    private fun mangledGenericName(baseName: String, typeArgs: List<String>): String {
+        return "${baseName}_${typeArgs.joinToString("_")}"
+    }
+
+    /** Record a concrete instantiation of a generic class and return the mangled name. */
+    private fun recordGenericInstantiation(baseName: String, typeArgs: List<String>): String {
+        genericInstantiations.getOrPut(baseName) { mutableSetOf() }.add(typeArgs)
+        return mangledGenericName(baseName, typeArgs)
+    }
+
+    // Maps mangled concrete name → type substitution (e.g. "MyList_Int" → {T: "Int"})
+    private val genericTypeBindings = mutableMapOf<String, Map<String, String>>()
+
     // ── Per-scope variable → type mapping ────────────────────────────
     private val scopes = ArrayDeque<MutableMap<String, String>>()
     private fun pushScope() { scopes.addLast(mutableMapOf()) }
     private fun popScope()  { scopes.removeLast() }
     private fun defineVar(name: String, type: String) { scopes.last()[name] = type }
-    private fun lookupVar(name: String): String? { for (i in scopes.indices.reversed()) { scopes[i][name]?.let { return it } }; return null }
+    private fun lookupVar(name: String): String? { for (i in scopes.indices.reversed()) { scopes[i][name]?.let { return it } }; return preScanVarTypes?.get(name) }
+
+    // Temporary variable type map used during scanForGenericFunCalls pre-pass
+    // (allows inferExprType to resolve variable types before codegen defineVar runs)
+    private var preScanVarTypes: MutableMap<String, String>? = null
 
     // Track mutable (var) variables — smart casts are only valid on val
     private val mutableVars = mutableSetOf<String>()
@@ -254,15 +292,37 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Pre-scan for Array<T> type references to discover class array types early
         scanForClassArrayTypes()
 
+        // Pre-scan for generic class instantiations and materialize concrete types
+        scanForGenericInstantiations()
+        materializeGenericInstantiations()
+
+        // Scan for generic function call sites (must happen after materialization
+        // so we know concrete class types for argument type inference)
+        scanForGenericFunCalls()
+
         // Emit interface vtable struct + fat pointer type BEFORE classes
         for (d in file.decls) if (d is InterfaceDecl) emitInterface(d)
 
         // Emit struct/enum/object declarations first (defines the element types)
+        // Skip generic templates — they are emitted per concrete instantiation
         for (d in file.decls) when (d) {
-            is ClassDecl  -> emitClass(d)
+            is ClassDecl  -> if (d.typeParams.isEmpty()) emitClass(d)
             is EnumDecl   -> emitEnum(d)
             is ObjectDecl -> emitObject(d)
             else -> {}
+        }
+
+        // Emit monomorphized generic class instantiations
+        for ((baseName, instantiations) in genericInstantiations) {
+            val templateDecl = genericClassDecls[baseName] ?: continue
+            for (typeArgs in instantiations) {
+                val mangledName = mangledGenericName(baseName, typeArgs)
+                val templateCi = classes[baseName] ?: continue
+                // Set type substitution for this instantiation
+                typeSubst = templateCi.typeParams.zip(typeArgs).toMap()
+                emitGenericClass(templateDecl, mangledName)
+                typeSubst = emptyMap()
+            }
         }
 
         // Emit static vtable instances + wrapping functions for interface implementations
@@ -275,10 +335,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Emit top-level functions and properties
         for (d in file.decls) when (d) {
-            is FunDecl  -> if (d.receiver != null) emitExtensionFun(d) else emitFun(d)
+            is FunDecl  -> {
+                // Skip generic function templates and star-projection extensions — handled below
+                if (d.typeParams.isNotEmpty()) continue
+                if (d.receiver != null && d.receiver.typeArgs.any { it.name == "*" }) continue
+                if (d.receiver != null) emitExtensionFun(d) else emitFun(d)
+            }
             is PropDecl -> emitTopProp(d)
             else -> {}
         }
+
+        // Emit monomorphized generic functions
+        for (f in genericFunDecls) emitGenericFunInstantiations(f)
+
+        // Emit star-projection extension functions (one per known instantiation)
+        for (f in starExtFunDecls) emitStarExtFunInstantiations(f)
 
         val srcName = prefix.trimEnd('_').ifEmpty { "main" }
         val src = StringBuilder()
@@ -333,9 +404,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
                     BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init)
                 }
-                val ci = ClassInfo(d.name, d.isData, ctorProps, bodyProps, initBlocks = d.initBlocks)
+                val ci = ClassInfo(d.name, d.isData, ctorProps, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams)
+                if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
                 for (m in d.members) if (m is FunDecl && m.receiver == null) ci.methods += m
                 classes[d.name] = ci
+                if (d.typeParams.isNotEmpty()) genericClassDecls[d.name] = d
                 if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces
             }
             is EnumDecl  -> enums[d.name] = EnumInfo(d.name, d.entries)
@@ -347,7 +420,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 objects[d.name] = oi
             }
             is FunDecl -> {
-                if (d.receiver != null) {
+                if (d.typeParams.isNotEmpty()) {
+                    // Generic function template — store for monomorphization
+                    // (dedup: overwrite funSig, but only add to list if not already present)
+                    if (genericFunDecls.none { it === d }) genericFunDecls += d
+                    funSigs[d.name] = FunSig(d.params, d.returnType)
+                    allGenericTypeParamNames += d.typeParams
+                } else if (d.receiver != null && d.receiver.typeArgs.any { it.name == "*" }) {
+                    // Star-projection extension function — store for expansion
+                    if (starExtFunDecls.none { it === d }) starExtFunDecls += d
+                } else if (d.receiver != null) {
                     val recvName = d.receiver.name
                     extensionFuns.getOrPut(recvName) { mutableListOf() }.add(d)
                     // Register as method on the class for inference
@@ -385,7 +467,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val elem = t.typeArgs[0].name
                 if (elem !in primitives) classArrayTypes.add(elem)
             }
-            if ((t.name == "ArrayList" || t.name == "MutableList") && t.typeArgs.isNotEmpty()) {
+            // Built-in MutableList/ArrayList — but NOT if user has a generic class with that name
+            if ((t.name == "ArrayList" || t.name == "MutableList") && t.typeArgs.isNotEmpty()
+                && !(classes.containsKey(t.name) && classes[t.name]!!.isGeneric)) {
                 arrayListElemTypes.add(t.typeArgs[0].name)
             }
         }
@@ -468,6 +552,290 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
+    /** Pre-scan AST for concrete instantiations of generic classes (e.g. MyList<Int>). */
+    private fun scanForGenericInstantiations() {
+        // Collect all known type param names (from generic classes and generic functions)
+        // to avoid treating them as concrete type args
+        val allTypeParamNames = mutableSetOf<String>()
+        for (d in file.decls) {
+            if (d is ClassDecl && d.typeParams.isNotEmpty()) allTypeParamNames += d.typeParams
+        }
+
+        for (d in file.decls) {
+            when (d) {
+                is FunDecl -> {
+                    // Skip generic functions — they are templates, scanned at call sites
+                    if (d.typeParams.isNotEmpty()) continue
+                    // Skip star-projection extension functions — expanded later
+                    if (d.receiver != null && d.receiver.typeArgs.any { it.name == "*" }) continue
+                    for (p in d.params) scanTypeRefForGenerics(p.type, allTypeParamNames)
+                    d.returnType?.let { scanTypeRefForGenerics(it, allTypeParamNames) }
+                    scanBlockForGenerics(d.body, allTypeParamNames)
+                }
+                is ClassDecl -> {
+                    // For generic classes, add their own type params to the skip set
+                    val skip = allTypeParamNames + d.typeParams
+                    for (p in d.ctorParams) scanTypeRefForGenerics(p.type, skip)
+                    for (m in d.members) if (m is FunDecl) {
+                        for (p in m.params) scanTypeRefForGenerics(p.type, skip)
+                        m.returnType?.let { scanTypeRefForGenerics(it, skip) }
+                        scanBlockForGenerics(m.body, skip)
+                    }
+                    for (m in d.members) if (m is PropDecl) {
+                        scanTypeRefForGenerics(m.type, skip)
+                        scanExprForGenerics(m.init, skip)
+                    }
+                }
+                is PropDecl -> {
+                    scanTypeRefForGenerics(d.type, allTypeParamNames)
+                    scanExprForGenerics(d.init, allTypeParamNames)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun scanTypeRefForGenerics(t: TypeRef?, skip: Set<String> = emptySet()) {
+        if (t == null) return
+        if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {
+            // Only record if all type args are concrete (not type params or star projections)
+            val concreteArgs = t.typeArgs.map { it.name }
+            if (concreteArgs.none { it in skip || it == "*" }) {
+                recordGenericInstantiation(t.name, concreteArgs)
+            }
+        }
+        for (arg in t.typeArgs) scanTypeRefForGenerics(arg, skip)
+    }
+
+    private fun scanExprForGenerics(e: Expr?, skip: Set<String> = emptySet()) {
+        if (e == null) return
+        when (e) {
+            is CallExpr -> {
+                val name = (e.callee as? NameExpr)?.name
+                // Constructor call: MyList<Int>(...) or malloc<MyList<Int>>(...)
+                for (ta in e.typeArgs) {
+                    if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
+                        val concreteArgs = ta.typeArgs.map { it.name }
+                        if (concreteArgs.none { it in skip || it == "*" }) {
+                            recordGenericInstantiation(ta.name, concreteArgs)
+                        }
+                    }
+                }
+                if (name != null && classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
+                    val concreteArgs = e.typeArgs.map { it.name }
+                    if (concreteArgs.none { it in skip || it == "*" }) {
+                        recordGenericInstantiation(name, concreteArgs)
+                    }
+                }
+                for (a in e.args) scanExprForGenerics(a.expr, skip)
+                scanExprForGenerics(e.callee, skip)
+            }
+            is BinExpr -> { scanExprForGenerics(e.left, skip); scanExprForGenerics(e.right, skip) }
+            is DotExpr -> scanExprForGenerics(e.obj, skip)
+            is SafeDotExpr -> scanExprForGenerics(e.obj, skip)
+            is IndexExpr -> { scanExprForGenerics(e.obj, skip); scanExprForGenerics(e.index, skip) }
+            is PrefixExpr -> scanExprForGenerics(e.expr, skip)
+            is PostfixExpr -> scanExprForGenerics(e.expr, skip)
+            is NotNullExpr -> scanExprForGenerics(e.expr, skip)
+            is ElvisExpr -> { scanExprForGenerics(e.left, skip); scanExprForGenerics(e.right, skip) }
+            is IfExpr -> {
+                scanExprForGenerics(e.cond, skip)
+                scanBlockForGenerics(e.then, skip)
+                scanBlockForGenerics(e.els, skip)
+            }
+            is CastExpr -> { scanExprForGenerics(e.expr, skip); scanTypeRefForGenerics(e.type, skip) }
+            is StrTemplateExpr -> e.parts.forEach { if (it is ExprPart) scanExprForGenerics(it.expr, skip) }
+            else -> {}
+        }
+    }
+
+    private fun scanStmtForGenerics(s: Stmt, skip: Set<String> = emptySet()) {
+        when (s) {
+            is VarDeclStmt -> { scanTypeRefForGenerics(s.type, skip); scanExprForGenerics(s.init, skip) }
+            is AssignStmt -> { scanExprForGenerics(s.target, skip); scanExprForGenerics(s.value, skip) }
+            is ExprStmt -> scanExprForGenerics(s.expr, skip)
+            is ForStmt -> { scanExprForGenerics(s.iter, skip); scanBlockForGenerics(s.body, skip) }
+            is WhileStmt -> { scanExprForGenerics(s.cond, skip); scanBlockForGenerics(s.body, skip) }
+            is DoWhileStmt -> { scanBlockForGenerics(s.body, skip); scanExprForGenerics(s.cond, skip) }
+            is ReturnStmt -> scanExprForGenerics(s.value, skip)
+            is DeferStmt -> scanBlockForGenerics(s.body, skip)
+            else -> {}
+        }
+    }
+
+    private fun scanBlockForGenerics(block: Block?, skip: Set<String> = emptySet()) { block?.stmts?.forEach { scanStmtForGenerics(it, skip) } }
+
+    /**
+     * Create concrete ClassInfo entries for each generic instantiation discovered.
+     * E.g., MyList<Int> → classes["MyList_Int"] with all T→Int substitution tracked.
+     */
+    private fun materializeGenericInstantiations() {
+        for ((baseName, instantiations) in genericInstantiations) {
+            val templateCi = classes[baseName] ?: continue
+            val templateDecl = genericClassDecls[baseName] ?: continue
+            for (typeArgs in instantiations) {
+                val mangledName = mangledGenericName(baseName, typeArgs)
+                if (classes.containsKey(mangledName)) continue  // already materialized
+                // Build substitution map: T→Int, U→Float, etc.
+                val subst = templateCi.typeParams.zip(typeArgs).toMap()
+                // Substitute types in ctor props
+                val ctorProps = templateCi.ctorProps.map { (name, type) ->
+                    name to substituteTypeRef(type, subst)
+                }
+                // Substitute types in body props
+                val bodyProps = templateCi.bodyProps.map { bp ->
+                    BodyProp(bp.name, substituteTypeRef(bp.type, subst), bp.init)
+                }
+                val ci = ClassInfo(mangledName, templateCi.isData, ctorProps, bodyProps,
+                    initBlocks = templateCi.initBlocks)
+                // Copy methods from template
+                for (m in templateCi.methods) ci.methods += m
+                classes[mangledName] = ci
+                // Register symbol prefix for the mangled name (same as template's package)
+                symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
+                // Store type bindings for resolving method return types later
+                genericTypeBindings[mangledName] = subst
+            }
+        }
+    }
+
+    /** Substitute type parameters in a TypeRef: T → Int when subst = {T: Int}. */
+    private fun substituteTypeRef(t: TypeRef, subst: Map<String, String>): TypeRef {
+        val newName = subst[t.name] ?: t.name
+        val newTypeArgs = t.typeArgs.map { substituteTypeRef(it, subst) }
+        return t.copy(name = newName, typeArgs = newTypeArgs)
+    }
+
+    // ── generic function call-site scanning ──────────────────────────
+
+    /**
+     * Scan call sites for generic functions to determine concrete type bindings.
+     * For `fun <T> sizeOfList(list: MutableList<T>)` called with a MutableList_Int arg,
+     * we infer T=Int and record the instantiation.
+     */
+    private fun scanForGenericFunCalls() {
+        val genFunsByName = genericFunDecls.associateBy { it.name }
+        if (genFunsByName.isEmpty()) return
+
+        fun inferTypeArgsFromCall(f: FunDecl, callArgs: List<Arg>, explicitTypeArgs: List<TypeRef>): List<String>? {
+            if (explicitTypeArgs.isNotEmpty()) {
+                return explicitTypeArgs.map { it.name }
+            }
+            val subst = mutableMapOf<String, String>()
+            for ((i, param) in f.params.withIndex()) {
+                if (i >= callArgs.size) break
+                val argExpr = callArgs[i].expr
+                val argType = inferExprType(argExpr) ?: continue
+                matchTypeParam(param.type, argType, f.typeParams.toSet(), subst)
+            }
+            if (subst.size == f.typeParams.size) {
+                return f.typeParams.map { subst[it]!! }
+            }
+            return null
+        }
+
+        // Use member functions to avoid Kotlin forward-reference issues with local functions
+        val scanner = object {
+            fun scanExpr(e: Expr?) {
+                if (e == null) return
+                when (e) {
+                    is CallExpr -> {
+                        val name = (e.callee as? NameExpr)?.name
+                        if (name != null && genFunsByName.containsKey(name)) {
+                            val f = genFunsByName[name]!!
+                            val typeArgs = inferTypeArgsFromCall(f, e.args, e.typeArgs)
+                            if (typeArgs != null) {
+                                genericFunInstantiations.getOrPut(name) { mutableSetOf() }.add(typeArgs)
+                            }
+                        }
+                        for (a in e.args) scanExpr(a.expr)
+                        scanExpr(e.callee)
+                    }
+                    is BinExpr -> { scanExpr(e.left); scanExpr(e.right) }
+                    is DotExpr -> scanExpr(e.obj)
+                    is SafeDotExpr -> scanExpr(e.obj)
+                    is IndexExpr -> { scanExpr(e.obj); scanExpr(e.index) }
+                    is PrefixExpr -> scanExpr(e.expr)
+                    is PostfixExpr -> scanExpr(e.expr)
+                    is NotNullExpr -> scanExpr(e.expr)
+                    is ElvisExpr -> { scanExpr(e.left); scanExpr(e.right) }
+                    is IfExpr -> { scanExpr(e.cond); scanBlock(e.then); scanBlock(e.els) }
+                    is CastExpr -> scanExpr(e.expr)
+                    is StrTemplateExpr -> e.parts.forEach { if (it is ExprPart) scanExpr(it.expr) }
+                    else -> {}
+                }
+            }
+            fun scanStmt(s: Stmt) {
+                when (s) {
+                    is VarDeclStmt -> {
+                        scanExpr(s.init)
+                        // Track variable type for subsequent type inference in this function
+                        val varType = if (s.type != null) resolveTypeName(s.type) else inferExprType(s.init)
+                        if (varType != null) preScanVarTypes?.set(s.name, varType)
+                    }
+                    is AssignStmt -> { scanExpr(s.target); scanExpr(s.value) }
+                    is ExprStmt -> scanExpr(s.expr)
+                    is ForStmt -> { scanExpr(s.iter); scanBlock(s.body) }
+                    is WhileStmt -> { scanExpr(s.cond); scanBlock(s.body) }
+                    is DoWhileStmt -> { scanBlock(s.body); scanExpr(s.cond) }
+                    is ReturnStmt -> scanExpr(s.value)
+                    is DeferStmt -> scanBlock(s.body)
+                    else -> {}
+                }
+            }
+            fun scanBlock(b: Block?) { b?.stmts?.forEach(::scanStmt) }
+        }
+
+        preScanVarTypes = mutableMapOf()
+        for (d in file.decls) {
+            when (d) {
+                is FunDecl -> if (d.typeParams.isEmpty()) {
+                    preScanVarTypes!!.clear()  // fresh var scope per function
+                    // Register function params so they're available for inference
+                    for (p in d.params) {
+                        preScanVarTypes!![p.name] = resolveTypeName(p.type)
+                    }
+                    scanner.scanBlock(d.body)
+                }
+                is ClassDecl -> {
+                    for (m in d.members) if (m is FunDecl) {
+                        preScanVarTypes!!.clear()
+                        for (p in m.params) {
+                            preScanVarTypes!![p.name] = resolveTypeName(p.type)
+                        }
+                        scanner.scanBlock(m.body)
+                    }
+                }
+                else -> {}
+            }
+        }
+        preScanVarTypes = null
+    }
+
+    /**
+     * Match a parameter type against a concrete argument type to infer type params.
+     * E.g., param=MutableList<T>, argType="MutableList_Int", typeParams={T} → subst[T]=Int
+     */
+    private fun matchTypeParam(paramType: TypeRef, argType: String, typeParams: Set<String>, subst: MutableMap<String, String>) {
+        // Direct type param: param is T, arg is Int → T=Int
+        if (paramType.name in typeParams) {
+            subst[paramType.name] = argType
+            return
+        }
+        // Generic class param: MutableList<T>, arg=MutableList_Int → T=Int
+        if (paramType.typeArgs.isNotEmpty() && classes.containsKey(paramType.name) && classes[paramType.name]!!.isGeneric) {
+            val baseType = argType.trimEnd('*', '&', '^', '?', '#')
+            val bindings = genericTypeBindings[baseType] ?: return
+            val templateCi = classes[paramType.name] ?: return
+            for ((i, typeArg) in paramType.typeArgs.withIndex()) {
+                if (typeArg.name in typeParams && i < templateCi.typeParams.size) {
+                    val templateParam = templateCi.typeParams[i]
+                    bindings[templateParam]?.let { subst[typeArg.name] = it }
+                }
+            }
+        }
+    }
+
     // ═══════════════════════════ Emit declarations ════════════════════
 
     // ── class / data class ───────────────────────────────────────────
@@ -543,6 +911,79 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
         for (m in d.members) {
             if (m is FunDecl && m.receiver == null) emitMethod(d.name, m)
+        }
+        popScope()
+        currentClass = null
+    }
+
+    /**
+     * Emit a concrete instantiation of a generic class.
+     * typeSubst must be set before calling (e.g. {T → Int}).
+     * [mangledName] is the concrete class name (e.g. "MyList_Int").
+     */
+    private fun emitGenericClass(templateDecl: ClassDecl, mangledName: String) {
+        val cName = pfx(mangledName)
+        val ci = classes[mangledName]!!
+
+        // --- header: typedef struct ---
+        hdr.appendLine("typedef struct {")
+        for ((name, type) in ci.props) {
+            val resolved = resolveTypeName(type)
+            if (isFuncType(resolved)) {
+                hdr.appendLine("    ${cFuncPtrDecl(resolved, name)};")
+            } else if (isArrayType(resolved)) {
+                hdr.appendLine("    ${cTypeStr(resolved)} $name;")
+                hdr.appendLine("    int32_t ${name}\$len;")
+            } else if (type.nullable) {
+                hdr.appendLine("    ${cTypeStr(resolved)} $name;")
+                hdr.appendLine("    bool ${name}\$has;")
+            } else {
+                hdr.appendLine("    ${cType(type)} $name;")
+            }
+        }
+        hdr.appendLine("} $cName;")
+        hdr.appendLine()
+
+        // --- constructor ---
+        val paramStr = expandCtorParams(ci.ctorProps)
+        val paramDecl = paramStr.ifEmpty { "void" }
+        hdr.appendLine("$cName ${cName}_create($paramDecl);")
+        impl.appendLine("$cName ${cName}_create($paramDecl) {")
+        if (ci.bodyProps.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
+            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { it.first }}};")
+        } else {
+            impl.appendLine("    $cName \$self = {0};")
+            for ((name, type) in ci.ctorProps) {
+                val resolved = resolveTypeName(type)
+                if (isArrayType(resolved)) {
+                    impl.appendLine("    \$self.$name = $name;")
+                    impl.appendLine("    \$self.${name}\$len = ${name}\$len;")
+                } else if (type.nullable) {
+                    impl.appendLine("    \$self.$name = $name;")
+                    impl.appendLine("    \$self.${name}\$has = ${name}\$has;")
+                } else {
+                    impl.appendLine("    \$self.$name = $name;")
+                }
+            }
+            for (bp in ci.bodyProps) {
+                if (bp.init != null) impl.appendLine("    \$self.${bp.name} = ${genExpr(bp.init)};")
+            }
+            impl.appendLine("    return \$self;")
+        }
+        impl.appendLine("}")
+        impl.appendLine()
+
+        // --- heap constructor ---
+        emitHeapNew(cName, ci)
+        emitToHeap(cName)
+
+        // --- methods (from template AST, but with typeSubst active) ---
+        currentClass = mangledName
+        selfIsPointer = true
+        pushScope()
+        for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+        for (m in templateDecl.members) {
+            if (m is FunDecl && m.receiver == null) emitMethod(mangledName, m)
         }
         popScope()
         currentClass = null
@@ -677,6 +1118,123 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         impl.appendLine("}")
         impl.appendLine()
+    }
+
+    // ── generic function monomorphization ────────────────────────────
+
+    /**
+     * Emit monomorphized versions of a generic free function.
+     * For `fun <T> sizeOfList(list: MutableList<T>)`, if called with MutableList<Int>,
+     * emits `sizeOfList_Int(MutableList_Int* list)`.
+     *
+     * Instantiations are found by scanning call sites in the AST.
+     */
+    private fun emitGenericFunInstantiations(f: FunDecl) {
+        val instantiations = genericFunInstantiations[f.name] ?: return
+        for (typeArgs in instantiations) {
+            val subst = f.typeParams.zip(typeArgs).toMap()
+            val prevSubst = typeSubst
+            typeSubst = subst
+            val mangledName = "${f.name}_${typeArgs.joinToString("_")}"
+
+            // Resolve return type and params under substitution
+            val cRet = if (f.returnType != null) cType(f.returnType) else "void"
+            val cName = pfx(mangledName)
+            val params = expandParams(f.params)
+
+            hdr.appendLine("$cRet $cName($params);")
+            impl.appendLine("$cRet $cName($params) {")
+
+            pushScope()
+            for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+            val savedDefers = deferStack.toList(); deferStack.clear()
+            if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = false)
+            if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = false)
+            deferStack.clear(); deferStack.addAll(savedDefers)
+            popScope()
+
+            impl.appendLine("}")
+            impl.appendLine()
+
+            typeSubst = prevSubst
+        }
+    }
+
+    /**
+     * Emit star-projection extension functions — one per known instantiation.
+     * For `fun MutableList<*>.sizeOf()`, if MutableList<Int> is known, emits
+     * `MutableList_Int_sizeOf(MutableList_Int* $self)`.
+     */
+    private fun emitStarExtFunInstantiations(f: FunDecl) {
+        val recvBaseName = f.receiver!!.name
+        val instantiations = genericInstantiations[recvBaseName] ?: return
+        val emitted = mutableSetOf<String>()
+        for (typeArgs in instantiations) {
+            val mangledRecvName = mangledGenericName(recvBaseName, typeArgs)
+            val key = "${mangledRecvName}_${f.name}"
+            if (!emitted.add(key)) continue  // avoid duplicates
+            // Build a concrete FunDecl with the mangled receiver name
+            val concreteReceiver = TypeRef(mangledRecvName, f.receiver.nullable)
+            // Set typeSubst from the generic class's type params
+            val templateCi = classes[recvBaseName] ?: continue
+            val subst = templateCi.typeParams.zip(typeArgs).toMap()
+            val prevSubst = typeSubst
+            typeSubst = subst
+
+            val recvIsNullable = concreteReceiver.nullable
+            val cRet = if (f.returnType != null) cType(f.returnType) else "void"
+            val isClassType = classes.containsKey(mangledRecvName)
+            val cRecvType = pfx(mangledRecvName)
+            val selfParam = if (isClassType) "$cRecvType* \$self" else "$cRecvType \$self"
+            val nullableExtra = if (recvIsNullable) ", bool \$self\$has" else ""
+            val extraParams = expandParams(f.params)
+            val allParams = if (extraParams.isEmpty()) "$selfParam$nullableExtra" else "$selfParam$nullableExtra, $extraParams"
+            val cFnName = "${pfx(mangledRecvName)}_${f.name}"
+
+            hdr.appendLine("$cRet $cFnName($allParams);")
+            impl.appendLine("$cRet $cFnName($allParams) {")
+
+            val prevClass = currentClass
+            val prevSelfIsPointer = selfIsPointer
+            val prevExtRecvType = currentExtRecvType
+            currentExtRecvType = if (recvIsNullable) "$mangledRecvName?" else mangledRecvName
+            if (isClassType) {
+                currentClass = mangledRecvName
+                selfIsPointer = true
+            } else {
+                currentClass = null
+                selfIsPointer = false
+            }
+
+            pushScope()
+            for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+            if (isClassType) {
+                val ci = classes[mangledRecvName]!!
+                for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+            }
+            val savedDefers = deferStack.toList(); deferStack.clear()
+            if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = isClassType)
+            if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = isClassType)
+            deferStack.clear(); deferStack.addAll(savedDefers)
+            popScope()
+
+            currentClass = prevClass
+            selfIsPointer = prevSelfIsPointer
+            currentExtRecvType = prevExtRecvType
+
+            impl.appendLine("}")
+            impl.appendLine()
+
+            // Register as extension function on the mangled name for call resolution
+            extensionFuns.getOrPut(mangledRecvName) { mutableListOf() }.add(
+                FunDecl(f.name, f.params, f.returnType, f.body, concreteReceiver)
+            )
+            classes[mangledRecvName]?.methods?.add(
+                FunDecl(f.name, f.params, f.returnType, f.body, concreteReceiver)
+            )
+
+            typeSubst = prevSubst
+        }
     }
 
     // ── enum class ───────────────────────────────────────────────────
@@ -1885,10 +2443,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val ta = e.typeArgs[0]
                     // malloc<Array<T>>(n) → typed array allocation: (elemC*)malloc(sizeof(elemC) * (size_t)(n))
                     if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
-                        val elemC = cTypeStr(ta.typeArgs[0].name)
+                        val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                        val elemC = cTypeStr(elemName)
                         return "($elemC*)malloc(sizeof($elemC) * (size_t)(${genExpr(args[0].expr)}))"
                     }
-                    val typeName = ta.name
+                    var typeName = typeSubst[ta.name] ?: ta.name
+                    // Resolve generic class: malloc<MyList<Int>>(...) → MyList_Int_new(...)
+                    if (ta.typeArgs.isNotEmpty() && classes.containsKey(typeName) && classes[typeName]!!.isGeneric) {
+                        typeName = mangledGenericName(typeName, ta.typeArgs.map { it.name })
+                    }
                     // Class heap constructor: malloc<MyClass>(args) → MyClass_new(args)
                     if (classes.containsKey(typeName)) {
                         val cName = pfx(typeName)
@@ -1908,7 +2471,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "calloc"  -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
-                    val elemC = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) cTypeStr(ta.typeArgs[0].name) else cTypeStr(ta.name)
+                    val elemName = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                        typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                    } else {
+                        typeSubst[ta.name] ?: ta.name
+                    }
+                    val elemC = cTypeStr(elemName)
                     return "($elemC*)calloc((size_t)(${genExpr(args[0].expr)}), sizeof($elemC))"
                 }
                 return "calloc((size_t)(${genExpr(args[0].expr)}), (size_t)(${genExpr(args[1].expr)}))"
@@ -1916,7 +2484,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "realloc" -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
-                    val elemC = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) cTypeStr(ta.typeArgs[0].name) else cTypeStr(ta.name)
+                    val elemName = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                        typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                    } else {
+                        typeSubst[ta.name] ?: ta.name
+                    }
+                    val elemC = cTypeStr(elemName)
                     return "($elemC*)realloc(${genExpr(args[0].expr)}, sizeof($elemC) * (size_t)(${genExpr(args[1].expr)}))"
                 }
                 return "realloc(${genExpr(args[0].expr)}, (size_t)(${genExpr(args[1].expr)}))"
@@ -1974,6 +2547,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         // Constructor call (known class)
+        // Handle generic class constructor: MyList<Int>(8) → MyList_Int_create(8)
+        if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
+            val mangledName = mangledGenericName(name, e.typeArgs.map { it.name })
+            val ci = classes[mangledName]!!
+            val templateDecl = genericClassDecls[name]
+            val filledArgs = fillDefaults(args, ci.ctorProps.map { Param(it.first, it.second) }, ci.ctorProps.associate {
+                val cp = templateDecl?.ctorParams?.find { p -> p.name == it.first }
+                it.first to cp?.default
+            })
+            return "${pfx(mangledName)}_create(${filledArgs.joinToString(", ") { genExpr(it.expr) }})"
+        }
         if (classes.containsKey(name)) {
             val ci = classes[name]!!
             val filledArgs = fillDefaults(args, ci.ctorProps.map { Param(it.first, it.second) }, ci.ctorProps.associate {
@@ -1986,6 +2570,32 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         // Enum access (should be handled as DotExpr, but just in case)
+
+        // Generic function call: sizeOfList(list) → sizeOfList_Int(list)
+        val genFun = genericFunDecls.find { it.name == name }
+        if (genFun != null) {
+            val typeArgNames = if (e.typeArgs.isNotEmpty()) {
+                e.typeArgs.map { it.name }
+            } else {
+                // Infer type args from argument types
+                val subst = mutableMapOf<String, String>()
+                for ((i, param) in genFun.params.withIndex()) {
+                    if (i >= args.size) break
+                    val argType = inferExprType(args[i].expr) ?: continue
+                    matchTypeParam(param.type, argType, genFun.typeParams.toSet(), subst)
+                }
+                if (subst.size == genFun.typeParams.size) genFun.typeParams.map { subst[it]!! } else null
+            }
+            if (typeArgNames != null) {
+                val mangledName = "${name}_${typeArgNames.joinToString("_")}"
+                // Set typeSubst so expandCallArgs resolves param types correctly (T→Int etc.)
+                val prevSubst = typeSubst
+                typeSubst = genFun.typeParams.zip(typeArgNames).toMap()
+                val expandedArgs2 = expandCallArgs(args, genFun.params)
+                typeSubst = prevSubst
+                return "${pfx(mangledName)}($expandedArgs2)"
+            }
+        }
 
         // Regular function call with default arg filling
         val sig = funSigs[name]
@@ -2045,7 +2655,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     parts += expr
                 }
             } else {
-                parts += expr
+                // Auto-dereference: if param expects a class by value but arg is a Heap/Value/Ptr to that class
+                val argType = inferExprType(arg.expr)
+                if (paramType != null && argType != null && classes.containsKey(paramType) &&
+                    (argType == "${paramType}*" || argType == "${paramType}&" || argType == "${paramType}^")) {
+                    parts += "(*$expr)"
+                } else {
+                    parts += expr
+                }
             }
         }
         return parts.joinToString(", ")
@@ -2870,13 +3487,25 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun inferCallType(e: CallExpr): String? {
         val name = (e.callee as? NameExpr)?.name
         if (name != null) {
+            // Generic class constructor: MyList<Int>(8) → "MyList_Int"
+            if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
+                return mangledGenericName(name, e.typeArgs.map { it.name })
+            }
             if (classes.containsKey(name)) return name
             if (name == "malloc" || name == "calloc" || name == "realloc") {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
                     // malloc<Array<Int>>(n) → Int* (element type pointer)
-                    if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) return "${ta.typeArgs[0].name}*"
-                    return "${ta.name}*"
+                    if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                        val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                        return "${elemName}*"
+                    }
+                    // malloc<MyList<Int>>(...) → MyList_Int* (generic class heap pointer)
+                    if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
+                        return "${mangledGenericName(ta.name, ta.typeArgs.map { it.name })}*"
+                    }
+                    val resolvedName = typeSubst[ta.name] ?: ta.name
+                    return "${resolvedName}*"
                 }
                 return "Pointer"
             }
@@ -2926,6 +3555,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return null
     }
 
+    /** Resolve a method return type, applying generic bindings if the class is a concrete generic instantiation. */
+    private fun resolveMethodReturnType(className: String, returnType: TypeRef?): String {
+        if (returnType == null) return "Unit"
+        val bindings = genericTypeBindings[className]
+        if (bindings != null) {
+            val saved = typeSubst
+            typeSubst = bindings
+            val result = resolveTypeName(returnType)
+            typeSubst = saved
+            return result
+        }
+        return resolveTypeName(returnType)
+    }
+
     private fun inferMethodReturnType(dot: DotExpr, args: List<Arg>): String? {
         val recvType = inferExprType(dot.obj) ?: return null
         val method = dot.name
@@ -2944,7 +3587,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Class method takes priority over built-in pointer methods
             val classMethod = classes[heapBase]?.methods?.find { it.name == method }
             if (classMethod != null) {
-                return if (classMethod.returnType != null) resolveTypeName(classMethod.returnType) else "Unit"
+                return resolveMethodReturnType(heapBase, classMethod.returnType)
             }
             return when (method) {
                 "value" -> "${heapBase}&"               // .value() → Value<T> (no copy)
@@ -2961,7 +3604,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (ptrBase != null) {
             val classMethod = classes[ptrBase]?.methods?.find { it.name == method }
             if (classMethod != null) {
-                return if (classMethod.returnType != null) resolveTypeName(classMethod.returnType) else "Unit"
+                return resolveMethodReturnType(ptrBase, classMethod.returnType)
             }
             return when (method) {
                 "value" -> "${ptrBase}&"                // .value() → Value<T> (no copy)
@@ -2983,7 +3626,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "toPtr" -> "${valBase}^"                // .toPtr() → Ptr<T>
                 else -> {
                     val m = classes[valBase]?.methods?.find { it.name == method }
-                    if (m != null) (if (m.returnType != null) resolveTypeName(m.returnType) else "Unit") else null
+                    if (m != null) resolveMethodReturnType(valBase, m.returnType) else null
                 }
             }
         }
@@ -3025,7 +3668,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val ci = classes[recvType]
         if (ci != null) {
             val m = ci.methods.find { it.name == method }
-            if (m != null) return if (m.returnType != null) resolveTypeName(m.returnType) else "Unit"
+            if (m != null) return resolveMethodReturnType(recvType, m.returnType)
         }
         // Extension function on non-class type
         val extFun = extensionFuns[recvType]?.find { it.name == method }
@@ -3174,11 +3817,36 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun resolveTypeName(t: TypeRef?): String {
         if (t == null) return "Int"
+        return resolveTypeNameInner(substituteTypeParams(t))
+    }
+
+    /** Recursively substitute type parameters throughout a TypeRef tree. */
+    private fun substituteTypeParams(t: TypeRef): TypeRef {
+        if (typeSubst.isEmpty()) return t
+        val newName = typeSubst[t.name] ?: t.name
+        val newTypeArgs = t.typeArgs.map { substituteTypeParams(it) }
+        val newFuncParams = t.funcParams?.map { substituteTypeParams(it) }
+        val newFuncReturn = t.funcReturn?.let { substituteTypeParams(it) }
+        return if (newName != t.name || newTypeArgs != t.typeArgs || newFuncParams != t.funcParams || newFuncReturn != t.funcReturn) {
+            TypeRef(newName, t.nullable, newTypeArgs, newFuncParams, newFuncReturn)
+        } else t
+    }
+
+    private fun resolveTypeNameInner(t: TypeRef): String {
         // Function type: (P1, P2) -> R → "Fun(P1,P2)->R"
         if (t.funcParams != null) {
             val params = t.funcParams.joinToString(",") { resolveTypeName(it) }
             val ret = resolveTypeName(t.funcReturn)
             return "Fun($params)->$ret"
+        }
+        // User-defined generic class takes priority over built-in aliases
+        if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {
+            val typeArgNames = t.typeArgs.map { it.name }
+            // Don't register as concrete instantiation if any type arg is still a type parameter
+            if (typeArgNames.any { it in allGenericTypeParamNames }) {
+                return mangledGenericName(t.name, typeArgNames)
+            }
+            return recordGenericInstantiation(t.name, typeArgNames)
         }
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
             val elem = t.typeArgs[0].name

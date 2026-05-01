@@ -40,17 +40,34 @@ class Parser(private val tokens: List<Token>) {
 
     private fun parseFunDecl(): FunDecl {
         expect(TokenType.FUN)
+        // Parse optional type parameters: fun <T, U> name(...)
+        val typeParams = if (at(TokenType.LT)) {
+            advance(); nesting++; skipNL()
+            val params = mutableListOf(expectIdent())
+            while (at(TokenType.COMMA)) { advance(); skipNL(); params += expectIdent() }
+            expect(TokenType.GT); nesting--
+            params
+        } else emptyList()
         val firstName = expectIdent()
+        // Parse optional type args on receiver: fun Foo<Int>.bar() or fun Foo<*>.bar()
+        val receiverTypeArgs = if (at(TokenType.LT)) {
+            advance(); nesting++; skipNL()
+            val args = mutableListOf(parseTypeRefOrStar())
+            while (at(TokenType.COMMA)) { advance(); skipNL(); args += parseTypeRefOrStar() }
+            expect(TokenType.GT); nesting--
+            args
+        } else emptyList()
         // Extension function: fun ReceiverType.name(...) or fun ReceiverType?.name(...)
         val receiver: TypeRef?
         val name: String
         if (at(TokenType.DOT)) {
             advance()  // skip dot
-            receiver = TypeRef(firstName)
+            val nullable = false
+            receiver = TypeRef(firstName, nullable, receiverTypeArgs)
             name = expectIdent()
         } else if (at(TokenType.QUESTION_DOT)) {
             advance()  // skip ?.
-            receiver = TypeRef(firstName, nullable = true)
+            receiver = TypeRef(firstName, nullable = true, receiverTypeArgs)
             name = expectIdent()
         } else {
             receiver = null
@@ -67,7 +84,7 @@ class Parser(private val tokens: List<Token>) {
             else -> null
         }
         skipTerminator()
-        return FunDecl(name, params, retType, body, receiver)
+        return FunDecl(name, params, retType, body, receiver, typeParams)
     }
 
     private fun parseParamList(): List<Param> {
@@ -89,6 +106,14 @@ class Parser(private val tokens: List<Token>) {
 
     private fun parseClassDecl(isData: Boolean): ClassDecl {
         val name = expectIdent()
+        // Parse type parameters: class Foo<T, U>(...)
+        val typeParams = if (at(TokenType.LT)) {
+            advance(); nesting++; skipNL()
+            val params = mutableListOf(expectIdent())
+            while (at(TokenType.COMMA)) { advance(); skipNL(); params += expectIdent() }
+            expect(TokenType.GT); nesting--
+            params
+        } else emptyList()
         val ctorParams = if (at(TokenType.LPAREN)) {
             advance(); nesting++
             val p = parseCtorParams()
@@ -119,7 +144,7 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RBRACE); nesting--
         }
         skipTerminator()
-        return ClassDecl(name, isData, ctorParams, members, inits, superInterfaces)
+        return ClassDecl(name, isData, ctorParams, members, inits, superInterfaces, typeParams)
     }
 
     private fun parseCtorParams(): List<CtorParam> {
@@ -583,10 +608,16 @@ class Parser(private val tokens: List<Token>) {
     /** Parse `<Type, Type, ...>` type argument list. */
     private fun parseTypeArgList(): List<TypeRef> {
         expect(TokenType.LT); nesting++; skipNL()
-        val args = mutableListOf(parseTypeRef())
-        while (at(TokenType.COMMA)) { advance(); skipNL(); args += parseTypeRef() }
+        val args = mutableListOf(parseTypeRefOrStar())
+        while (at(TokenType.COMMA)) { advance(); skipNL(); args += parseTypeRefOrStar() }
         expect(TokenType.GT); nesting--
         return args
+    }
+
+    /** Parse a type reference or star projection (*). Star is represented as TypeRef("*"). */
+    private fun parseTypeRefOrStar(): TypeRef {
+        if (at(TokenType.STAR)) { advance(); return TypeRef("*") }
+        return parseTypeRef()
     }
 
     private fun parseTypeRef(): TypeRef {
@@ -614,8 +645,8 @@ class Parser(private val tokens: List<Token>) {
         val name = parseQualifiedName()
         val typeArgs = if (at(TokenType.LT)) {
             advance(); nesting++; skipNL()
-            val args = mutableListOf(parseTypeRef())
-            while (at(TokenType.COMMA)) { advance(); skipNL(); args += parseTypeRef() }
+            val args = mutableListOf(parseTypeRefOrStar())
+            while (at(TokenType.COMMA)) { advance(); skipNL(); args += parseTypeRefOrStar() }
             expect(TokenType.GT); nesting--
             args
         } else emptyList()

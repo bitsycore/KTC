@@ -27,7 +27,8 @@ data class FunDecl(
     val params: List<Param>,
     val returnType: TypeRef?,
     val body: Block?,
-    val receiver: TypeRef? = null
+    val receiver: TypeRef? = null,
+    val typeParams: List<String> = emptyList()
 ) : Decl()
 
 data class ClassDecl(
@@ -36,7 +37,8 @@ data class ClassDecl(
     val ctorParams: List<CtorParam>,
     val members: List<Decl>,
     val initBlocks: List<Block>,
-    val superInterfaces: List<String> = emptyList()
+    val superInterfaces: List<String> = emptyList(),
+    val typeParams: List<String> = emptyList()
 ) : Decl()
 
 data class EnumDecl(
