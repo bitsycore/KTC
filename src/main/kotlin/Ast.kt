@@ -83,7 +83,9 @@ data class Block(val stmts: List<Stmt>)
 
 // ═══════════════════════════ Statements ═══════════════════════════
 
-sealed class Stmt
+sealed class Stmt {
+    var line: Int = 0
+}
 
 data class ExprStmt(val expr: Expr) : Stmt()
 
@@ -104,8 +106,8 @@ data class ReturnStmt(val value: Expr?) : Stmt()
 data class ForStmt(val varName: String, val iter: Expr, val body: Block) : Stmt()
 data class WhileStmt(val cond: Expr, val body: Block) : Stmt()
 data class DoWhileStmt(val body: Block, val cond: Expr) : Stmt()
-object BreakStmt : Stmt()
-object ContinueStmt : Stmt()
+class BreakStmt : Stmt()
+class ContinueStmt : Stmt()
 data class DeferStmt(val body: Block) : Stmt()
 
 // ═══════════════════════════ Expressions ═══════════════════════════

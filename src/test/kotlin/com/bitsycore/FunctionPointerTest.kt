@@ -1,0 +1,94 @@
+package com.bitsycore
+
+import kotlin.test.Test
+
+/**
+ * Tests for function pointers: ::ref, function pointer types, passing as arguments.
+ */
+class FunctionPointerTest : TranspilerTestBase() {
+
+    private val funPtrDecls = """
+        fun addTwo(a: Int, b: Int): Int {
+            return a + b
+        }
+        fun mulTwo(a: Int, b: Int): Int {
+            return a * b
+        }
+        fun applyOp(x: Int, y: Int, op: (Int, Int) -> Int): Int {
+            return op(x, y)
+        }
+    """
+
+    // ── Function reference ───────────────────────────────────────────
+
+    @Test fun functionReference() {
+        val r = transpile("""
+            package test.Main
+            $funPtrDecls
+            fun main(args: Array<String>) {
+                val f: (Int, Int) -> Int = ::addTwo
+                println(f(3, 4))
+            }
+        """)
+        r.sourceContains("test_Main_addTwo")
+    }
+
+    // ── Pass function reference as argument ──────────────────────────
+
+    @Test fun passFunctionRef() {
+        val r = transpile("""
+            package test.Main
+            $funPtrDecls
+            fun main(args: Array<String>) {
+                println(applyOp(5, 6, ::addTwo))
+                println(applyOp(5, 6, ::mulTwo))
+            }
+        """)
+        r.sourceContains("test_Main_applyOp(5, 6, test_Main_addTwo)")
+        r.sourceContains("test_Main_applyOp(5, 6, test_Main_mulTwo)")
+    }
+
+    // ── Function pointer type in signature ───────────────────────────
+
+    @Test fun functionPointerParam() {
+        val r = transpile("""
+            package test.Main
+            $funPtrDecls
+            fun main(args: Array<String>) {
+                println(applyOp(5, 6, ::addTwo))
+            }
+        """)
+        // Function pointer param: int32_t (*op)(int32_t, int32_t)
+        r.sourceMatches(Regex("int32_t \\(\\*op\\)\\(int32_t, int32_t\\)"))
+    }
+
+    // ── Reassign function pointer ────────────────────────────────────
+
+    @Test fun reassignFunPtr() {
+        val r = transpile("""
+            package test.Main
+            $funPtrDecls
+            fun main(args: Array<String>) {
+                var g: (Int, Int) -> Int = ::addTwo
+                println(g(10, 20))
+                g = ::mulTwo
+                println(g(10, 20))
+            }
+        """)
+        r.sourceContains("g = test_Main_mulTwo;")
+    }
+
+    // ── Call via function pointer variable ────────────────────────────
+
+    @Test fun callViaFunPtr() {
+        val r = transpile("""
+            package test.Main
+            $funPtrDecls
+            fun main(args: Array<String>) {
+                val f: (Int, Int) -> Int = ::addTwo
+                println(f(3, 4))
+            }
+        """)
+        r.sourceContains("f(3, 4)")
+    }
+}

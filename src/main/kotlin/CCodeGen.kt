@@ -10,7 +10,7 @@ package com.bitsycore
  *
  * `fun main()` is never prefixed — always emits `int main(void)`.
  */
-class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = listOf()) {
+class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = listOf(), private val sourceLines: List<String> = emptyList()) {
 
     // ── Package prefix ───────────────────────────────────────────────
     private val prefix: String = file.pkg?.replace('.', '_')?.plus("_") ?: ""
@@ -53,6 +53,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
     private val interfaces = mutableMapOf<String, IfaceInfo>()
 
+    /** Check if a method on baseType has a nullable receiver declaration. */
+    private fun hasNullableReceiverExt(baseType: String, method: String): Boolean {
+        return extensionFuns[baseType]?.any { it.name == method && it.receiver?.nullable == true } == true
+    }
+
     // Map class name → list of interface names it implements
     private val classInterfaces = mutableMapOf<String, List<String>>()
 
@@ -69,6 +74,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun popScope()  { scopes.removeLast() }
     private fun defineVar(name: String, type: String) { scopes.last()[name] = type }
     private fun lookupVar(name: String): String? { for (i in scopes.indices.reversed()) { scopes[i][name]?.let { return it } }; return null }
+
+    // Track mutable (var) variables — smart casts are only valid on val
+    private val mutableVars = mutableSetOf<String>()
+    private fun markMutable(name: String) { mutableVars.add(name) }
+    private fun isMutable(name: String): Boolean = name in mutableVars
 
     // ── Current class context (when generating methods) ──────────────
     private var currentClass: String? = null
@@ -121,7 +131,30 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── Nullable return tracking ─────────────────────────────────────
     private var currentFnReturnsNullable = false
     private var currentFnReturnType: String = ""
+    private var currentFnIsMain = false
     private fun currentFnReturnBaseType(): String = currentFnReturnType.removeSuffix("?")
+
+    // ── Source location tracking for error messages ──────────────────
+    private var currentStmtLine: Int = 0
+
+    /** Throw an error with source context around the given line. */
+    private fun codegenError(msg: String): Nothing {
+        val line = currentStmtLine
+        if (line > 0 && sourceLines.isNotEmpty()) {
+            val sb = StringBuilder()
+            sb.appendLine(msg)
+            val from = maxOf(0, line - 3)
+            val to = minOf(sourceLines.size, line + 2)
+            for (i in from until to) {
+                val lineNum = i + 1   // 1-indexed
+                val marker = if (lineNum == line) ">>>" else "   "
+                sb.appendLine("$marker %4d | %s".format(lineNum, sourceLines[i]))
+            }
+            error(sb.toString().trimEnd())
+        } else {
+            error(msg)
+        }
+    }
 
     // ── Defer stack (LIFO: last deferred = first to execute) ─────────
     private val deferStack = mutableListOf<Block>()
@@ -553,12 +586,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun emitExtensionFun(f: FunDecl) {
         val recvTypeName = f.receiver!!.name
+        val recvIsNullable = f.receiver.nullable
         val cRet = if (f.returnType != null) cType(f.returnType) else "void"
         val isClassType = classes.containsKey(recvTypeName)
         val cRecvType = cTypeStr(recvTypeName)
         val selfParam = if (isClassType) "$cRecvType* \$self" else "$cRecvType \$self"
+        val nullableExtra = if (recvIsNullable) ", bool \$self\$has" else ""
         val extraParams = expandParams(f.params)
-        val allParams = if (extraParams.isEmpty()) selfParam else "$selfParam, $extraParams"
+        val allParams = if (extraParams.isEmpty()) "$selfParam$nullableExtra" else "$selfParam$nullableExtra, $extraParams"
         val cFnName = "${pfx(recvTypeName)}_${f.name}"
 
         hdr.appendLine("$cRet $cFnName($allParams);")
@@ -567,7 +602,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val prevClass = currentClass
         val prevSelfIsPointer = selfIsPointer
         val prevExtRecvType = currentExtRecvType
-        currentExtRecvType = recvTypeName
+        currentExtRecvType = if (recvIsNullable) "$recvTypeName?" else recvTypeName
         if (isClassType) {
             currentClass = recvTypeName
             selfIsPointer = true
@@ -853,8 +888,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         val prevReturnsNullable = currentFnReturnsNullable
         val prevReturnType = currentFnReturnType
+        val prevIsMain = currentFnIsMain
         currentFnReturnsNullable = returnsNullable
         currentFnReturnType = if (f.returnType != null) resolveTypeName(f.returnType) else ""
+        currentFnIsMain = isMain
 
         pushScope()
         if (isMainWithArgs) {
@@ -890,6 +927,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         deferStack.addAll(savedDefers)
         currentFnReturnsNullable = prevReturnsNullable
         currentFnReturnType = prevReturnType
+        currentFnIsMain = prevIsMain
         impl.appendLine("}")
         impl.appendLine()
     }
@@ -914,6 +952,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ═══════════════════════════ Statements ═══════════════════════════
 
     private fun emitStmt(s: Stmt, ind: String, insideMethod: Boolean = false) {
+        if (s.line > 0) currentStmtLine = s.line
         when (s) {
             is VarDeclStmt  -> emitVarDecl(s, ind, insideMethod)
             is AssignStmt   -> emitAssign(s, ind, insideMethod)
@@ -925,6 +964,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is BreakStmt    -> impl.appendLine("${ind}break;")
             is ContinueStmt -> impl.appendLine("${ind}continue;")
             is DeferStmt    -> deferStack.add(s.body)
+        }
+        // Smart cast: if (x == null) return/break/continue → narrow x to non-null after
+        applyGuardSmartCast(s)
+    }
+
+    /** After `if (x == null) return/break/continue` (no else), narrow x from T? to T. */
+    private fun applyGuardSmartCast(s: Stmt) {
+        if (s !is ExprStmt) return
+        val ifExpr = s.expr as? IfExpr ?: return
+        if (ifExpr.els != null) return  // must have no else branch
+        // Body must be a single early-exit statement
+        val bodyStmt = ifExpr.then.stmts.singleOrNull() ?: return
+        if (bodyStmt !is ReturnStmt && bodyStmt !is BreakStmt && bodyStmt !is ContinueStmt) return
+        // Condition must be x == null
+        val casts = extractElseSmartCasts(ifExpr.cond)
+        for ((name, nonNullType) in casts) {
+            defineVar(name, nonNullType)
         }
     }
 
@@ -950,6 +1006,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             isNullable     -> "${t}?"                  // "Int?" etc.
             else           -> t
         })
+        if (s.mutable) markMutable(s.name)
 
         // ── Function pointer type: special declaration syntax ──
         if (isFuncType(t)) {
@@ -1238,7 +1295,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
             } else {
                 emitDeferredBlocks(ind)
-                impl.appendLine("${ind}return;")
+                impl.appendLine(if (currentFnIsMain) "${ind}return 0;" else "${ind}return;")
             }
         }
     }
@@ -1386,9 +1443,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun extractSmartCasts(cond: Expr): List<Pair<String, String>> {
         val casts = mutableListOf<Pair<String, String>>()
         fun trySmartCast(name: String) {
+            if (isMutable(name)) return  // var cannot be smart-cast
             val type = lookupVar(name)
             if (type != null && (type.endsWith("?") || type.endsWith("#"))) {
                 casts.add(name to type.dropLast(1))
+            }
+        }
+        fun tryThisSmartCast() {
+            val type = currentExtRecvType
+            if (type != null && type.endsWith("?")) {
+                casts.add("\$self" to type.dropLast(1))
             }
         }
         when {
@@ -1398,6 +1462,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // null != x
             cond is BinExpr && cond.op == "!=" && cond.left is NullLit && cond.right is NameExpr ->
                 trySmartCast(cond.right.name)
+            // this != null
+            cond is BinExpr && cond.op == "!=" && cond.right is NullLit && cond.left is ThisExpr ->
+                tryThisSmartCast()
+            // null != this
+            cond is BinExpr && cond.op == "!=" && cond.left is NullLit && cond.right is ThisExpr ->
+                tryThisSmartCast()
         }
         return casts
     }
@@ -1406,6 +1476,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun extractElseSmartCasts(cond: Expr): List<Pair<String, String>> {
         val casts = mutableListOf<Pair<String, String>>()
         fun trySmartCast(name: String) {
+            if (isMutable(name)) return  // var cannot be smart-cast
             val type = lookupVar(name)
             if (type != null && (type.endsWith("?") || type.endsWith("#"))) {
                 casts.add(name to type.dropLast(1))
@@ -1628,6 +1699,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // null comparison
         if ((e.op == "==" || e.op == "!=") && (e.left is NullLit || e.right is NullLit)) {
             val nonNull = if (e.left is NullLit) e.right else e.left
+            // this == null / this != null inside nullable-receiver extension
+            if (nonNull is ThisExpr) {
+                val thisType = inferExprType(nonNull)
+                if (thisType != null && thisType.endsWith("?")) {
+                    return if (e.op == "==") "!\$self\$has" else "\$self\$has"
+                }
+            }
             val varName = (nonNull as? NameExpr)?.name
             val varType = if (varName != null) lookupVar(varName) else null
             if (varType != null) {
@@ -1680,7 +1758,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun genCall(e: CallExpr): String {
         // Method call: DotExpr(receiver, method)(args)
-        if (e.callee is DotExpr) return genMethodCall(e.callee, e.args)
+        if (e.callee is DotExpr) {
+            // Reject non-safe call on nullable receiver (unless the extension accepts nullable receiver)
+            val recvType = inferExprType(e.callee.obj)
+            if (recvType != null && recvType.endsWith("?")) {
+                val baseType = recvType.removeSuffix("?")
+                if (!hasNullableReceiverExt(baseType, e.callee.name)) {
+                    val recvSrc = (e.callee.obj as? NameExpr)?.name ?: e.callee.obj.toString()
+                    codegenError("Only safe (?.) calls are allowed on a nullable receiver of type '$recvType': $recvSrc.${e.callee.name}()")
+                }
+            }
+            return genMethodCall(e.callee, e.args)
+        }
         if (e.callee is SafeDotExpr) return genSafeMethodCall(e.callee, e.args)
 
         val name = (e.callee as? NameExpr)?.name ?: return "${genExpr(e.callee)}(${e.args.joinToString(", ") { genExpr(it.expr) }})"
@@ -1860,7 +1949,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun genMethodCall(dot: DotExpr, args: List<Arg>): String {
-        val recvType = inferExprType(dot.obj)?.removeSuffix("?")
+        val rawRecvType = inferExprType(dot.obj)
+        val recvType = rawRecvType?.removeSuffix("?")
         val recv = genExpr(dot.obj)
         val method = dot.name
         val argStr = args.joinToString(", ") { genExpr(it.expr) }
@@ -1986,7 +2076,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (method == "toHeap") {
                 return "${pfx(recvType)}_toHeap($recv)"
             }
-            val allArgs = if (argStr.isEmpty()) "&$recv" else "&$recv, $argStr"
+            val nullableRecv = hasNullableReceiverExt(recvType, method)
+            val selfArg = if (nullableRecv) {
+                val recvName = (dot.obj as? NameExpr)?.name
+                val hasFlag = if (dot.obj is ThisExpr) "\$self\$has"
+                              else if (recvName != null) "${recvName}\$has"
+                              else "true"
+                "&$recv, $hasFlag"
+            } else "&$recv"
+            val allArgs = if (argStr.isEmpty()) selfArg else "$selfArg, $argStr"
             return "${pfx(recvType)}_$method($allArgs)"
         }
         // Object method
@@ -2002,7 +2100,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (recvType != null) {
             val extFun = extensionFuns[recvType]?.find { it.name == method }
             if (extFun != null) {
-                val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+                val nullableRecv = extFun.receiver?.nullable == true
+                val recvArg = if (nullableRecv) {
+                    // Pass receiver value + $has flag for nullable-receiver extensions
+                    val recvName = (dot.obj as? NameExpr)?.name
+                    val hasFlag = if (dot.obj is ThisExpr) "\$self\$has"
+                                  else if (recvName != null) "${recvName}\$has"
+                                  else "true"
+                    "$recv, $hasFlag"
+                } else recv
+                val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
                 return "${pfx(recvType)}_$method($allArgs)"
             }
         }
@@ -2043,6 +2150,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun genDot(e: DotExpr): String {
         val recvType = inferExprType(e.obj)
         val recv = genExpr(e.obj)
+
+        // Reject non-safe access on nullable receiver (enum/object are never nullable)
+        val isEnumOrObj = e.obj is NameExpr && (enums.containsKey(e.obj.name) || objects.containsKey(e.obj.name))
+        if (recvType != null && recvType.endsWith("?") && !isEnumOrObj) {
+            val recvSrc = (e.obj as? NameExpr)?.name ?: e.obj.toString()
+            codegenError("Only safe (?.) access is allowed on a nullable receiver of type '$recvType': $recvSrc.${e.name}")
+        }
 
         // Enum entry: Color.RED → game_Color_RED
         if (e.obj is NameExpr && enums.containsKey(e.obj.name)) {
@@ -2475,7 +2589,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is CharLit  -> "Char"
         is StrLit, is StrTemplateExpr -> "String"
         is NullLit  -> null
-        is ThisExpr -> currentExtRecvType ?: currentClass
+        is ThisExpr -> lookupVar("\$self") ?: currentExtRecvType ?: currentClass
         is NameExpr -> lookupVar(e.name) ?: run {
             // Could be enum type
             if (enums.containsKey(e.name)) e.name else null

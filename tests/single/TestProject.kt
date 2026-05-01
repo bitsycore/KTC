@@ -3,39 +3,33 @@ package TestProject.Main
 data class Vec2f(val x: Float, val y: Float)
 
 fun main(args: Array<String>) {
-
-	println("Hello world !")
-
-	var i = 0
-	while(true) {
-		println("Index is = $i")
-		i++
-		if (i > 30)
-			break
-	}
-
-	val vec2f = Vec2f(10.0f, 20.0f)
-	var tempVec2f = vec2f
-
-	while(tempVec2f.x < 100.0f && tempVec2f.y < 100.0f) {
-		println(tempVec2f)
-		tempVec2f = tempVec2f.copy(x = tempVec2f.x + 10.0f, y = tempVec2f.y + 5.0f)
-	}
-
 	val a = nullIfTooBig("Hello world, this is big !")
 	val b = nullIfTooBig("Hello")
 
-	a?.print()
-	b?.print()
+	if (b == null) return
+
+	a.printN()
+	b.print()
 
 	val c = nullIfTooBig2("Hello world, this is big !")
 	val d = nullIfTooBig2("Hello")
 
-	c.print()
+	if (d == null) return
+
+	c.printN()
 	d.print()
 
-	c?.print()
-	d?.print()
+	// Test if (x != null) { x.method() } smart cast
+	val e = nullIfTooBig("Smart")
+	if (e != null) {
+		e.print()
+	}
+
+	// Test var should NOT get smart cast (use safe call)
+	var f = nullIfTooBig("VarTest")
+	if (f != null) {
+		f?.print()
+	}
 }
 
 fun nullIfTooBig(input: String): String? {
@@ -58,6 +52,14 @@ fun String.print() {
 	println(this)
 }
 
+fun String?.printN() {
+	if(this != null) println(this)
+}
+
 fun Vec2f.print() {
 	println(this)
+}
+
+fun Vec2f?.printN() {
+	if(this != null) println(this)
 }

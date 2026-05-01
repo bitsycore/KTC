@@ -41,12 +41,16 @@ class Parser(private val tokens: List<Token>) {
     private fun parseFunDecl(): FunDecl {
         expect(TokenType.FUN)
         val firstName = expectIdent()
-        // Extension function: fun ReceiverType.name(...)
+        // Extension function: fun ReceiverType.name(...) or fun ReceiverType?.name(...)
         val receiver: TypeRef?
         val name: String
         if (at(TokenType.DOT)) {
             advance()  // skip dot
             receiver = TypeRef(firstName)
+            name = expectIdent()
+        } else if (at(TokenType.QUESTION_DOT)) {
+            advance()  // skip ?.
+            receiver = TypeRef(firstName, nullable = true)
             name = expectIdent()
         } else {
             receiver = null
@@ -221,18 +225,21 @@ class Parser(private val tokens: List<Token>) {
 
     private fun parseStmt(): Stmt {
         skipNL()
-        return when {
+        val stmtLine = cur().line
+        val stmt = when {
             at(TokenType.VAL) -> parseVarDeclStmt(mutable = false)
             at(TokenType.VAR) -> parseVarDeclStmt(mutable = true)
             at(TokenType.RETURN) -> { advance(); val v = if (atExprStart()) parseExpr() else null; ReturnStmt(v) }
             at(TokenType.FOR)    -> parseForStmt()
             at(TokenType.WHILE)  -> parseWhileStmt()
             at(TokenType.DO)     -> parseDoWhileStmt()
-            at(TokenType.BREAK)  -> { advance(); BreakStmt }
-            at(TokenType.CONTINUE) -> { advance(); ContinueStmt }
+            at(TokenType.BREAK)  -> { advance(); BreakStmt() }
+            at(TokenType.CONTINUE) -> { advance(); ContinueStmt() }
             at(TokenType.DEFER)  -> parseDeferStmt()
             else -> parseExprOrAssignStmt()
         }
+        stmt.line = stmtLine
+        return stmt
     }
 
     private fun parseVarDeclStmt(mutable: Boolean): VarDeclStmt {
@@ -498,12 +505,15 @@ class Parser(private val tokens: List<Token>) {
 
     /** Parse a single statement when braces are omitted (e.g. `if (c) return x`). */
     private fun parseSingleStmtOrExpr(): Stmt {
-        return when {
+        val stmtLine = cur().line
+        val stmt = when {
             at(TokenType.RETURN)   -> { advance(); val v = if (atExprStart()) parseExpr() else null; ReturnStmt(v) }
-            at(TokenType.BREAK)    -> { advance(); BreakStmt }
-            at(TokenType.CONTINUE) -> { advance(); ContinueStmt }
+            at(TokenType.BREAK)    -> { advance(); BreakStmt() }
+            at(TokenType.CONTINUE) -> { advance(); ContinueStmt() }
             else -> ExprStmt(parseExpr())
         }
+        stmt.line = stmtLine
+        return stmt
     }
 
     // ── when (expression / statement) ────────────────────────────────

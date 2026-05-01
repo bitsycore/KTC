@@ -42,7 +42,8 @@ fun main(args: Array<String>) {
     }
 
     // ── Lex & Parse all files ────────────────────────────────────────
-    val parsedFiles = mutableListOf<Pair<File, KtFile>>()
+    data class ParsedSource(val file: File, val ast: KtFile, val sourceLines: List<String>)
+    val parsedFiles = mutableListOf<ParsedSource>()
     for (inputFile in inputFiles) {
         val source = inputFile.readText()
         val tokens: List<Token>
@@ -59,32 +60,32 @@ fun main(args: Array<String>) {
             System.err.println("Parser error in ${inputFile.name}: ${e.message}")
             exitProcess(1)
         }
-        parsedFiles += inputFile to ast
+        parsedFiles += ParsedSource(inputFile, ast, source.lines())
     }
 
     // ── Group files by package ───────────────────────────────────────
     // Files with the same package are merged into a single output unit.
     // Files with different packages produce separate .c/.h outputs.
-    val byPackage = parsedFiles.groupBy { it.second.pkg ?: it.first.nameWithoutExtension }
+    val byPackage = parsedFiles.groupBy { it.ast.pkg ?: it.file.nameWithoutExtension }
 
     val outDir = File(outputDir)
     outDir.mkdirs()
 
-    val allAsts = parsedFiles.map { it.second }
+    val allAsts = parsedFiles.map { it.ast }
     val allOutputNames = mutableListOf<String>()
 
     for ((pkg, group) in byPackage) {
         // Merge all files in the same package into one KtFile
-        val mergedImports = group.flatMap { it.second.imports }.distinct()
-        val mergedDecls = group.flatMap { it.second.decls }
-        val mergedFile = KtFile(group.first().second.pkg, mergedImports, mergedDecls)
+        val mergedImports = group.flatMap { it.ast.imports }.distinct()
+        val mergedDecls = group.flatMap { it.ast.decls }
+        val mergedFile = KtFile(group.first().ast.pkg, mergedImports, mergedDecls)
+        val mergedSourceLines = group.flatMap { it.sourceLines }
 
         val output: CCodeGen.COutput
         try {
-            output = CCodeGen(mergedFile, allAsts).generate()
+            output = CCodeGen(mergedFile, allAsts, mergedSourceLines).generate()
         } catch (e: Exception) {
             System.err.println("CodeGen error in package '$pkg': ${e.message}")
-            e.printStackTrace()
             exitProcess(1)
         }
 
