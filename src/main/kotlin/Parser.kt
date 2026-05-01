@@ -225,12 +225,13 @@ class Parser(private val tokens: List<Token>) {
     // ── val / var (top-level or class-level property) ────────────────
 
     private fun parsePropDecl(mutable: Boolean): PropDecl {
+        val line = cur().line
         advance()   // skip val/var
         val name = expectIdent()
         val type = if (at(TokenType.COLON)) { advance(); skipNL(); parseTypeRef() } else null
         val init = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
         skipTerminator()
-        return PropDecl(name, type, init, mutable)
+        return PropDecl(name, type, init, mutable, line)
     }
 
     // ═══════════════════════════ Statements ═══════════════════════════

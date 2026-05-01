@@ -27,7 +27,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     // ── Symbol tables (populated by collectDecls) ────────────────────
-    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?)
+    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0)
 
     private data class ClassInfo(
         val name: String, val isData: Boolean,
@@ -411,7 +411,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is ClassDecl -> {
                 val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
-                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init)
+                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line)
                 }
                 val ci = ClassInfo(d.name, d.isData, ctorProps, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
@@ -693,7 +693,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 // Substitute types in body props
                 val bodyProps = templateCi.bodyProps.map { bp ->
-                    BodyProp(bp.name, substituteTypeRef(bp.type, subst), bp.init)
+                    BodyProp(bp.name, substituteTypeRef(bp.type, subst), bp.init, bp.line)
                 }
                 val ci = ClassInfo(mangledName, templateCi.isData, ctorProps, bodyProps,
                     initBlocks = templateCi.initBlocks)
@@ -894,7 +894,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
             }
             for (bp in ci.bodyProps) {
-                if (bp.init != null) impl.appendLine("    \$self.${bp.name} = ${genExpr(bp.init)};")
+                if (bp.init != null) {
+                    if (bp.line > 0) currentStmtLine = bp.line
+                    val expr = genExpr(bp.init)
+                    flushPreStmts("    ")
+                    impl.appendLine("    \$self.${bp.name} = $expr;")
+                }
             }
             impl.appendLine("    return \$self;")
         }
@@ -975,7 +980,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
             }
             for (bp in ci.bodyProps) {
-                if (bp.init != null) impl.appendLine("    \$self.${bp.name} = ${genExpr(bp.init)};")
+                if (bp.init != null) {
+                    if (bp.line > 0) currentStmtLine = bp.line
+                    val expr = genExpr(bp.init)
+                    flushPreStmts("    ")
+                    impl.appendLine("    \$self.${bp.name} = $expr;")
+                }
             }
             impl.appendLine("    return \$self;")
         }
@@ -2352,7 +2362,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         is IfExpr      -> genIfExpr(e)
         is WhenExpr    -> genWhenExpr(e)
-        is NotNullExpr -> genExpr(e.expr)   // x!! → just x (value)
+        is NotNullExpr -> genNotNull(e)
         is ElvisExpr   -> "(${genExpr(e.left)}\$has ? ${genExpr(e.left)} : ${genExpr(e.right)})"
         is StrTemplateExpr -> genStrTemplate(e)
         is IsCheckExpr -> "/* is-check */ true"
@@ -3053,6 +3063,42 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val recv = genExpr(e.obj)
         // x?.field → x$has ? x.field : 0
         return "(${recv}\$has ? $recv.${e.name} : 0)"
+    }
+
+    // ── !! (not-null assertion) ─────────────────────────────────────────
+
+    private fun genNotNull(e: NotNullExpr): String {
+        val inner = genExpr(e.expr)
+        val innerType = inferExprType(e.expr)
+        val loc = "$sourceFileName:$currentStmtLine"
+
+        // Pointer-nullable: type ends with "*", "^", "&", or is "Pointer"
+        val baseType = innerType?.removeSuffix("?")?.removeSuffix("#") ?: ""
+        val isPtr = baseType.endsWith("*") || baseType.endsWith("^") || baseType.endsWith("&")
+                || baseType == "Pointer" || isAllocCall(e.expr)
+
+        if (isPtr) {
+            val ct = cTypeStr(baseType.ifEmpty { "void*" })
+            // Simple name — no temp needed
+            if (e.expr is NameExpr) {
+                preStmts += "if (!$inner) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
+                return inner
+            }
+            val t = tmp()
+            preStmts += "$ct $t = $inner;"
+            preStmts += "if (!$t) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
+            return t
+        }
+
+        // Value-nullable variable: check $has companion
+        if (innerType != null && (innerType.endsWith("?") || innerType.endsWith("#")) && e.expr is NameExpr) {
+            val name = (e.expr as NameExpr).name
+            preStmts += "if (!${name}\$has) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
+            return inner
+        }
+
+        // Fallback: no check (non-nullable expression)
+        return inner
     }
 
     // ── if expression (as C ternary or temp) ─────────────────────────

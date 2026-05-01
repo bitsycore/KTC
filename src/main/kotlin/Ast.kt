@@ -60,7 +60,8 @@ data class PropDecl(
     val name: String,
     val type: TypeRef?,
     val init: Expr?,
-    val mutable: Boolean
+    val mutable: Boolean,
+    val line: Int = 0
 ) : Decl()
 
 // ═══════════════════════════ Parameters ═══════════════════════════

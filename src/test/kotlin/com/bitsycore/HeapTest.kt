@@ -137,6 +137,22 @@ class HeapTest : TranspilerTestBase() {
         r.sourceContains("p->x")
     }
 
+    @Test fun notNullAssertionEmitsCrash() {
+        // !! on malloc should emit NullPointerException check
+        val r = transpileMain("val p = malloc<Vec2>(10.0f, 20.0f)!!", decls = vec2Decl)
+        r.sourceContains("NullPointerException")
+        r.sourceContains("exit(1)")
+    }
+
+    @Test fun notNullAssertionOnVariable() {
+        // !! on nullable variable should emit check
+        val r = transpileMain("""
+            var p: Heap<Vec2>? = malloc<Vec2>(1.0f, 2.0f)
+            val q = p!!
+        """, decls = vec2Decl)
+        r.sourceContains("NullPointerException")
+    }
+
     @Test fun heapPtrNullable() {
         val r = transpileMain(
             "var q: Heap<Vec2>? = malloc<Vec2>(3.0f, 4.0f)\nq = null",
