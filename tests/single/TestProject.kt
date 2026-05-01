@@ -2,15 +2,15 @@ package TestProject.Main
 
 // ── MutableListInt ─ ArrayList<Int> built with malloc/realloc ────────
 
-class MutableList<T>(var capacity: Int) {
+class MutableList<T>(capacity: Int) {
 
 	var size: Int = 0
 	var buf: Heap<Array<T>> = malloc<Array<T>>(capacity)!!
 
 	fun add(value: T) {
-		if (size >= capacity) {
-			capacity = capacity * 2
-			buf = realloc<Array<T>>(buf, capacity)!!
+		if (size >= buf.size) {
+			val newSize = buf.size * 2
+			buf = realloc<Array<T>>(buf, newSize)!!
 		}
 		buf[size] = value
 		size = size + 1
@@ -73,12 +73,27 @@ data class Vec2(val x: Int, val y: Int)
 
 // ── main ─────────────────────────────────────────────────────────────
 
+fun <T> newArray(size: Int = 100) : Array<T> {
+	return Array<T>(size)
+}
+
 fun main(args: Array<String>) {
 
-	val listVec = malloc<MutableList<Vec2>>(8)!!
+	val array = newArray<Int>(5)
+	val array2 = newArray<Int>()
+	val array3 = newArray<Int>(180)
+
+	println("Sizeof array: ${array.size}")
+	println("Sizeof array2: ${array2.size}")
+	println("Sizeof array3: ${array3.size}")
+
+	val listVec = malloc<MutableList<Vec2>>(8)
+	if (listVec == null) return
 	defer free(listVec)
 	val v2 = listVec.value()
-	defer v2.dispose()
+	defer {
+		v2.dispose()
+	}
 
 	v2.add(Vec2(1,1))
 	v2.add(Vec2(2,2))

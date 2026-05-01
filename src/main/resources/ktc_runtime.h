@@ -13,6 +13,17 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+/* ═══════════════════════════ alloca compat ═══════════════════════════ */
+#ifdef _MSC_VER
+  #include <malloc.h>
+  #define ktc_alloca(size) _alloca(size)
+#elif defined(__GNUC__) || defined(__clang__)
+  #define ktc_alloca(size) __builtin_alloca(size)
+#else
+  #include <alloca.h>
+  #define ktc_alloca(size) alloca(size)
+#endif
+
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*
  * Enabled by #define KTC_MEM_TRACK before including this header.
