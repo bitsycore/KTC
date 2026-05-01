@@ -295,7 +295,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         hdr.appendLine("#pragma once")
         if (memTrack) hdr.appendLine("#define KTC_MEM_TRACK")
-        hdr.appendLine("#include \"ktc_runtime.h\"")
+        hdr.appendLine("#include \"ktc_intrinsic.h\"")
         hdr.appendLine()
 
         // Imports → #include (skip ktc stdlib imports — handled below)

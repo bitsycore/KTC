@@ -127,13 +127,13 @@ fun main(args: Array<String>) {
         println("  wrote ${sourceFile.path}")
     }
 
-    // ── Copy runtime (always overwrite to keep in sync) ──────────────
-    val runtimeDst = File(outDir, "ktc_runtime.h")
-    val runtimeSrc = object {}.javaClass.getResourceAsStream("/ktc_runtime.h")
-    if (runtimeSrc != null) {
-        runtimeDst.writeText(runtimeSrc.bufferedReader().readText())
+    // ── Copy intrinsic header (always overwrite to keep in sync) ────
+    val intrinsicDst = File(outDir, "ktc_intrinsic.h")
+    val intrinsicSrc = object {}.javaClass.getResourceAsStream("/ktc_intrinsic.h")
+    if (intrinsicSrc != null) {
+        intrinsicDst.writeText(intrinsicSrc.bufferedReader().readText())
     } else {
-        System.err.println("Warning: ktc_runtime.h not found in resources, copy it manually.")
+        System.err.println("Warning: ktc_intrinsic.h not found in resources, copy it manually.")
     }
 
     // Print compile command (ensure ktc.c is first if present)
