@@ -1,4 +1,15 @@
 fun main() {
+
+	val testMap = mapOf("Helo" to "World")
+	defer testMap.dispose()
+	val testMap2 = mutableMapOf("Helo" to "World", "Another" to "One")
+	defer testMap2.dispose()
+
+	val testList = listOf(1,2,3,4,5)
+	defer testList.dispose()
+	val testList2 = mutableListOf("Hello", "World")
+	defer testList2.dispose()
+
 	val map = HashMap<Int, String>(16)
 
 	// Test put and get

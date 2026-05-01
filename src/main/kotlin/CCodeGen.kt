@@ -325,6 +325,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // so we know concrete class types for argument type inference)
         scanForGenericFunCalls()
 
+        // Scan generic function bodies for class instantiations that only become
+        // concrete after type substitution (e.g. ArrayList<T>() inside listOf<T>
+        // becomes ArrayList<Int> when listOf is called with Int)
+        scanGenericFunBodiesForInstantiations()
+        materializeGenericInstantiations()
+
         // Emit interface vtable struct + fat pointer type BEFORE classes
         // Non-generic interfaces first (they only use primitive types in signatures)
         val emittedIfaceNames = mutableSetOf<String>()
@@ -923,6 +929,162 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     /**
+     * Scan generic function bodies for generic class instantiations that only become
+     * concrete after type parameter substitution.
+     * E.g., `fun <T> listOf(vararg items: T): List<T>` body has `ArrayList<T>(items.size)`.
+     * When listOf is called with T=Int, we need to discover ArrayList<Int>.
+     * Iterates until no new instantiations are found (handles transitive cases).
+     */
+    private fun scanGenericFunBodiesForInstantiations() {
+        var changed = true
+        while (changed) {
+            changed = false
+            for ((funName, instantiations) in genericFunInstantiations.toMap()) {
+                val funDecl = genericFunDecls.find { it.name == funName } ?: continue
+                for (typeArgs in instantiations.toSet()) {
+                    val subst = funDecl.typeParams.zip(typeArgs).toMap()
+                    if (scanBodyWithSubst(funDecl.body, subst)) changed = true
+                }
+            }
+        }
+    }
+
+    private fun scanBodyWithSubst(block: Block?, subst: Map<String, String>): Boolean {
+        if (block == null) return false
+        var found = false
+        for (s in block.stmts) if (scanStmtWithSubst(s, subst)) found = true
+        return found
+    }
+
+    private fun scanStmtWithSubst(s: Stmt, subst: Map<String, String>): Boolean {
+        return when (s) {
+            is VarDeclStmt -> {
+                var f = scanExprWithSubst(s.init, subst)
+                if (s.type != null && scanTypeRefWithSubst(s.type, subst)) f = true
+                f
+            }
+            is AssignStmt -> {
+                var f = scanExprWithSubst(s.target, subst)
+                if (scanExprWithSubst(s.value, subst)) f = true
+                f
+            }
+            is ExprStmt -> scanExprWithSubst(s.expr, subst)
+            is ForStmt -> {
+                var f = scanExprWithSubst(s.iter, subst)
+                if (scanBodyWithSubst(s.body, subst)) f = true
+                f
+            }
+            is WhileStmt -> {
+                var f = scanExprWithSubst(s.cond, subst)
+                if (scanBodyWithSubst(s.body, subst)) f = true
+                f
+            }
+            is DoWhileStmt -> {
+                var f = scanBodyWithSubst(s.body, subst)
+                if (scanExprWithSubst(s.cond, subst)) f = true
+                f
+            }
+            is ReturnStmt -> scanExprWithSubst(s.value, subst)
+            is DeferStmt -> scanBodyWithSubst(s.body, subst)
+            else -> false
+        }
+    }
+
+    private fun scanExprWithSubst(e: Expr?, subst: Map<String, String>): Boolean {
+        if (e == null) return false
+        return when (e) {
+            is CallExpr -> {
+                var found = false
+                val name = (e.callee as? NameExpr)?.name
+                // Constructor call to generic class: ArrayList<T>(...) → with T=Int → ArrayList_Int
+                if (name != null && classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
+                    val resolvedArgs = e.typeArgs.map { subst[it.name] ?: it.name }
+                    if (resolvedArgs.none { it in allGenericTypeParamNames }) {
+                        if (genericInstantiations[name]?.contains(resolvedArgs) != true) {
+                            recordGenericInstantiation(name, resolvedArgs)
+                            found = true
+                        }
+                    }
+                }
+                // Check typeArgs for nested generic types (e.g., malloc<Array<T>>)
+                for (ta in e.typeArgs) if (scanTypeRefWithSubst(ta, subst)) found = true
+                // Check if it's a call to another generic function with resolvable type args
+                if (name != null) {
+                    val genFun = genericFunDecls.find { it.name == name }
+                    if (genFun != null && e.typeArgs.isNotEmpty()) {
+                        val resolvedArgs = e.typeArgs.map { subst[it.name] ?: it.name }
+                        if (resolvedArgs.none { it in allGenericTypeParamNames }) {
+                            val existing = genericFunInstantiations[name]
+                            if (existing == null || resolvedArgs !in existing) {
+                                genericFunInstantiations.getOrPut(name) { mutableSetOf() }.add(resolvedArgs)
+                                found = true
+                            }
+                        }
+                    }
+                }
+                for (a in e.args) if (scanExprWithSubst(a.expr, subst)) found = true
+                if (scanExprWithSubst(e.callee, subst)) found = true
+                found
+            }
+            is BinExpr -> {
+                var f = scanExprWithSubst(e.left, subst)
+                if (scanExprWithSubst(e.right, subst)) f = true
+                f
+            }
+            is DotExpr -> scanExprWithSubst(e.obj, subst)
+            is SafeDotExpr -> scanExprWithSubst(e.obj, subst)
+            is IndexExpr -> {
+                var f = scanExprWithSubst(e.obj, subst)
+                if (scanExprWithSubst(e.index, subst)) f = true
+                f
+            }
+            is PrefixExpr -> scanExprWithSubst(e.expr, subst)
+            is PostfixExpr -> scanExprWithSubst(e.expr, subst)
+            is NotNullExpr -> scanExprWithSubst(e.expr, subst)
+            is ElvisExpr -> {
+                var f = scanExprWithSubst(e.left, subst)
+                if (scanExprWithSubst(e.right, subst)) f = true
+                f
+            }
+            is IfExpr -> {
+                var f = scanExprWithSubst(e.cond, subst)
+                if (scanBodyWithSubst(e.then, subst)) f = true
+                if (scanBodyWithSubst(e.els, subst)) f = true
+                f
+            }
+            is CastExpr -> {
+                var f = scanExprWithSubst(e.expr, subst)
+                if (scanTypeRefWithSubst(e.type, subst)) f = true
+                f
+            }
+            is StrTemplateExpr -> {
+                var f = false
+                for (p in e.parts) if (p is ExprPart && scanExprWithSubst(p.expr, subst)) f = true
+                f
+            }
+            else -> false
+        }
+    }
+
+    private fun scanTypeRefWithSubst(t: TypeRef, subst: Map<String, String>): Boolean {
+        var found = false
+        if (t.typeArgs.isNotEmpty()) {
+            val resolvedArgs = t.typeArgs.map { subst[it.name] ?: it.name }
+            // Generic class instantiation
+            if (classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {
+                if (resolvedArgs.none { it in allGenericTypeParamNames }) {
+                    if (genericInstantiations[t.name]?.contains(resolvedArgs) != true) {
+                        recordGenericInstantiation(t.name, resolvedArgs)
+                        found = true
+                    }
+                }
+            }
+        }
+        for (arg in t.typeArgs) if (scanTypeRefWithSubst(arg, subst)) found = true
+        return found
+    }
+
+    /**
      * Match a parameter type against a concrete argument type to infer type params.
      * E.g., param=MutableList<T>, argType="MutableList_Int", typeParams={T} → subst[T]=Int
      */
@@ -1343,6 +1505,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             for (p in f.params) {
                 val resolved = resolveTypeName(p.type)
                 defineVar(p.name, when {
+                    p.isVararg -> "${resolved}Array"  // vararg params are arrays (ptr + $len)
                     p.type.nullable -> "${resolved}?"
                     classes.containsKey(resolved) -> "${resolved}*"
                     else -> resolved
@@ -2943,8 +3106,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Constructor call (known class)
         // Handle generic class constructor: MyList<Int>(8) → MyList_Int_create(8)
         if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
-            val mangledName = mangledGenericName(name, e.typeArgs.map { it.name })
-            val ci = classes[mangledName]!!
+            // Apply typeSubst so type params (e.g. T) resolve to concrete types (e.g. Int)
+            // when inside a generic function body
+            val resolvedTypeArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
+            val mangledName = mangledGenericName(name, resolvedTypeArgs)
+            val ci = classes[mangledName] ?: error("Generic class '$mangledName' not materialized (typeSubst=$typeSubst)")
             val templateDecl = genericClassDecls[name]
             val allParams = ci.ctorProps + ci.ctorPlainParams
             val filledArgs = fillDefaults(args, allParams.map { Param(it.first, it.second) }, allParams.associate {
@@ -3943,6 +4109,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else if (e.op == "to") {
                 val a = inferExprType(e.left) ?: "Int"
                 val b = inferExprType(e.right) ?: "Int"
+                // Register in pairTypeComponents so matchTypeParam can decompose
+                // Pair types during early scanning (before codegen populates it)
+                pairTypeComponents["Pair_${a}_${b}"] = Pair(a, b)
                 "Pair_${a}_${b}"
             }
             else inferExprType(e.left)  // arithmetic inherits left type
@@ -3980,8 +4149,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return "Pair_${a}_${b}"
             }
             // Generic class constructor: MyList<Int>(8) → "MyList_Int"
+            // Apply typeSubst so type params resolve inside generic function bodies
             if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
-                return mangledGenericName(name, e.typeArgs.map { it.name })
+                val resolvedArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
+                return mangledGenericName(name, resolvedArgs)
             }
             if (classes.containsKey(name)) return name
             if (name == "malloc" || name == "calloc" || name == "realloc") {
@@ -4024,14 +4195,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return "${elemName}Array"
             }
             // Generic function call: newArray<Int>(5) → resolve return type with type substitution
+            // Also handles implicit type args inferred from arguments
             val genFun = genericFunDecls.find { it.name == name }
-            if (genFun != null && e.typeArgs.isNotEmpty() && genFun.returnType != null) {
-                val subst = genFun.typeParams.zip(e.typeArgs.map { resolveTypeName(it) }).toMap()
-                val saved = typeSubst
-                typeSubst = subst
-                val result = resolveTypeName(genFun.returnType)
-                typeSubst = saved
-                return result
+            if (genFun != null && genFun.returnType != null) {
+                val typeArgNames = if (e.typeArgs.isNotEmpty()) {
+                    e.typeArgs.map { resolveTypeName(it) }
+                } else {
+                    // Infer type args from argument types
+                    val inferredSubst = mutableMapOf<String, String>()
+                    for ((i, param) in genFun.params.withIndex()) {
+                        if (i >= e.args.size) break
+                        val argType = inferExprType(e.args[i].expr) ?: continue
+                        matchTypeParam(param.type, argType, genFun.typeParams.toSet(), inferredSubst)
+                    }
+                    if (inferredSubst.size == genFun.typeParams.size) genFun.typeParams.map { inferredSubst[it]!! } else null
+                }
+                if (typeArgNames != null) {
+                    val subst = genFun.typeParams.zip(typeArgNames).toMap()
+                    val saved = typeSubst
+                    typeSubst = subst
+                    val result = resolveTypeName(genFun.returnType)
+                    typeSubst = saved
+                    return result
+                }
             }
             funSigs[name]?.returnType?.let { return resolveTypeName(it) }
         }

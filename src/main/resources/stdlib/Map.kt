@@ -1,6 +1,6 @@
 package ktc
 
-interface Map<K, V> {
+interface Map<K, V> : Disposable {
 	val size: Int
 	fun get(key: K): V?
 	fun containsKey(key: K): Boolean
@@ -13,7 +13,7 @@ interface MutableMap<K, V> : Map<K, V> {
 	fun clear()
 }
 
-class HashMap<K, V>(capacity: Int) : MutableMap<K, V>, Disposable {
+class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 
 	override var size: Int = 0
 	var cap: Int = capacity
@@ -124,4 +124,21 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V>, Disposable {
 		free(occ)
 	}
 
+}
+
+fun <K,V> mapOf(vararg pairs: Pair<K, V>): Map<K, V> {
+	val map = HashMap<K, V>(pairs.size)
+	for (p in pairs) {
+		map.put(p.first, p.second)
+	}
+	return map
+}
+
+fun <K,V> mutableMapOf(vararg pairs: Pair<K, V>): MutableMap<K, V> {
+	val notZero = if (pairs.size == 0) 8 else pairs.size * 2
+	val map = HashMap<K, V>(notZero)
+	for (p in pairs) {
+		map.put(p.first, p.second)
+	}
+	return map
 }

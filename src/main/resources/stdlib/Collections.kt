@@ -1,6 +1,6 @@
 package ktc
 
-interface List<T> {
+interface List<T> : Disposable {
 	val size: Int
 	fun get(index: Int): T
 	fun contains(value: T): Boolean
@@ -14,7 +14,7 @@ interface MutableList<T> : List<T> {
 	fun clear()
 }
 
-class ArrayList<T>(capacity: Int) : MutableList<T>, Disposable {
+class ArrayList<T>(capacity: Int) : MutableList<T> {
 
 	override var size: Int = 0
 	var buf: Heap<Array<T>> = malloc<Array<T>>(capacity)!!
@@ -67,4 +67,20 @@ class ArrayList<T>(capacity: Int) : MutableList<T>, Disposable {
 		free(buf)
 	}
 
+}
+
+fun <T> listOf(vararg items: T): List<T> {
+	val list = ArrayList<T>(items.size)
+	for (item in items) {
+		list.add(item)
+	}
+	return list
+}
+
+fun <T> mutableListOf(vararg items: T): MutableList<T> {
+	val list = ArrayList<T>(items.size)
+	for (item in items) {
+		list.add(item)
+	}
+	return list
 }
