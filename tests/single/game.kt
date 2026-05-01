@@ -489,6 +489,33 @@ fun testFunPtr() {
     println(g(10, 20))
 }
 
+fun deferredReturn(): Int {
+    val p = malloc<Vec2>(1.0, 2.0)
+    defer free(p)
+    p.x = 42.0
+    return p.x.toInt()
+}
+
+fun testDefer() {
+    // Basic: LIFO order
+    defer println("defer 1")
+    defer println("defer 2")
+    println("body")
+
+    // Block defer
+    defer {
+        println("defer block A")
+        println("defer block B")
+    }
+    println("after defers registered")
+}
+
+fun testDeferReturn() {
+    // defer runs before return, return value evaluated first
+    val v = deferredReturn()
+    println(v)
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -532,4 +559,8 @@ fun main(args: Array<String>) {
     testHeapNullable()
     println("--- testFunPtr ---")
     testFunPtr()
+    println("--- testDefer ---")
+    testDefer()
+    println("--- testDeferReturn ---")
+    testDeferReturn()
 }

@@ -116,6 +116,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private var currentFnReturnType: String = ""
     private fun currentFnReturnBaseType(): String = currentFnReturnType.removeSuffix("?")
 
+    // ── Defer stack (LIFO: last deferred = first to execute) ─────────
+    private val deferStack = mutableListOf<Block>()
+
+    /** Emit all deferred blocks in LIFO order (does NOT clear the stack). */
+    private fun emitDeferredBlocks(ind: String, insideMethod: Boolean = false) {
+        for (i in deferStack.indices.reversed()) {
+            for (s in deferStack[i].stmts) emitStmt(s, ind, insideMethod)
+        }
+    }
+
     // ── Temp counter for stack buffers ───────────────────────────────
     private var tmpCounter = 0
     private fun tmp(): String = "\$${tmpCounter++}"
@@ -307,6 +317,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 is WhileStmt -> s.body.stmts.forEach(::scanStmt)
                 is DoWhileStmt -> s.body.stmts.forEach(::scanStmt)
                 is ReturnStmt -> scanExpr(s.value)
+                is DeferStmt -> s.body.stmts.forEach(::scanStmt)
                 else -> {}
             }
         }
@@ -491,7 +502,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val ci = classes[className]
         if (ci != null) for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
 
+        val savedDefers = deferStack.toList(); deferStack.clear()
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = true)
+        if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = true)
+        deferStack.clear(); deferStack.addAll(savedDefers)
         popScope()
 
         impl.appendLine("}")
@@ -529,7 +543,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val ci = classes[recvTypeName]!!
             for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
         }
+        val savedDefers2 = deferStack.toList(); deferStack.clear()
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = isClassType)
+        if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = isClassType)
+        deferStack.clear(); deferStack.addAll(savedDefers2)
         popScope()
 
         currentClass = prevClass
@@ -578,7 +595,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             impl.appendLine("$cRet ${cName}_${m.name}($params) {")
             pushScope()
             for (p in m.params) defineVar(p.name, resolveTypeName(p.type))
+            val savedDefers3 = deferStack.toList(); deferStack.clear()
             if (m.body != null) for (s in m.body.stmts) emitStmt(s, "    ")
+            if (m.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ")
+            deferStack.clear(); deferStack.addAll(savedDefers3)
             popScope()
             impl.appendLine("}")
             impl.appendLine()
@@ -708,10 +728,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 defineVar(p.name, if (p.type.nullable) "${resolved}?" else resolved)
             }
         }
+        val savedDefers = deferStack.toList()
+        deferStack.clear()
+
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ")
+        // Emit deferred blocks at end unless last stmt was a return (already emitted there)
+        val lastStmt = f.body?.stmts?.lastOrNull()
+        if (lastStmt !is ReturnStmt) emitDeferredBlocks("    ")
         if (isMain) impl.appendLine("    return 0;")
         popScope()
 
+        deferStack.clear()
+        deferStack.addAll(savedDefers)
         currentFnReturnsNullable = prevReturnsNullable
         currentFnReturnType = prevReturnType
         impl.appendLine("}")
@@ -748,6 +776,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is DoWhileStmt  -> { impl.appendLine("${ind}do {"); emitBlock(s.body, ind, insideMethod); impl.appendLine("$ind} while (${genExpr(s.cond)});") }
             is BreakStmt    -> impl.appendLine("${ind}break;")
             is ContinueStmt -> impl.appendLine("${ind}continue;")
+            is DeferStmt    -> deferStack.add(s.body)
         }
     }
 
@@ -946,20 +975,39 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitReturn(s: ReturnStmt, ind: String) {
         if (currentFnReturnsNullable) {
             if (s.value == null || s.value is NullLit) {
+                emitDeferredBlocks(ind)
                 impl.appendLine("$ind*\$has_out = false;")
                 impl.appendLine("${ind}return ${defaultVal(currentFnReturnBaseType())};")
             } else {
                 val expr = genExpr(s.value)
                 flushPreStmts(ind)
-                impl.appendLine("$ind*\$has_out = true;")
-                impl.appendLine("${ind}return $expr;")
+                if (deferStack.isNotEmpty()) {
+                    val t = tmp()
+                    impl.appendLine("$ind${cTypeStr(currentFnReturnBaseType())} $t = $expr;")
+                    impl.appendLine("$ind*\$has_out = true;")
+                    emitDeferredBlocks(ind)
+                    impl.appendLine("${ind}return $t;")
+                } else {
+                    impl.appendLine("$ind*\$has_out = true;")
+                    impl.appendLine("${ind}return $expr;")
+                }
             }
         } else {
             if (s.value != null) {
                 val expr = genExpr(s.value)
                 flushPreStmts(ind)
-                impl.appendLine("${ind}return $expr;")
+                if (deferStack.isNotEmpty()) {
+                    // Evaluate return value into temp, run defers, then return
+                    val retType = currentFnReturnType.ifEmpty { inferExprType(s.value) ?: "Int" }
+                    val t = tmp()
+                    impl.appendLine("$ind${cTypeStr(retType)} $t = $expr;")
+                    emitDeferredBlocks(ind)
+                    impl.appendLine("${ind}return $t;")
+                } else {
+                    impl.appendLine("${ind}return $expr;")
+                }
             } else {
+                emitDeferredBlocks(ind)
                 impl.appendLine("${ind}return;")
             }
         }

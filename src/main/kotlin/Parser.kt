@@ -200,6 +200,7 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.DO)     -> parseDoWhileStmt()
             at(TokenType.BREAK)  -> { advance(); BreakStmt }
             at(TokenType.CONTINUE) -> { advance(); ContinueStmt }
+            at(TokenType.DEFER)  -> parseDeferStmt()
             else -> parseExprOrAssignStmt()
         }
     }
@@ -255,6 +256,15 @@ class Parser(private val tokens: List<Token>) {
         val cond = parseExpr()
         expect(TokenType.RPAREN); nesting--
         return DoWhileStmt(body, cond)
+    }
+
+    // ── defer ────────────────────────────────────────────────────────
+
+    private fun parseDeferStmt(): DeferStmt {
+        expect(TokenType.DEFER); skipNL()
+        val body = if (at(TokenType.LBRACE)) parseBlock()
+                   else Block(listOf(ExprStmt(parseExpr())))
+        return DeferStmt(body)
     }
 
     // ═══════════════════════════ Expressions (Pratt) ═════════════════

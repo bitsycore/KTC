@@ -100,6 +100,7 @@ data class WhileStmt(val cond: Expr, val body: Block) : Stmt()
 data class DoWhileStmt(val body: Block, val cond: Expr) : Stmt()
 object BreakStmt : Stmt()
 object ContinueStmt : Stmt()
+data class DeferStmt(val body: Block) : Stmt()
 
 // ═══════════════════════════ Expressions ═══════════════════════════
 
