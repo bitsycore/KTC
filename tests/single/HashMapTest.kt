@@ -85,6 +85,26 @@ fun main() {
 	c.printf("999 in list = %d\n", 999 in list)
 	c.printf("999 !in list = %d\n", 999 !in list)
 
+	// Test for-in iteration over list
+	val iterList = mutableListOf(100, 200, 300)
+	defer iterList.dispose()
+	c.printf("iterating list: ")
+	for (item in iterList) {
+		c.printf("%d ", item)
+	}
+	c.printf("\n")
+
+	// Test for-in iteration over map
+	val iterMap = HashMap<Int, String>(8)
+	iterMap[10] = "ten"
+	iterMap[20] = "twenty"
+	iterMap[30] = "thirty"
+	c.printf("iterating map:\n")
+	for (entry in iterMap) {
+		c.printf("  %d -> %.*s\n", entry.first, entry.second.len, entry.second.ptr)
+	}
+	iterMap.dispose()
+
 	map.dispose()
 	c.printf("done\n")
 }

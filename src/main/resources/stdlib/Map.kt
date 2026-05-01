@@ -1,10 +1,36 @@
 package ktc
 
+class MapIterator<K, V>(keys: Heap<Array<K>>, vals: Heap<Array<V>>, occ: Heap<Array<Boolean>>, cap: Int) {
+	var idx: Int = 0
+	val keys: Heap<Array<K>> = keys
+	val vals: Heap<Array<V>> = vals
+	val occ: Heap<Array<Boolean>> = occ
+	val cap: Int = cap
+
+	operator fun hasNext(): Boolean {
+		while (idx < cap) {
+			if (occ[idx]) {
+				return true
+			}
+			idx = idx + 1
+		}
+		return false
+	}
+
+	operator fun next(): Pair<K, V> {
+		val k = keys[idx]
+		val v = vals[idx]
+		idx = idx + 1
+		return k to v
+	}
+}
+
 interface Map<K, V> : Disposable {
 	val size: Int
 	operator fun get(key: K): V?
 	operator fun containsKey(key: K): Boolean
 	fun isEmpty(): Boolean
+	operator fun iterator(): MapIterator<K, V>
 }
 
 interface MutableMap<K, V> : Map<K, V> {
@@ -121,6 +147,10 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		free(oldKeys)
 		free(oldVals)
 		free(oldOcc)
+	}
+
+	override operator fun iterator(): MapIterator<K, V> {
+		return MapIterator<K, V>(keys, vals, occ, cap)
 	}
 
 	override fun dispose() {

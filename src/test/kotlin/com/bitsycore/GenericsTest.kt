@@ -22,9 +22,9 @@ class GenericsTest : TranspilerTestBase() {
                 val b = Box<Int>(42)
             }
         """)
-        // Mangled struct: Box_Int
-        r.headerContains("typedef struct {")
-        r.headerContains("test_Main_Box_Int")
+        // Mangled struct: Box_Int (forward typedef + struct definition)
+        r.headerContains("typedef struct test_Main_Box_Int test_Main_Box_Int;")
+        r.headerContains("struct test_Main_Box_Int {")
         r.headerContains("int32_t item;")
     }
 

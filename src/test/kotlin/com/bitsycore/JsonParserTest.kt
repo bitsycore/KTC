@@ -111,8 +111,8 @@ class JsonParserTest : TranspilerTestBase() {
 
     @Test fun mutableListIntStructGenerated() {
         val r = transpileJsonParser()
-        r.headerContains("typedef struct {")
-        r.headerContains("} json_Main_MutableList_Int;")
+        r.headerContains("typedef struct json_Main_MutableList_Int json_Main_MutableList_Int;")
+        r.headerContains("struct json_Main_MutableList_Int {")
         r.headerContains("int32_t size;")
         r.headerContains("int32_t* buf;")
     }

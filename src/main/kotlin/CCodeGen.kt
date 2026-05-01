@@ -338,6 +338,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         scanGenericFunBodiesForInstantiations()
         materializeGenericInstantiations()
 
+        // Scan materialized generic class method bodies for further generic instantiations
+        // (e.g., HashMap<Int,String>.iterator() creates MapIterator<Int,String>)
+        scanGenericClassMethodBodiesForInstantiations()
+        materializeGenericInstantiations()
+
         // Pre-compute concrete return types for generic functions returning interfaces
         // (enables returning concrete class by value on stack instead of heap-allocating)
         computeGenericFunConcreteReturns()
@@ -359,7 +364,38 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else -> {}
         }
 
-        // Emit monomorphized generic interfaces AFTER class structs so types are available
+        // Emit forward declarations for all monomorphized generic class types
+        // so method signatures can reference them before their full definitions
+        for ((baseName, instantiations) in genericInstantiations) {
+            if (!genericClassDecls.containsKey(baseName)) continue
+            for (typeArgs in instantiations) {
+                val mangledName = mangledGenericName(baseName, typeArgs)
+                val cName = pfx(mangledName)
+                hdr.appendLine("typedef struct $cName $cName;")
+            }
+        }
+        hdr.appendLine()
+
+        // Emit monomorphized generic class instantiations BEFORE generic interfaces,
+        // because interface vtable structs may reference generic class types as return types
+        // (e.g., MapIterator<Int,String> returned by Map<Int,String>.iterator())
+        for ((baseName, instantiations) in genericInstantiations) {
+            val templateDecl = genericClassDecls[baseName] ?: continue
+            for (typeArgs in instantiations) {
+                val mangledName = mangledGenericName(baseName, typeArgs)
+                val templateCi = classes[baseName] ?: continue
+                // Set type substitution for this instantiation
+                typeSubst = templateCi.typeParams.zip(typeArgs).toMap()
+                // Switch source file attribution for mem-track
+                val prevSourceFile = currentSourceFile
+                declSourceFile[baseName]?.let { currentSourceFile = it }
+                emitGenericClass(templateDecl, mangledName)
+                currentSourceFile = prevSourceFile
+                typeSubst = emptyMap()
+            }
+        }
+
+        // Emit monomorphized generic interfaces AFTER generic class structs so types are available
         for ((name, info) in interfaces) {
             // Emit only monomorphized copies (not already emitted above as non-generic AST decl)
             if (name !in emittedIfaceNames && info.typeParams.isEmpty()
@@ -376,23 +412,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         emitIfaceInfo(info)
                     }
                 }
-            }
-        }
-
-        // Emit monomorphized generic class instantiations
-        for ((baseName, instantiations) in genericInstantiations) {
-            val templateDecl = genericClassDecls[baseName] ?: continue
-            for (typeArgs in instantiations) {
-                val mangledName = mangledGenericName(baseName, typeArgs)
-                val templateCi = classes[baseName] ?: continue
-                // Set type substitution for this instantiation
-                typeSubst = templateCi.typeParams.zip(typeArgs).toMap()
-                // Switch source file attribution for mem-track
-                val prevSourceFile = currentSourceFile
-                declSourceFile[baseName]?.let { currentSourceFile = it }
-                emitGenericClass(templateDecl, mangledName)
-                currentSourceFile = prevSourceFile
-                typeSubst = emptyMap()
             }
         }
 
@@ -972,6 +991,52 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
+    /**
+     * Scan method bodies and return types of materialized generic classes for further
+     * generic class instantiations. E.g., HashMap<Int,String>.iterator() returns
+     * MapIterator<K,V> which with {K→Int,V→String} becomes MapIterator<Int,String>.
+     * Iterates to fixpoint so transitive discoveries are handled.
+     */
+    private fun scanGenericClassMethodBodiesForInstantiations() {
+        var changed = true
+        while (changed) {
+            changed = false
+            for ((baseName, instantiations) in genericInstantiations.toMap()) {
+                val templateCi = classes[baseName] ?: continue
+                if (!templateCi.isGeneric) continue
+                val templateDecl = genericClassDecls[baseName] ?: continue
+                for (typeArgs in instantiations.toSet()) {
+                    val subst = templateCi.typeParams.zip(typeArgs).toMap()
+                    // Scan method bodies and return types
+                    for (m in templateDecl.members) {
+                        if (m is FunDecl) {
+                            if (m.returnType != null && scanTypeRefWithSubst(m.returnType, subst)) changed = true
+                            for (p in m.params) if (scanTypeRefWithSubst(p.type, subst)) changed = true
+                            if (scanBodyWithSubst(m.body, subst)) changed = true
+                        }
+                    }
+                    // Scan body property types and initializers
+                    for (m in templateDecl.members) {
+                        if (m is PropDecl) {
+                            if (m.type != null && scanTypeRefWithSubst(m.type, subst)) changed = true
+                            if (scanExprWithSubst(m.init, subst)) changed = true
+                        }
+                    }
+                    // Scan ctor param types
+                    for (p in templateDecl.ctorParams) {
+                        if (scanTypeRefWithSubst(p.type, subst)) changed = true
+                    }
+                    // Scan init blocks
+                    for (initBlock in templateDecl.initBlocks) {
+                        if (scanBodyWithSubst(initBlock, subst)) changed = true
+                    }
+                }
+            }
+            // Re-materialize any newly discovered instantiations within the loop
+            if (changed) materializeGenericInstantiations()
+        }
+    }
+
     private fun scanBodyWithSubst(block: Block?, subst: Map<String, String>): Boolean {
         if (block == null) return false
         var found = false
@@ -1313,8 +1378,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val cName = pfx(mangledName)
         val ci = classes[mangledName]!!
 
-        // --- header: typedef struct ---
-        hdr.appendLine("typedef struct {")
+        // --- header: struct definition (forward typedef already emitted) ---
+        hdr.appendLine("struct $cName {")
         for ((name, type) in ci.props) {
             val resolved = resolveTypeName(type)
             if (isFuncType(resolved)) {
@@ -1329,7 +1394,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 hdr.appendLine("    ${cType(type)} $name;")
             }
         }
-        hdr.appendLine("} $cName;")
+        hdr.appendLine("};")
         hdr.appendLine()
 
         // --- constructor ---
@@ -1420,10 +1485,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val allCtorParams = ci.ctorProps + ci.ctorPlainParams
         val paramStr = expandCtorParams(allCtorParams)
         val paramDecl = paramStr.ifEmpty { "void" }
+        // Build argument list for _create call, including $len companions for array params
+        val createArgs = allCtorParams.flatMap { (name, type) ->
+            val resolved = resolveTypeName(type)
+            if (isArrayType(resolved)) listOf(name, "${name}\$len")
+            else if (type.nullable) listOf(name, "${name}\$has")
+            else listOf(name)
+        }.joinToString(", ")
         hdr.appendLine("$cName* ${cName}_new($paramDecl);")
         impl.appendLine("$cName* ${cName}_new($paramDecl) {")
         impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
-        impl.appendLine("    if (\$p) *\$p = ${cName}_create(${allCtorParams.joinToString(", ") { it.first }});")
+        impl.appendLine("    if (\$p) *\$p = ${cName}_create($createArgs);")
         impl.appendLine("    return \$p;")
         impl.appendLine("}")
         impl.appendLine()
@@ -2427,6 +2499,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val allocSize = extractAllocSize(bp.init)
         if (allocSize != null) {
             impl.appendLine("    \$self.${bp.name}\$len = ${genExpr(allocSize)};")
+        } else if (bp.init is NameExpr) {
+            // Copy $len from a ctor param or local variable with the same name
+            val initName = (bp.init as NameExpr).name
+            impl.appendLine("    \$self.${bp.name}\$len = ${initName}\$len;")
         }
     }
 
@@ -2947,21 +3023,101 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 popScope()
                 impl.appendLine("$ind}")
             }
-            // for (item in array/arrayList)  — iterate over elements
+            // for (item in array/collection)  — iterate over elements
             else -> {
-                val arrExpr = genExpr(rangeExpr)
-                val idx = tmp()
                 val arrType = inferExprType(rangeExpr)
-                // Array: use \$len and direct indexing
-                val elemType = arrayElementCType(arrType)
-                impl.appendLine("${ind}for (int32_t $idx = 0; $idx < ${arrExpr}\$len; $idx++) {")
-                impl.appendLine("$ind    $elemType ${s.varName} = ${arrExpr}[$idx];")
-                pushScope(); defineVar(s.varName, arrayElementKtType(arrType))
-                emitBlock(s.body, ind, method)
-                popScope()
-                impl.appendLine("$ind}")
+                val iterInfo = findOperatorIterator(arrType)
+                if (iterInfo != null) {
+                    // Iterator-based: val $it = obj.iterator(); while($it.hasNext()) { val item = $it.next(); ... }
+                    val (iterClass, iterCType, elemKtType, isPointer) = iterInfo
+                    val arrExpr = genExpr(rangeExpr)
+                    flushPreStmts(ind)
+                    val iterVar = tmp()
+                    val selfArg = if (isPointer) arrExpr else "&$arrExpr"
+                    // For interface types, dispatch through vtable
+                    if (arrType != null && interfaces.containsKey(arrType)) {
+                        impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator($arrExpr.obj);")
+                    } else {
+                        val baseClass = if (isPointer) anyIndirectClassName(arrType)!! else arrType!!
+                        impl.appendLine("$ind$iterCType $iterVar = ${pfx(baseClass)}_iterator($selfArg);")
+                    }
+                    impl.appendLine("${ind}while (${pfx(iterClass)}_hasNext(&$iterVar)) {")
+                    val elemCType = cTypeStr(elemKtType)
+                    impl.appendLine("$ind    $elemCType ${s.varName} = ${pfx(iterClass)}_next(&$iterVar);")
+                    pushScope(); defineVar(s.varName, elemKtType)
+                    emitBlock(s.body, ind, method)
+                    popScope()
+                    impl.appendLine("$ind}")
+                } else {
+                    // Array: use $len and direct indexing
+                    val arrExpr = genExpr(rangeExpr)
+                    val idx = tmp()
+                    val elemType = arrayElementCType(arrType)
+                    impl.appendLine("${ind}for (int32_t $idx = 0; $idx < ${arrExpr}\$len; $idx++) {")
+                    impl.appendLine("$ind    $elemType ${s.varName} = ${arrExpr}[$idx];")
+                    pushScope(); defineVar(s.varName, arrayElementKtType(arrType))
+                    emitBlock(s.body, ind, method)
+                    popScope()
+                    impl.appendLine("$ind}")
+                }
             }
         }
+    }
+
+    /**
+     * Check if a type has an `operator fun iterator()` method.
+     * Returns (iteratorClassName, iteratorCType, elementKtType, isPointer) or null.
+     */
+    private data class IteratorInfo(val iterClass: String, val iterCType: String, val elemKtType: String, val isPointer: Boolean)
+
+    private fun findOperatorIterator(type: String?): IteratorInfo? {
+        if (type == null) return null
+        // Direct class
+        if (classes.containsKey(type)) {
+            val iterMethod = classes[type]?.methods?.find { it.name == "iterator" && it.isOperator }
+            if (iterMethod?.returnType != null) {
+                val iterType = resolveMethodReturnType(type, iterMethod.returnType)
+                if (classes.containsKey(iterType)) {
+                    val nextMethod = classes[iterType]?.methods?.find { it.name == "next" }
+                    if (nextMethod?.returnType != null) {
+                        val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
+                        return IteratorInfo(iterType, pfx(iterType), elemType, false)
+                    }
+                }
+            }
+        }
+        // Heap/Ptr/Value class
+        val indirectBase = anyIndirectClassName(type)
+        if (indirectBase != null && classes.containsKey(indirectBase)) {
+            val iterMethod = classes[indirectBase]?.methods?.find { it.name == "iterator" && it.isOperator }
+            if (iterMethod?.returnType != null) {
+                val iterType = resolveMethodReturnType(indirectBase, iterMethod.returnType)
+                if (classes.containsKey(iterType)) {
+                    val nextMethod = classes[iterType]?.methods?.find { it.name == "next" }
+                    if (nextMethod?.returnType != null) {
+                        val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
+                        return IteratorInfo(iterType, pfx(iterType), elemType, true)
+                    }
+                }
+            }
+        }
+        // Interface
+        if (interfaces.containsKey(type)) {
+            val ifaceInfo = interfaces[type]!!
+            val allMethods = collectAllIfaceMethods(ifaceInfo)
+            val iterMethod = allMethods.find { it.name == "iterator" && it.isOperator }
+            if (iterMethod?.returnType != null) {
+                val iterType = resolveMethodReturnType(type, iterMethod.returnType)
+                if (classes.containsKey(iterType)) {
+                    val nextMethod = classes[iterType]?.methods?.find { it.name == "next" }
+                    if (nextMethod?.returnType != null) {
+                        val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
+                        return IteratorInfo(iterType, pfx(iterType), elemType, false)
+                    }
+                }
+            }
+        }
+        return null
     }
 
     // ═══════════════════════════ Expression codegen ═══════════════════
@@ -3339,22 +3495,26 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val ci = classes[mangledName] ?: error("Generic class '$mangledName' not materialized (typeSubst=$typeSubst)")
             val templateDecl = genericClassDecls[name]
             val allParams = ci.ctorProps + ci.ctorPlainParams
-            val filledArgs = fillDefaults(args, allParams.map { Param(it.first, it.second) }, allParams.associate {
+            val ctorParamList = allParams.map { Param(it.first, it.second) }
+            val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
                 val cp = templateDecl?.ctorParams?.find { p -> p.name == it.first }
                 it.first to cp?.default
             })
-            return "${pfx(mangledName)}_create(${filledArgs.joinToString(", ") { genExpr(it.expr) }})"
+            val expandedArgs = expandCallArgs(filledArgs, ctorParamList)
+            return "${pfx(mangledName)}_create($expandedArgs)"
         }
         if (classes.containsKey(name)) {
             val ci = classes[name]!!
             val allParams = ci.ctorProps + ci.ctorPlainParams
-            val filledArgs = fillDefaults(args, allParams.map { Param(it.first, it.second) }, allParams.associate {
+            val ctorParamList = allParams.map { Param(it.first, it.second) }
+            val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
                 // find matching ctor param default
                 val cp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == name })
                     ?.ctorParams?.find { p -> p.name == it.first }
                 it.first to cp?.default
             })
-            return "${pfx(name)}_create(${filledArgs.joinToString(", ") { genExpr(it.expr) }})"
+            val expandedArgs = expandCallArgs(filledArgs, ctorParamList)
+            return "${pfx(name)}_create($expandedArgs)"
         }
 
         // Enum access (should be handled as DotExpr, but just in case)

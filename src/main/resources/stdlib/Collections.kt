@@ -1,10 +1,26 @@
 package ktc
 
+class ListIterator<T>(val buf: Heap<Array<T>>, val size: Int) {
+
+	var idx: Int = 0
+
+	operator fun hasNext(): Boolean {
+		return idx < size
+	}
+
+	operator fun next(): T {
+		val v = buf[idx]
+		idx = idx + 1
+		return v
+	}
+}
+
 interface List<T> : Disposable {
 	val size: Int
 	operator fun get(index: Int): T
 	operator fun contains(value: T): Boolean
 	fun indexOf(value: T): Int
+	operator fun iterator(): ListIterator<T>
 }
 
 interface MutableList<T> : List<T> {
@@ -61,6 +77,10 @@ class ArrayList<T>(capacity: Int) : MutableList<T> {
 
 	override fun clear() {
 		size = 0
+	}
+
+	override operator fun iterator(): ListIterator<T> {
+		return ListIterator<T>(buf, size)
 	}
 
 	override fun dispose() {
