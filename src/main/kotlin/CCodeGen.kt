@@ -991,13 +991,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── var / val ────────────────────────────────────────────────────
 
     private fun emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) {
-        val t = if (s.type != null) resolveTypeName(s.type) else (inferExprType(s.init) ?: "Int")
+        val tRaw = if (s.type != null) resolveTypeName(s.type) else (inferExprType(s.init) ?: "Int")
+        val inferredNullable = s.type == null && tRaw.endsWith("?")
+        val t = if (inferredNullable) tRaw.removeSuffix("?") else tRaw
         val isHeapValNull = t.endsWith("*#")          // Heap<T?> — value-nullable, $has
         val isHeapPtrNull = !isHeapValNull &&          // Heap<T>? — pointer-nullable, NULL
                 isHeapPointerType(t) &&
                 (s.type?.nullable == true || s.init is NullLit)
         val isNullable = !isHeapValNull && !isHeapPtrNull &&
-                (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init))
+                (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init)
+                        || inferredNullable)
 
         // Register type in scope
         defineVar(s.name, when {
@@ -1064,6 +1067,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         val expr = genExprWithNullableOut(s.init, s.name)
                         flushPreStmts(ind)
                         impl.appendLine("${ind}bool ${s.name}\$has = $expr;")
+                    } else if (inferredNullable) {
+                        val expr = genExpr(s.init)
+                        flushPreStmts(ind)
+                        impl.appendLine("$ind$ct ${s.name} = $expr;")
+                        impl.appendLine("${ind}bool ${s.name}\$has = ${expr}\$has;")
                     } else {
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
@@ -1976,6 +1984,32 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             "toByte" -> return "((int8_t)($recv))"
             "toChar" -> return "((char)($recv))"
+            // Nullable string-to-number: toIntOrNull, toLongOrNull, toFloatOrNull, toDoubleOrNull
+            "toIntOrNull" -> if (recvType == "String") {
+                val t = tmp()
+                preStmts += "int32_t $t;"
+                preStmts += "bool ${t}\$has = kt_str_toIntOrNull($recv, &$t);"
+                return t
+            }
+            "toLongOrNull" -> if (recvType == "String") {
+                val t = tmp()
+                preStmts += "int64_t $t;"
+                preStmts += "bool ${t}\$has = kt_str_toLongOrNull($recv, &$t);"
+                return t
+            }
+            "toDoubleOrNull" -> if (recvType == "String") {
+                val t = tmp()
+                preStmts += "double $t;"
+                preStmts += "bool ${t}\$has = kt_str_toDoubleOrNull($recv, &$t);"
+                return t
+            }
+            "toFloatOrNull" -> if (recvType == "String") {
+                val t = tmp()
+                preStmts += "double ${t}_d;"
+                preStmts += "bool ${t}\$has = kt_str_toDoubleOrNull($recv, &${t}_d);"
+                preStmts += "float $t = (float)${t}_d;"
+                return t
+            }
         }
 
         // Array .size → name\$len
@@ -2684,6 +2718,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (method == "toLong") return "Long"
         if (method == "toFloat") return "Float"
         if (method == "toDouble") return "Double"
+        if (method == "toIntOrNull") return "Int?"
+        if (method == "toLongOrNull") return "Long?"
+        if (method == "toFloatOrNull") return "Float?"
+        if (method == "toDoubleOrNull") return "Double?"
         // Heap pointer methods
         val heapBase = heapClassName(recvType)
         if (heapBase != null) {

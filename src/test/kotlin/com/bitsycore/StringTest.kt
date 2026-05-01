@@ -114,4 +114,71 @@ class StringTest : TranspilerTestBase() {
         """)
         r.sourceContains("kt_string_cat")
     }
+
+    // ── toIntOrNull ──────────────────────────────────────────────────
+
+    @Test fun toIntOrNull_valid() {
+        val r = transpileMain("""
+            val s = "42"
+            val n = s.toIntOrNull()
+        """)
+        r.sourceContains("kt_str_toIntOrNull")
+        r.sourceContains("n${'$'}has")
+    }
+
+    @Test fun toIntOrNull_usedWithElvis() {
+        val r = transpileMain("""
+            val s = "abc"
+            val n = s.toIntOrNull() ?: 0
+        """)
+        r.sourceContains("kt_str_toIntOrNull")
+    }
+
+    // ── toLongOrNull ─────────────────────────────────────────────────
+
+    @Test fun toLongOrNull_valid() {
+        val r = transpileMain("""
+            val s = "999"
+            val n = s.toLongOrNull()
+        """)
+        r.sourceContains("kt_str_toLongOrNull")
+        r.sourceContains("n${'$'}has")
+    }
+
+    // ── toDoubleOrNull ───────────────────────────────────────────────
+
+    @Test fun toDoubleOrNull_valid() {
+        val r = transpileMain("""
+            val s = "3.14"
+            val d = s.toDoubleOrNull()
+        """)
+        r.sourceContains("kt_str_toDoubleOrNull")
+        r.sourceContains("d${'$'}has")
+    }
+
+    // ── toFloatOrNull ────────────────────────────────────────────────
+
+    @Test fun toFloatOrNull_valid() {
+        val r = transpileMain("""
+            val s = "1.5"
+            val f = s.toFloatOrNull()
+        """)
+        r.sourceContains("kt_str_toDoubleOrNull")
+        r.sourceContains("(float)")
+        r.sourceContains("f${'$'}has")
+    }
+
+    // ── toIntOrNull with null check ──────────────────────────────────
+
+    @Test fun toIntOrNull_withNullCheck() {
+        val r = transpileMain("""
+            val s = "42"
+            val n = s.toIntOrNull()
+            if (n != null) {
+                println(n)
+            }
+        """)
+        r.sourceContains("n${'$'}has")
+        r.sourceContains("kt_str_toIntOrNull")
+    }
 }

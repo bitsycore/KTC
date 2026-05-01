@@ -3,6 +3,12 @@ package TestProject.Main
 data class Vec2f(val x: Float, val y: Float)
 
 fun main(args: Array<String>) {
+
+	val longe = "10000L".toLongOrNull()
+	val longe2 = "Hello".toLongOrNull()
+
+	println("longe = $longe, longe2 = $longe2")
+
 	val a = nullIfTooBig("Hello world, this is big !")
 	val b = nullIfTooBig("Hello")
 

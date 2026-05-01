@@ -363,3 +363,47 @@ static inline double kt_str_toDouble(kt_String s) {
     buf[n] = '\0';
     return strtod(buf, NULL);
 }
+
+/* ═══════════════════ String → Number nullable parsing ════════════════ */
+
+/* Parse kt_String to int32_t, returning false on failure. */
+static inline bool kt_str_toIntOrNull(kt_String s, int32_t* out) {
+    if (s.len == 0) return false;
+    char buf[32];
+    int32_t n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (size_t)n);
+    buf[n] = '\0';
+    char* end;
+    long v = strtol(buf, &end, 10);
+    if (end == buf || *end != '\0') return false;
+    *out = (int32_t)v;
+    return true;
+}
+
+/* Parse kt_String to int64_t, returning false on failure. */
+static inline bool kt_str_toLongOrNull(kt_String s, int64_t* out) {
+    if (s.len == 0) return false;
+    char buf[32];
+    int32_t n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (size_t)n);
+    buf[n] = '\0';
+    char* end;
+    long long v = strtoll(buf, &end, 10);
+    if (end == buf || *end != '\0') return false;
+    *out = (int64_t)v;
+    return true;
+}
+
+/* Parse kt_String to double, returning false on failure. */
+static inline bool kt_str_toDoubleOrNull(kt_String s, double* out) {
+    if (s.len == 0) return false;
+    char buf[64];
+    int32_t n = s.len < 63 ? s.len : 63;
+    memcpy(buf, s.ptr, (size_t)n);
+    buf[n] = '\0';
+    char* end;
+    double v = strtod(buf, &end);
+    if (end == buf || *end != '\0') return false;
+    *out = v;
+    return true;
+}
