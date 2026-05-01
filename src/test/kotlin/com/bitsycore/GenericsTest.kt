@@ -49,9 +49,8 @@ class GenericsTest : TranspilerTestBase() {
                 val b = Box<Int>(42)
             }
         """)
-        // Heap new + toHeap generated
+        // Heap new generated, toHeap is inlined (no separate function)
         r.headerContains("test_Main_Box_Int* test_Main_Box_Int_new(")
-        r.headerContains("test_Main_Box_Int* test_Main_Box_Int_toHeap(")
     }
 
     @Test fun genericTemplateNotEmitted() {

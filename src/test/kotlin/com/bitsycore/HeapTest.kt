@@ -67,14 +67,15 @@ class HeapTest : TranspilerTestBase() {
         r.sourceContains("*p =")
     }
 
-    // ── .toHeap() → stack to heap ────────────────────────────────────
+    // ── .toHeap() → stack to heap (inlined) ─────────────────────────
 
     @Test fun stackToHeap() {
         val r = transpileMain(
             "val v = Vec2(5.0f, 6.0f)\nval hp = v.toHeap()",
             decls = vec2Decl
         )
-        r.sourceContains("test_Main_Vec2_toHeap(v)")
+        r.sourceContains("malloc(sizeof(test_Main_Vec2))")
+        r.sourceContains("*$") // struct copy: if ($t) *$t = v;
     }
 
     // ── free ─────────────────────────────────────────────────────────

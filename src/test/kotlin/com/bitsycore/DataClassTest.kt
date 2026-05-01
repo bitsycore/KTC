@@ -90,7 +90,7 @@ class DataClassTest : TranspilerTestBase() {
             "val v = Vec2(1.0f, 2.0f)\nval hp = v.toHeap()",
             decls = vec2Decl
         )
-        r.sourceContains("test_Main_Vec2_toHeap")
+        r.sourceContains("malloc(sizeof(test_Main_Vec2))")
     }
 
     // ── new (heap constructor) ───────────────────────────────────────
