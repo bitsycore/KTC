@@ -2271,8 +2271,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 popScope()
                 impl.appendLine("$ind}")
             }
-            // for (i in a until b)
-            rangeExpr is BinExpr && rangeExpr.op == "until" -> {
+            // for (i in a until b)  or  for (i in a..<b)
+            rangeExpr is BinExpr && (rangeExpr.op == "until" || rangeExpr.op == "..<") -> {
                 val inc = if (step != null) "${s.varName} += $step" else "${s.varName}++"
                 impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} < ${genExpr(rangeExpr.right)}; $inc) {")
                 pushScope(); defineVar(s.varName, "Int")

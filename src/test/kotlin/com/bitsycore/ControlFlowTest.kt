@@ -95,6 +95,11 @@ class ControlFlowTest : TranspilerTestBase() {
         r.sourceContains("for (int32_t i = 0; i < 5; i++)")
     }
 
+    @Test fun forRangeExclusive() {
+        val r = transpileMain("for (i in 0..<5) { println(i) }")
+        r.sourceContains("for (int32_t i = 0; i < 5; i++)")
+    }
+
     @Test fun forDownTo() {
         val r = transpileMain("for (i in 5 downTo 0) { println(i) }")
         r.sourceContains("for (int32_t i = 5; i >= 0; i--)")
@@ -107,6 +112,12 @@ class ControlFlowTest : TranspilerTestBase() {
 
     @Test fun forUntilStep() {
         val r = transpileMain("for (i in 0 until 10 step 3) { println(i) }")
+        r.sourceContains("i < 10")
+        r.sourceContains("i += 3")
+    }
+
+    @Test fun forRangeExclusiveStep() {
+        val r = transpileMain("for (i in 0..<10 step 3) { println(i) }")
         r.sourceContains("i < 10")
         r.sourceContains("i += 3")
     }

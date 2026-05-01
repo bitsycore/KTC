@@ -182,6 +182,7 @@ class Lexer(private val src: String) {
     private fun lexPunct() {
         val c = cur()
         val nc = if (pos + 1 < src.length) src[pos + 1] else '\u0000'
+        val nnc = if (pos + 2 < src.length) src[pos + 2] else '\u0000'
         when {
             c == '(' -> { advance(); emit(TokenType.LPAREN, "(") }
             c == ')' -> { advance(); emit(TokenType.RPAREN, ")") }
@@ -193,6 +194,7 @@ class Lexer(private val src: String) {
             c == ':' && nc == ':' -> { advance(); advance(); emit(TokenType.COLON_COLON, "::") }
             c == ':' -> { advance(); emit(TokenType.COLON, ":") }
             c == ';' -> { advance(); emit(TokenType.SEMICOLON, ";") }
+            c == '.' && nc == '.' && nnc == '<' -> { advance(); advance(); advance(); emit(TokenType.DOT_DOT, "..<") }
             c == '.' && nc == '.' -> { advance(); advance(); emit(TokenType.DOT_DOT, "..") }
             c == '.' -> { advance(); emit(TokenType.DOT, ".") }
             c == '+' && nc == '+' -> { advance(); advance(); emit(TokenType.PLUS_PLUS, "++") }

@@ -16,7 +16,7 @@ class MutableList<T>(var capacity: Int) {
 		size = size + 1
 	}
 
-	fun get(index: Int): Int {
+	fun get(index: Int): T {
 		return buf[index]
 	}
 
@@ -69,11 +69,33 @@ fun MutableList<*>.sizeOf(): Int {
 	return size
 }
 
+data class Vec2(val x: Int, val y: Int)
+
 // ── main ─────────────────────────────────────────────────────────────
 
 fun main(args: Array<String>) {
+
+	val listVec = malloc<MutableList<Vec2>>(8)!!
+	defer free(listVec)
+	val v2 = listVec.value()
+	defer v2.dispose()
+
+	v2.add(Vec2(1,1))
+	v2.add(Vec2(2,2))
+	v2.add(Vec2(3,3))
+	v2.add(Vec2(4,4))
+	v2.add(Vec2(5,5))
+	v2.add(Vec2(6,6))
+	v2.add(Vec2(7,7))
+	v2.add(Vec2(8,8))
+	v2.add(Vec2(9,9))
+	v2.add(Vec2(0,0))
+
+	for(i in 0..<v2.size) {
+		println("v2.get($i) = ${v2.get(i)}")
+	}
+
 	val list = malloc<MutableList<Int>>(8)!!
-	
 	val v = list.value()
 
 	v.add(10)
