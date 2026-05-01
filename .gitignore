@@ -47,3 +47,6 @@ bin/
 ### KtC test output ###
 /test_out/
 /tests/out/
+
+
+.idea/
