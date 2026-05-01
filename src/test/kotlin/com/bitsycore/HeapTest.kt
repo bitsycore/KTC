@@ -4,7 +4,7 @@ import org.junit.jupiter.api.assertThrows
 import kotlin.test.Test
 
 /**
- * Tests for Heap<T> (heap-allocated objects), malloc, free, typed pointers.
+ * Tests for Heap<T> (heap-allocated objects), Ptr<T>, Value<T>, malloc, free.
  */
 class HeapTest : TranspilerTestBase() {
 
@@ -17,7 +17,7 @@ class HeapTest : TranspilerTestBase() {
         r.sourceContains("test_Main_Vec2_new(10.0f, 20.0f)")
     }
 
-    // ── Heap field access ────────────────────────────────────────────
+    // ── Heap<T> field access (auto-deref through pointer) ──────────
 
     @Test fun heapFieldRead() {
         val r = transpileMain(
@@ -29,7 +29,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapFieldWrite() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)\np.x = 99.0f",
+            "val p = malloc<Vec2>(10.0f, 20.0f)!!\np.x = 99.0f",
             decls = vec2Decl
         )
         r.sourceContains("p->x = 99.0f;")
@@ -180,7 +180,8 @@ class HeapTest : TranspilerTestBase() {
             "val h = malloc<Vec2>(1.0f, 2.0f)!!\nval p = h.toPtr()",
             decls = vec2Decl
         )
-        r.sourceContains("\$heap = true;")
+        // toPtr() is identity — same pointer, just changes type
+        r.sourceContains("= h;")
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -195,10 +196,9 @@ class HeapTest : TranspilerTestBase() {
             decls = vec2Decl
         )
         r.sourceContains("&v")
-        r.sourceContains("\$heap = false;")
     }
 
-    // ── Ptr field access (auto-deref) ────────────────────────────────
+    // ── Ptr field access (auto-deref) ──────────────────────────────
 
     @Test fun ptrFieldAccess() {
         val r = transpileMain(
@@ -206,27 +206,6 @@ class HeapTest : TranspilerTestBase() {
             decls = vec2Decl
         )
         r.sourceContains("p->x")
-    }
-
-    // ── Ptr.isHeap() ─────────────────────────────────────────────────
-
-    @Test fun ptrIsHeap() {
-        val r = transpileMain(
-            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\nprintln(p.isHeap())",
-            decls = vec2Decl
-        )
-        r.sourceContains("p\$heap")
-    }
-
-    // ── Ptr.asHeap() → nullable ──────────────────────────────────────
-
-    @Test fun ptrAsHeap() {
-        val r = transpileMain("""
-            val v = Vec2(1.0f, 2.0f)
-            val p = v.toPtr()
-            val h = p.asHeap()
-        """, decls = vec2Decl)
-        r.sourceContains("p\$heap")
     }
 
     // ── Ptr.value() → Value<T> ───────────────────────────────────────
@@ -258,6 +237,16 @@ class HeapTest : TranspilerTestBase() {
             decls = vec2Decl
         )
         r.sourceContains("*")
+    }
+
+    // ── Ptr field access through .value() ────────────────────────────
+
+    @Test fun ptrValueFieldAccess() {
+        val r = transpileMain(
+            "val v = Vec2(5.0f, 6.0f)\nval p = v.toPtr()\nprintln(p.value().x)",
+            decls = vec2Decl
+        )
+        r.sourceContains("->x")
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -364,30 +353,12 @@ class HeapTest : TranspilerTestBase() {
         r.sourceContains("(int32_t*)calloc((size_t)(10), sizeof(int32_t))")
     }
 
-    // ── Pointer<Array<T>> type resolution ────────────────────────────
-
-    @Test fun pointerArrayIntType() {
-        val r = transpileMain("var buf: Pointer<Array<Int>> = malloc<Array<Int>>(10)")
-        r.sourceContains("int32_t* buf")
-        r.sourceContains("(int32_t*)malloc(sizeof(int32_t) * (size_t)(10))")
-    }
-
-    @Test fun pointerArrayIntIndexRead() {
-        val r = transpileMain("val buf: Pointer<Array<Int>> = malloc<Array<Int>>(10)\nprintln(buf[0])")
-        r.sourceContains("buf[0]")
-    }
-
-    @Test fun pointerArrayIntIndexWrite() {
-        val r = transpileMain("var buf: Pointer<Array<Int>> = malloc<Array<Int>>(10)\nbuf[0] = 42")
-        r.sourceContains("buf[0] = 42;")
-    }
-
     // ── Body prop with initializer referencing ctor param ────────────
 
     @Test fun bodyPropInitFromCtorParam() {
         val decl = """
             class Buf(var capacity: Int) {
-                var buf: Pointer<Array<Int>> = malloc<Array<Int>>(capacity)
+                var buf: Heap<Array<Int>> = malloc<Array<Int>>(capacity)
             }
         """
         val r = transpileMain("val b = Buf(16)", decls = decl)

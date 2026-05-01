@@ -2275,16 +2275,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 (s.type?.nullable == true || s.init is NullLit || inferredNullable)
         val isValPtrNull  = !isAnyValNull && isValueType(t) &&
                 (s.type?.nullable == true || s.init is NullLit || inferredNullable)
-        // Raw pointer nullable: "Int*", "Pointer" etc. — not class-based, uses NULL
+        // Raw pointer nullable: "Int*" etc. — not class-based, uses NULL
         val isRawPtrNull  = !isAnyValNull && !isHeapPointerType(t) && !isPtrType(t) && !isValueType(t) &&
-                (t.endsWith("*") || t == "Pointer") && (inferredNullable || isAlloc)
+                t.endsWith("*") && (inferredNullable || isAlloc)
         val isAnyPtrNull  = isHeapPtrNull || isPtrPtrNull || isValPtrNull || isRawPtrNull  // pointer-nullable, NULL
 
         val isNullable = !isAnyValNull && !isAnyPtrNull &&
                 (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init)
                         || inferredNullable)
 
-        val isPtr  = isPtrType(t) || isPtrValNull || isPtrPtrNull           // Ptr<T> — needs $heap companion
+        val isPtr  = isPtrType(t) || isPtrValNull || isPtrPtrNull
         val isInferredPtr = inferredPtr                                     // init expr returned a Ptr type
 
         // Register type in scope
@@ -2309,8 +2309,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         val ct = cTypeStr(t)
-        // Don't const class types, Pointer, typed pointers, nullable, arrays, or interface types
-        val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t) && t != "Pointer"
+        // Don't const class types, typed pointers, nullable, arrays, or interface types
+        val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t)
             && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("^") && !t.endsWith("^#")
             && !t.endsWith("&") && !t.endsWith("&#")
             && !isArrayType(t)
@@ -2327,24 +2327,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     flushPreStmts(ind)
                     impl.appendLine("$ind$ct ${s.name} = $expr;")
                     impl.appendLine("${ind}bool ${s.name}\$has = true;")
-                    if (isPtr || isInferredPtr) {
-                        impl.appendLine("${ind}bool ${s.name}\$heap = ${expr}\$heap;")
-                    }
                 }
                 // ── Heap<T>? / Ptr<T>? / Value<T>? : pointer nullable via NULL ──
                 isAnyPtrNull -> {
                     if (s.init is NullLit) {
                         impl.appendLine("$ind$ct ${s.name} = NULL;")
-                        if (isPtr || isInferredPtr) {
-                            impl.appendLine("${ind}bool ${s.name}\$heap = false;")
-                        }
                     } else {
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
                         impl.appendLine("$ind$ct ${s.name} = $expr;")
-                        if (isPtr || isInferredPtr) {
-                            impl.appendLine("${ind}bool ${s.name}\$heap = ${expr}\$heap;")
-                        }
                     }
                 }
                 // ── Value nullable (existing system with $has) ──
@@ -2398,10 +2389,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (isArrayType(t)) {
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = ${expr}\$len;")
                     }
-                    // Ptr<T> needs $heap companion
-                    if (isPtr || isInferredPtr) {
-                        impl.appendLine("${ind}bool ${s.name}\$heap = ${expr}\$heap;")
-                    }
                 }
             }
         } else {
@@ -2409,16 +2396,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 isAnyValNull -> {
                     impl.appendLine("$ind$ct ${s.name} = NULL; /* warning: must be initialized */")
                     impl.appendLine("${ind}bool ${s.name}\$has = false;")
-                    if (isPtr) impl.appendLine("${ind}bool ${s.name}\$heap = false;")
                 }
                 isAnyPtrNull -> {
                     impl.appendLine("$ind$ct ${s.name} = NULL;")
-                    if (isPtr) impl.appendLine("${ind}bool ${s.name}\$heap = false;")
                 }
                 else -> {
                     impl.appendLine("$ind$ct ${s.name} = ${defaultVal(t)};")
                     if (isNullable) impl.appendLine("${ind}bool ${s.name}\$has = false;")
-                    if (isPtr) impl.appendLine("${ind}bool ${s.name}\$heap = false;")
                 }
             }
         }
@@ -3792,13 +3776,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 // .toHeap() on heap pointer — identity, already on heap
                 "toHeap" -> return recv
-                // .toPtr() → same pointer with $heap = true
-                "toPtr" -> {
-                    val t = tmp()
-                    preStmts += "${cTypeStr("$heapBase*")} $t = $recv;"
-                    preStmts += "bool ${t}\$heap = true;"
-                    return t
-                }
+                // .toPtr() → same pointer, just changes type
+                "toPtr" -> return recv
             }
             // general class method — pointer passed directly
             val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
@@ -3828,17 +3807,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "copy" -> if (classes[ptrBase]?.isData == true) {
                     return genDataClassCopy(recv, ptrBase, args, heap = true)
                 }
-                // .isHeap() → $heap companion
-                "isHeap" -> return "${recv}\$heap"
-                // .asHeap() → nullable: $heap ? p : NULL
-                "asHeap" -> {
-                    val t = tmp()
-                    preStmts += "${cTypeStr("$ptrBase*")} $t = ${recv}\$heap ? $recv : NULL;"
-                    return t
-                }
                 // .toPtr() → identity
                 "toPtr" -> return recv
-                // .toHeap() → only valid if isHeap
+                // .toHeap() → identity (same pointer)
                 "toHeap" -> return recv
             }
             // general class method — pointer passed directly
@@ -3852,13 +3823,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             when (method) {
                 // .deref() → stack copy: *p
                 "deref" -> return "(*$recv)"
-                // .toPtr() → same pointer, $heap unknown (conservative false)
-                "toPtr" -> {
-                    val t = tmp()
-                    preStmts += "${cTypeStr("$valBase*")} $t = $recv;"
-                    preStmts += "bool ${t}\$heap = false;"
-                    return t
-                }
+                // .toPtr() → same pointer, just changes type
+                "toPtr" -> return recv
             }
             // All other method calls → class method, pointer passed directly
             val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
@@ -3903,11 +3869,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 preStmts += "if ($t) *$t = $recv;"
                 return t
             }
-            // .toPtr() → &value, $heap = false
+            // .toPtr() → &value
             if (method == "toPtr") {
                 val t = tmp()
                 preStmts += "${pfx(recvType)}* $t = &$recv;"
-                preStmts += "bool ${t}\$heap = false;"
                 return t
             }
             val nullableRecv = hasNullableReceiverExt(recvType, method)
@@ -4026,12 +3991,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.name == "size" && recvType != null && isArrayType(recvType)) return "${recv}\$len"
         if (e.name == "length" && recvType == "String") return "$recv.len"
 
-        // Heap class pointer: p->field
-        if (heapClassName(recvType) != null) {
-            return "$recv->${e.name}"
-        }
-        // Ptr<T> or Value<T>: p->field (same deref as Heap)
-        if (ptrClassName(recvType) != null || valueClassName(recvType) != null) {
+        // Heap<T> / Ptr<T> / Value<T>: p->field (auto-deref through pointer)
+        if (heapClassName(recvType) != null || ptrClassName(recvType) != null || valueClassName(recvType) != null) {
             return "$recv->${e.name}"
         }
 
@@ -4060,10 +4021,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val innerType = inferExprType(e.expr)
         val loc = "$sourceFileName:$currentStmtLine"
 
-        // Pointer-nullable: type ends with "*", "^", "&", or is "Pointer"
+        // Pointer-nullable: type ends with "*", "^", or "&"
         val baseType = innerType?.removeSuffix("?")?.removeSuffix("#") ?: ""
         val isPtr = baseType.endsWith("*") || baseType.endsWith("^") || baseType.endsWith("&")
-                || baseType == "Pointer" || isAllocCall(e.expr)
+                || isAllocCall(e.expr)
 
         if (isPtr) {
             val ct = cTypeStr(baseType.ifEmpty { "void*" })
@@ -4556,7 +4517,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val resolvedName = typeSubst[ta.name] ?: ta.name
                     return "${resolvedName}*"
                 }
-                return "Pointer"
+                return "void*"
             }
             if (name == "intArrayOf" || name == "IntArray") return "IntArray"
             if (name == "longArrayOf" || name == "LongArray") return "LongArray"
@@ -4685,8 +4646,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "deref" -> ptrBase                      // .deref() → T (stack copy)
                 "set" -> "Unit"
                 "copy" -> ptrBase
-                "isHeap" -> "Boolean"
-                "asHeap" -> "${ptrBase}*?"              // .asHeap() → Heap<T>? (pointer-nullable)
                 "toPtr" -> "${ptrBase}^"                // identity
                 "toHeap" -> "${ptrBase}*"
                 else -> null
@@ -4868,7 +4827,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "Char"    -> "char"
         t == "String"  -> "kt_String"
         t == "Unit"    -> "void"
-        t == "Pointer" -> "void*"
         t == "IntArray"     -> "int32_t*"
         t == "LongArray"    -> "int64_t*"
         t == "FloatArray"   -> "float*"
@@ -4964,14 +4922,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 else      -> { classArrayTypes.add(elem); "${elem}Array" }
             }
         }
-        if (t.name == "Pointer" && t.typeArgs.isNotEmpty()) {
-            val inner = t.typeArgs[0]
-            // Pointer<Array<Int>> → "Int*" (element type pointer, same C representation)
-            if (inner.name == "Array" && inner.typeArgs.isNotEmpty()) {
-                return "${resolveTypeName(inner.typeArgs[0])}*"
-            }
-            return "${resolveTypeName(inner)}*"
-        }
         // Heap<MyClass> → "MyClass*"; Heap<MyClass?> → "MyClass*#"
         // Heap<Array<T>> → same C type as Array<T> (already a pointer)
         if (t.name == "Heap" && t.typeArgs.isNotEmpty()) {
@@ -5010,7 +4960,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "Boolean" -> "false"
         t == "Char"   -> "'\\0'"
         t == "String" -> "kt_str(\"\")"
-        t == "Pointer" -> "NULL"
         t.endsWith("*") || t.endsWith("*?") || t.endsWith("*#") -> "NULL"
         t.endsWith("^") || t.endsWith("^?") || t.endsWith("^#") -> "NULL"
         t.endsWith("&") || t.endsWith("&?") || t.endsWith("&#") -> "NULL"
@@ -5075,7 +5024,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "Boolean" -> "%s"
         t == "Char"    -> "%c"
         t == "String"  -> "%.*s"
-        t == "Pointer" -> "%p"
         t.endsWith("*") || t.endsWith("*?") || t.endsWith("*#") -> "%p"
         else           -> "%.*s"       // assume toString → kt_String
     }
