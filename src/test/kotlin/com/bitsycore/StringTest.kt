@@ -113,6 +113,9 @@ class StringTest : TranspilerTestBase() {
             val c = a + b
         """)
         r.sourceContains("kt_string_cat")
+        // Verify buffer declaration and 4-arg call: (buf, sizeof(buf), a, b)
+        r.sourceMatches(Regex("""char \$\w+\[512\];"""))
+        r.sourceMatches(Regex("""kt_string_cat\(\$\w+, sizeof\(\$\w+\), a, b\)"""))
     }
 
     // ── toIntOrNull ──────────────────────────────────────────────────
@@ -180,5 +183,104 @@ class StringTest : TranspilerTestBase() {
         """)
         r.sourceContains("n${'$'}has")
         r.sourceContains("kt_str_toIntOrNull")
+    }
+
+    // ── String character indexing ───────────────────────────────────
+
+    @Test fun stringCharIndex() {
+        val r = transpileMain("""
+            val s = "hello"
+            val ch: Char = s[0]
+        """)
+        r.sourceContains("s.ptr[0]")
+    }
+
+    @Test fun stringCharIndexVariable() {
+        val r = transpileMain("""
+            val s = "hello"
+            val i = 2
+            val ch = s[i]
+        """)
+        r.sourceContains("s.ptr[i]")
+    }
+
+    @Test fun stringCharIndexInExpression() {
+        val r = transpileMain("""
+            val s = "abc"
+            val isA = s[0] == 'a'
+        """)
+        r.sourceContains("s.ptr[0]")
+    }
+
+    // ── String.substring ─────────────────────────────────────────────
+
+    @Test fun substringTwoArgs() {
+        val r = transpileMain("""
+            val s = "hello world"
+            val sub = s.substring(0, 5)
+        """)
+        r.sourceContains("kt_string_substring(s, 0, 5)")
+    }
+
+    @Test fun substringOneArg() {
+        val r = transpileMain("""
+            val s = "hello"
+            val tail = s.substring(2)
+        """)
+        r.sourceContains("kt_string_substring(s, 2, s.len)")
+    }
+
+    // ── String.startsWith / endsWith ─────────────────────────────────
+
+    @Test fun stringStartsWith() {
+        val r = transpileMain("""
+            val s = "hello"
+            val ok = s.startsWith("hel")
+        """)
+        r.sourceContains("memcmp(s.ptr,")
+    }
+
+    @Test fun stringEndsWith() {
+        val r = transpileMain("""
+            val s = "hello"
+            val ok = s.endsWith("llo")
+        """)
+        r.sourceContains("memcmp(s.ptr + s.len -")
+    }
+
+    // ── String.contains / indexOf ────────────────────────────────────
+
+    @Test fun stringContains() {
+        val r = transpileMain("""
+            val s = "hello world"
+            val found = s.contains("world")
+        """)
+        r.sourceContains("memcmp(s.ptr +")
+    }
+
+    @Test fun stringIndexOf() {
+        val r = transpileMain("""
+            val s = "hello world"
+            val idx = s.indexOf("world")
+        """)
+        r.sourceContains("memcmp(s.ptr +")
+    }
+
+    // ── String.isEmpty / isNotEmpty ──────────────────────────────────
+
+    @Test fun stringIsEmpty() {
+        val r = transpileMain("""
+            val s = "hello"
+            val empty = s.isEmpty()
+        """)
+        r.sourceContains("(s.len == 0)")
+    }
+
+    @Test fun stringIsNotEmpty() {
+        val r = transpileMain("""
+            val s = "hello"
+            val notEmpty = s.isNotEmpty()
+        """)
+        r.sourceContains("(s.len > 0)")
     }
 }

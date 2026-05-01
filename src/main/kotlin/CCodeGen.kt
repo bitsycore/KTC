@@ -53,6 +53,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val enums    = mutableMapOf<String, EnumInfo>()
     private val objects  = mutableMapOf<String, ObjInfo>()
     private val funSigs  = mutableMapOf<String, FunSig>()
+    private val topProps = mutableSetOf<String>()  // top-level property names (need pfx)
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
     private val interfaces = mutableMapOf<String, IfaceInfo>()
 
@@ -451,7 +452,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     funSigs[d.name] = FunSig(d.params, d.returnType)
                 }
             }
-            is PropDecl  -> { /* top-level props handled during emit */ }
+            is PropDecl  -> { topProps.add(d.name) }
         }
     }
 
@@ -1087,7 +1088,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine("$cRet ${cClass}_${f.name}($allParams) {")
 
         pushScope()
-        for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+        for (p in f.params) {
+            val resolved = resolveTypeName(p.type)
+            defineVar(p.name, when {
+                p.type.nullable -> "${resolved}?"
+                classes.containsKey(resolved) -> "${resolved}*"
+                else -> resolved
+            })
+        }
         // class props accessible via self->
         val ci = classes[className]
         if (ci != null) for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
@@ -1132,7 +1140,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         pushScope()
-        for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+        for (p in f.params) {
+            val resolved = resolveTypeName(p.type)
+            defineVar(p.name, when {
+                p.type.nullable -> "${resolved}?"
+                classes.containsKey(resolved) -> "${resolved}*"
+                else -> resolved
+            })
+        }
         if (isClassType) {
             val ci = classes[recvTypeName]!!
             for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
@@ -1186,7 +1201,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             currentFnReturnType = if (f.returnType != null) resolveTypeName(f.returnType) else ""
 
             pushScope()
-            for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+            for (p in f.params) {
+                val resolved = resolveTypeName(p.type)
+                defineVar(p.name, when {
+                    p.type.nullable -> "${resolved}?"
+                    classes.containsKey(resolved) -> "${resolved}*"
+                    else -> resolved
+                })
+            }
             val savedDefers = deferStack.toList(); deferStack.clear()
             if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = false)
             if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = false)
@@ -1249,7 +1271,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
 
             pushScope()
-            for (p in f.params) defineVar(p.name, resolveTypeName(p.type))
+            for (p in f.params) {
+                val resolved = resolveTypeName(p.type)
+                defineVar(p.name, when {
+                    p.type.nullable -> "${resolved}?"
+                    classes.containsKey(resolved) -> "${resolved}*"
+                    else -> resolved
+                })
+            }
             if (isClassType) {
                 val ci = classes[mangledRecvName]!!
                 for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
@@ -1566,7 +1595,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         } else {
             for (p in f.params) {
                 val resolved = resolveTypeName(p.type)
-                defineVar(p.name, if (p.type.nullable) "${resolved}?" else resolved)
+                defineVar(p.name, when {
+                    p.type.nullable -> "${resolved}?"
+                    classes.containsKey(resolved) -> "${resolved}*"  // class params are pointers (reference semantics)
+                    else -> resolved
+                })
             }
         }
         val savedDefers = deferStack.toList()
@@ -1709,10 +1742,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         val ct = cTypeStr(t)
-        // Don't const class types, Pointer, typed pointers, nullable, ArrayList, HashMap, or interface types
+        // Don't const class types, Pointer, typed pointers, nullable, ArrayList, HashMap, arrays, or interface types
         val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t) && t != "Pointer"
             && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("^") && !t.endsWith("^#")
             && !t.endsWith("&") && !t.endsWith("&#") && !t.endsWith("ArrayList") && !isHashMapType(t)
+            && !isArrayType(t)
             && !isNullable && !isAnyPtrNull && !isAnyValNull) "const " else ""
 
         if (s.init != null) {
@@ -1793,6 +1827,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)
                     impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
+                    // Array type: emit $len companion (copy from temp's $len)
+                    if (isArrayType(t)) {
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = ${expr}\$len;")
+                    }
                     // Ptr<T> needs $heap companion
                     if (isPtr || isInferredPtr) {
                         impl.appendLine("${ind}bool ${s.name}\$heap = ${expr}\$heap;")
@@ -2452,6 +2490,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ═══════════════════════════ Expression codegen ═══════════════════
 
+    /** Generate an expression for use as a C function argument.
+     *  String literals are emitted as raw C strings (not kt_str wrapped). */
+    private fun genCArg(e: Expr): String = when (e) {
+        is StrLit -> "\"${escapeStr(e.value)}\""
+        else -> genExpr(e)
+    }
+
     fun genExpr(e: Expr): String = when (e) {
         is IntLit    -> "${e.value}"
         is LongLit   -> "${e.value}LL"
@@ -2482,6 +2527,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 preStmts.add("$keyC $kt = $key;")
                 preStmts.add("int32_t $fi = kt_map_find(&$obj, &$kt, ${hashFnName(keyKt)}, ${eqFnName(keyKt)});")
                 "($fi >= 0 ? (($valC*)$obj.vals)[$fi] : ($valC){0})"
+            } else if (objType == "String") {
+                // String indexing: str[i] → str.ptr[i] (returns char)
+                "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
             } else if (objType != null && objType.endsWith("ArrayList")) {
                 // ArrayList: list[idx] → TypeName_get(&list, idx)
                 "${cTypeStr(objType)}_get(&${genExpr(e.obj)}, ${genExpr(e.index)})"
@@ -2512,6 +2560,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             return e.name
         }
+        // Top-level property: apply package prefix
+        if (e.name in topProps) return pfx(e.name)
         return e.name
     }
 
@@ -2572,9 +2622,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun genStringConcat(e: BinExpr): String {
         val buf = tmp()
-        // We can't declare a local inside an expression, so we use a compound literal trick:
-        // For now, generate a kt_string_cat_stack helper
-        return "kt_string_cat($buf, ${genExpr(e.left)}, ${genExpr(e.right)})"
+        preStmts += "char ${buf}[512];"
+        return "kt_string_cat($buf, sizeof($buf), ${genExpr(e.left)}, ${genExpr(e.right)})"
     }
 
     // ── function / constructor call ──────────────────────────────────
@@ -2582,6 +2631,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun genCall(e: CallExpr): String {
         // Method call: DotExpr(receiver, method)(args)
         if (e.callee is DotExpr) {
+            // C package passthrough: c.printf(...) → printf(...)
+            // String literals are emitted as raw C strings (not kt_str wrapped)
+            if (e.callee.obj is NameExpr && (e.callee.obj as NameExpr).name == "c") {
+                val cFnName = e.callee.name
+                val argStr = e.args.joinToString(", ") { genCArg(it.expr) }
+                return "$cFnName($argStr)"
+            }
             // Reject non-safe call on nullable receiver (unless the extension accepts nullable receiver)
             val recvType = inferExprType(e.callee.obj)
             if (recvType != null && recvType.endsWith("?")) {
@@ -2666,18 +2722,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return tRealloc(genExpr(args[0].expr), "(size_t)(${genExpr(args[1].expr)})")
             }
             "free"    -> return tFree(genExpr(args[0].expr))
-            // C standard library passthrough (no prefix)
-            "printf", "fprintf", "sprintf", "snprintf", "puts",
-            "scanf", "sscanf",
-            "memcpy", "memset", "memmove",
-            "strlen", "strcmp", "strncmp", "strcpy", "strncpy",
-            "abs", "exit", "atoi", "atof",
-            "sqrt", "sin", "cos", "tan", "pow", "log", "exp", "floor", "ceil", "fabs",
-            "rand", "srand",
-            "fopen", "fclose", "fread", "fwrite", "fgets", "fputs" -> {
-                val expandedArgs = expandCallArgs(args, null)
-                return "$name($expandedArgs)"
-            }
             "mutableListOf", "arrayListOf" -> {
                 return genMutableListOf(args)
             }
@@ -2850,11 +2894,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     parts += expr
                 }
             } else {
-                // Auto-dereference: if param expects a class by value but arg is a Heap/Value/Ptr to that class
                 val argType = inferExprType(arg.expr)
-                if (paramType != null && argType != null && classes.containsKey(paramType) &&
-                    (argType == "${paramType}*" || argType == "${paramType}&" || argType == "${paramType}^")) {
-                    parts += "(*$expr)"
+                if (paramType != null && classes.containsKey(paramType)) {
+                    // Param is a class type — passed by pointer for reference semantics
+                    if (argType != null && (argType == "${paramType}*" || argType == "${paramType}&" || argType == "${paramType}^")) {
+                        // Already a pointer — pass directly
+                        parts += expr
+                    } else {
+                        // Stack struct — take address
+                        parts += "&$expr"
+                    }
                 } else {
                     parts += expr
                 }
@@ -2926,6 +2975,39 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 preStmts += "bool ${t}\$has = kt_str_toDoubleOrNull($recv, &${t}_d);"
                 preStmts += "float $t = (float)${t}_d;"
                 return t
+            }
+            "substring" -> if (recvType == "String") {
+                val from = genExpr(args[0].expr)
+                val to = if (args.size >= 2) genExpr(args[1].expr) else "$recv.len"
+                return "kt_string_substring($recv, $from, $to)"
+            }
+            "startsWith" -> if (recvType == "String") {
+                val prefix = genExpr(args[0].expr)
+                return "($recv.len >= $prefix.len && memcmp($recv.ptr, $prefix.ptr, (size_t)$prefix.len) == 0)"
+            }
+            "endsWith" -> if (recvType == "String") {
+                val suffix = genExpr(args[0].expr)
+                return "($recv.len >= $suffix.len && memcmp($recv.ptr + $recv.len - $suffix.len, $suffix.ptr, (size_t)$suffix.len) == 0)"
+            }
+            "contains" -> if (recvType == "String") {
+                val sub = genExpr(args[0].expr)
+                val t = tmp()
+                preStmts += "bool $t = false;"
+                preStmts += "for (int32_t ${t}_i = 0; ${t}_i <= $recv.len - $sub.len; ${t}_i++) { if (memcmp($recv.ptr + ${t}_i, $sub.ptr, (size_t)$sub.len) == 0) { $t = true; break; } }"
+                return t
+            }
+            "indexOf" -> if (recvType == "String") {
+                val sub = genExpr(args[0].expr)
+                val t = tmp()
+                preStmts += "int32_t $t = -1;"
+                preStmts += "for (int32_t ${t}_i = 0; ${t}_i <= $recv.len - $sub.len; ${t}_i++) { if (memcmp($recv.ptr + ${t}_i, $sub.ptr, (size_t)$sub.len) == 0) { $t = ${t}_i; break; } }"
+                return t
+            }
+            "isEmpty" -> if (recvType == "String") {
+                return "($recv.len == 0)"
+            }
+            "isNotEmpty" -> if (recvType == "String") {
+                return "($recv.len > 0)"
             }
         }
 
@@ -3177,6 +3259,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── dot access (property, enum) ──────────────────────────────────
 
     private fun genDot(e: DotExpr): String {
+        // C package passthrough: c.EXIT_SUCCESS → EXIT_SUCCESS, c.NULL → NULL
+        if (e.obj is NameExpr && e.obj.name == "c") {
+            return e.name
+        }
+
         val recvType = inferExprType(e.obj)
         val recv = genExpr(e.obj)
 
@@ -3825,6 +3912,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun inferMethodReturnType(dot: DotExpr, args: List<Arg>): String? {
+        // C package: can't infer return type of C functions
+        if (dot.obj is NameExpr && dot.obj.name == "c") return null
         val recvType = inferExprType(dot.obj) ?: return null
         val method = dot.name
         if (method == "toString") return "String"
@@ -3836,6 +3925,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (method == "toLongOrNull") return "Long?"
         if (method == "toFloatOrNull") return "Float?"
         if (method == "toDoubleOrNull") return "Double?"
+        // String methods
+        if (recvType == "String") {
+            return when (method) {
+                "substring" -> "String"
+                "startsWith", "endsWith", "contains", "isEmpty", "isNotEmpty" -> "Boolean"
+                "indexOf" -> "Int"
+                else -> null
+            }
+        }
         // Heap pointer methods
         val heapBase = heapClassName(recvType)
         if (heapBase != null) {
@@ -3932,6 +4030,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun inferDotType(e: DotExpr): String? {
+        // C package: can't infer type of C constants/macros
+        if (e.obj is NameExpr && e.obj.name == "c") return null
         if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return e.obj.name
         if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
             val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
@@ -3957,6 +4057,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun inferDotTypeSafe(e: SafeDotExpr): String? = null
     private fun inferIndexType(e: IndexExpr): String? {
         val t = inferExprType(e.obj) ?: return null
+        // String indexing: str[i] → Char
+        if (t == "String") return "Char"
         // HashMap: map[key] → value type
         if (isHashMapType(t)) {
             val (_, valKt) = hashMapKVTypes(t)!!
@@ -4007,6 +4109,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (p.type.nullable) {
                 parts += "${cTypeStr(resolved)} ${p.name}"
                 parts += "bool ${p.name}\$has"
+            } else if (classes.containsKey(resolved)) {
+                // Kotlin classes are reference types — pass by pointer for correct mutation semantics
+                parts += "${cTypeStr(resolved)}* ${p.name}"
             } else {
                 parts += "${cType(p.type)} ${p.name}"
             }

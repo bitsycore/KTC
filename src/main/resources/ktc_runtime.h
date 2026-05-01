@@ -177,6 +177,15 @@ static inline kt_String kt_string_cat(char* buf, int bufsz, kt_String a, kt_Stri
     return (kt_String){buf, total};
 }
 
+/* Substring — returns a view into the original string (no copy).
+ * substring(from) and substring(from, to) Kotlin semantics. */
+static inline kt_String kt_string_substring(kt_String s, int32_t from, int32_t to) {
+    if (from < 0) from = 0;
+    if (to > s.len) to = s.len;
+    if (from >= to) return (kt_String){"", 0};
+    return (kt_String){s.ptr + from, to - from};
+}
+
 /* ═══════════════════════════ String Builder ══════════════════════════ */
 
 typedef struct {
