@@ -81,6 +81,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // Track class/enum types used in Array<T> so we emit KT_ARRAY_DEF for them
     private val classArrayTypes = mutableSetOf<String>()
 
+    // Intrinsic Pair<A,B> types: track unique (A, B) pairs used
+    private val pairTypes = mutableSetOf<Pair<String, String>>()
+    private val emittedPairTypes = mutableSetOf<String>()
+    private val pairTypeComponents = mutableMapOf<String, Pair<String, String>>()
+
 
     // ── Generics (monomorphization) ──────────────────────────────────
     // Store original ClassDecl for generic classes so we can re-emit per instantiation
@@ -529,7 +534,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val primitives = setOf("Int", "Long", "Float", "Double", "Boolean", "Char", "String")
         fun checkType(t: TypeRef?) {
             if (t == null) return
-            if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
+        if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
                 val elem = t.typeArgs[0].name
                 if (elem !in primitives) classArrayTypes.add(elem)
             }
@@ -1252,6 +1257,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for (p in f.params) {
             val resolved = resolveTypeName(p.type)
             defineVar(p.name, when {
+                p.isVararg -> "${resolved}Array"
                 p.type.nullable -> "${resolved}?"
                 classes.containsKey(resolved) -> "${resolved}*"
                 else -> resolved
@@ -1534,7 +1540,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             hdr.appendLine("$cRet ${cName}_${m.name}($params);")
             impl.appendLine("$cRet ${cName}_${m.name}($params) {")
             pushScope()
-            for (p in m.params) defineVar(p.name, resolveTypeName(p.type))
+            for (p in m.params) defineVar(p.name, if (p.isVararg) "${resolveTypeName(p.type)}Array" else resolveTypeName(p.type))
             val savedDefers3 = deferStack.toList(); deferStack.clear()
             if (m.body != null) for (s in m.body.stmts) emitStmt(s, "    ")
             if (m.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ")
@@ -1808,6 +1814,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             for (p in f.params) {
                 val resolved = resolveTypeName(p.type)
                 defineVar(p.name, when {
+                    p.isVararg -> "${resolved}Array"  // vararg params are arrays (ptr + $len)
                     p.type.nullable -> "${resolved}?"
                     classes.containsKey(resolved) -> "${resolved}*"  // class params are pointers (reference semantics)
                     else -> resolved
@@ -2698,6 +2705,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun genBin(e: BinExpr): String {
         val lt = inferExprType(e.left)
+        // `to` infix → Pair compound literal
+        if (e.op == "to") {
+            val aType = inferExprType(e.left) ?: "Int"
+            val bType = inferExprType(e.right) ?: "Int"
+            pairTypes.add(Pair(aType, bType))
+            pairTypeComponents["Pair_${aType}_${bType}"] = Pair(aType, bType)
+            ensurePairType(aType, bType)
+            val pairCType = "kt_Pair_${aType}_${bType}"
+            return "($pairCType){${genExpr(e.left)}, ${genExpr(e.right)}}"
+        }
         // null comparison
         if ((e.op == "==" || e.op == "!=") && (e.left is NullLit || e.right is NullLit)) {
             val nonNull = if (e.left is NullLit) e.right else e.left
@@ -2875,6 +2892,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
 
+        // Pair constructor (intrinsic — only when no user-defined class named Pair)
+        if (name == "Pair" && args.size == 2 && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
+            val a = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[0]) else inferExprType(args[0].expr) ?: "Int"
+            val b = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[1]) else inferExprType(args[1].expr) ?: "Int"
+            pairTypes.add(Pair(a, b))
+            pairTypeComponents["Pair_${a}_${b}"] = Pair(a, b)
+            ensurePairType(a, b)
+            val pairCType = "kt_Pair_${a}_${b}"
+            return "($pairCType){${genExpr(args[0].expr)}, ${genExpr(args[1].expr)}}"
+        }
+
         // Function pointer call: variable with function type → just call it
         val varType = lookupVar(name)
         if (varType != null && isFuncType(varType)) {
@@ -2963,65 +2991,89 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return "${pfx(name)}($expandedArgs)"
     }
 
-    /** Expand call arguments: array → (arg, arg$len); nullable → (arg, arg$has); class→interface wrapping. */
+    /** Expand call arguments: array → (arg, arg$len); nullable → (arg, arg$has); class→interface wrapping; vararg packing. */
     private fun expandCallArgs(args: List<Arg>, params: List<Param>?): String {
         val parts = mutableListOf<String>()
-        for ((i, arg) in args.withIndex()) {
-            val expr = genExpr(arg.expr)
-            val param = params?.getOrNull(i)
-            val paramType = param?.let { resolveTypeName(it.type) }
-            if (paramType != null && isArrayType(paramType)) {
-                parts += expr
-                parts += "${expr}\$len"
-            } else if (param?.type?.nullable == true) {
-                if (arg.expr is NullLit) {
-                    parts += "${defaultVal(paramType ?: "Int")}"
-                    parts += "false"
+        if (params == null) {
+            for (arg in args) parts += genExpr(arg.expr)
+            return parts.joinToString(", ")
+        }
+
+        var argIdx = 0
+        for (param in params) {
+            val paramType = resolveTypeName(param.type)
+            if (param.isVararg) {
+                // Consume remaining args for vararg
+                val remaining = args.subList(argIdx, args.size)
+                val elemCType = cTypeStr(paramType)
+                if (remaining.size == 1 && remaining[0].isSpread) {
+                    val spreadExpr = genExpr(remaining[0].expr)
+                    parts += spreadExpr
+                    parts += "${spreadExpr}\$len"
+                } else if (remaining.isEmpty()) {
+                    parts += "NULL"
+                    parts += "0"
                 } else {
-                    parts += expr
-                    // Check if the arg is a nullable variable (has $has companion)
-                    val argVarName = (arg.expr as? NameExpr)?.name
-                    val argVarType = if (argVarName != null) lookupVar(argVarName) else null
-                    if (argVarType != null && argVarType.endsWith("?")) {
-                        parts += "${expr}\$has"
-                    } else {
-                        parts += "true"
-                    }
+                    val t = tmp()
+                    val argExprs = remaining.map { genExpr(it.expr) }
+                    preStmts += "$elemCType ${t}[] = {${argExprs.joinToString(", ")}};"
+                    parts += t
+                    parts += "${remaining.size}"
                 }
-            } else if (paramType != null && interfaces.containsKey(paramType)) {
-                // Auto-wrap class → interface
-                val argType = inferExprType(arg.expr)
-                val baseArgType = argType?.trimEnd('*', '&', '^', '?', '#')
-                if (baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true) {
-                    // Value<T> or Heap<T> pointer: auto-deref handled by genExpr, but we need &expr for the wrapping
-                    if (argType != null && (argType.endsWith("&") || argType.endsWith("^"))) {
-                        // Value/Ptr — genExpr gives the dereferenced value via ->; we need the pointer
-                        parts += "${pfx(baseArgType)}_as_$paramType($expr)"
-                    } else if (argType != null && argType.endsWith("*")) {
-                        // Heap pointer — pass directly (it's already a pointer)
-                        parts += "${pfx(baseArgType)}_as_$paramType($expr)"
-                    } else {
-                        // Stack value — take address
-                        parts += "${pfx(baseArgType)}_as_$paramType(&$expr)"
-                    }
-                } else {
+                argIdx = args.size
+            } else if (argIdx < args.size) {
+                val arg = args[argIdx]
+                val expr = genExpr(arg.expr)
+                if (isArrayType(paramType)) {
                     parts += expr
-                }
-            } else {
-                val argType = inferExprType(arg.expr)
-                if (paramType != null && classes.containsKey(paramType)) {
-                    // Param is a class type — passed by pointer for reference semantics
-                    if (argType != null && (argType == "${paramType}*" || argType == "${paramType}&" || argType == "${paramType}^")) {
-                        // Already a pointer — pass directly
+                    parts += "${expr}\$len"
+                } else if (param.type.nullable) {
+                    if (arg.expr is NullLit) {
+                        parts += "${defaultVal(paramType)}"
+                        parts += "false"
+                    } else {
                         parts += expr
+                        val argVarName = (arg.expr as? NameExpr)?.name
+                        val argVarType = if (argVarName != null) lookupVar(argVarName) else null
+                        if (argVarType != null && argVarType.endsWith("?")) {
+                            parts += "${expr}\$has"
+                        } else {
+                            parts += "true"
+                        }
+                    }
+                } else if (interfaces.containsKey(paramType)) {
+                    val argType = inferExprType(arg.expr)
+                    val baseArgType = argType?.trimEnd('*', '&', '^', '?', '#')
+                    if (baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true) {
+                        if (argType != null && (argType.endsWith("&") || argType.endsWith("^"))) {
+                            parts += "${pfx(baseArgType)}_as_$paramType($expr)"
+                        } else if (argType != null && argType.endsWith("*")) {
+                            parts += "${pfx(baseArgType)}_as_$paramType($expr)"
+                        } else {
+                            parts += "${pfx(baseArgType)}_as_$paramType(&$expr)"
+                        }
                     } else {
-                        // Stack struct — take address
-                        parts += "&$expr"
+                        parts += expr
                     }
                 } else {
-                    parts += expr
+                    val argType = inferExprType(arg.expr)
+                    if (classes.containsKey(paramType)) {
+                        if (argType != null && (argType == "${paramType}*" || argType == "${paramType}&" || argType == "${paramType}^")) {
+                            parts += expr
+                        } else {
+                            parts += "&$expr"
+                        }
+                    } else {
+                        parts += expr
+                    }
                 }
+                argIdx++
             }
+        }
+        // Handle remaining args if more args than params (shouldn't happen normally)
+        while (argIdx < args.size) {
+            parts += genExpr(args[argIdx].expr)
+            argIdx++
         }
         return parts.joinToString(", ")
     }
@@ -3731,15 +3783,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Named args: reorder
         val hasNamed = args.any { it.name != null }
         if (hasNamed) {
-            val result = params.map { p ->
+            val result = params.mapNotNull { p ->
+                if (p.isVararg) return@mapNotNull null  // vararg handled by expandCallArgs
                 val explicit = args.find { it.name == p.name }
                 explicit ?: Arg(p.name, defaults[p.name] ?: IntLit(0))
             }
             return result
         }
-        // Positional: fill missing from defaults
+        // Positional: fill missing from defaults (skip vararg params)
         val result = args.toMutableList()
         for (i in args.size until params.size) {
+            if (params[i].isVararg) continue  // vararg handled by expandCallArgs
             val def = defaults[params[i].name]
             result += Arg(null, def ?: IntLit(0))
         }
@@ -3796,6 +3850,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is BinExpr  -> {
             if (e.op in setOf("==", "!=", "<", ">", "<=", ">=", "&&", "||", "in", "!in")) "Boolean"
             else if (e.op == "..") "IntRange"
+            else if (e.op == "to") {
+                val a = inferExprType(e.left) ?: "Int"
+                val b = inferExprType(e.right) ?: "Int"
+                "Pair_${a}_${b}"
+            }
             else inferExprType(e.left)  // arithmetic inherits left type
         }
         is PrefixExpr -> if (e.op == "!") "Boolean" else inferExprType(e.expr)
@@ -3824,6 +3883,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun inferCallType(e: CallExpr): String? {
         val name = (e.callee as? NameExpr)?.name
         if (name != null) {
+            // Pair constructor (intrinsic — only when no user-defined class named Pair)
+            if (name == "Pair" && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
+                val a = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[0]) else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
+                val b = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[1]) else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
+                return "Pair_${a}_${b}"
+            }
             // Generic class constructor: MyList<Int>(8) → "MyList_Int"
             if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
                 return mangledGenericName(name, e.typeArgs.map { it.name })
@@ -4003,6 +4068,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return if (prop != null) resolveTypeName(prop.second) else null
         }
         val recvType = inferExprType(e.obj) ?: return null
+        if (recvType.startsWith("Pair_")) {
+            val components = pairTypeComponents[recvType]
+            if (components != null) {
+                return when (e.name) {
+                    "first" -> components.first
+                    "second" -> components.second
+                    else -> null
+                }
+            }
+        }
         if (e.name == "size" && recvType.endsWith("Array")) return "Int"
         if (e.name == "length" && recvType == "String") return "Int"
         // Heap/Ptr/Value pointer field access → look up in base class
@@ -4062,7 +4137,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Check if the original param type was a generic type parameter (e.g., T → Vec2).
             // If so, don't apply class-by-pointer — the interface vtable and callers expect by-value.
             val wasTypeParam = typeSubst.containsKey(p.type.name)
-            if (isFuncType(resolved)) {
+            if (p.isVararg) {
+                parts += "${cTypeStr(resolved)}* ${p.name}"
+                parts += "int32_t ${p.name}\$len"
+            } else if (isFuncType(resolved)) {
                 parts += cFuncPtrDecl(resolved, p.name)
             } else if (isArrayType(resolved)) {
                 parts += "${cTypeStr(resolved)} ${p.name}"
@@ -4116,11 +4194,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (t.endsWith("Array") && t.length > 5) {
                 val elem = t.removeSuffix("Array")
                 if (classArrayTypes.contains(elem)) return "${pfx(elem)}*"
+                if (elem.startsWith("Pair_")) return "kt_${elem}*"
             }
+            // Pair types: "Pair_Int_String" → "kt_Pair_Int_String"
+            if (t.startsWith("Pair_")) return "kt_$t"
             pfx(t)   // class/enum/object type
         }
     }
 
+    private fun ensurePairType(a: String, b: String) {
+        val key = "${a}_${b}"
+        if (key !in emittedPairTypes) {
+            emittedPairTypes.add(key)
+            hdr.appendLine("typedef struct { ${cTypeStr(a)} first; ${cTypeStr(b)} second; } kt_Pair_${a}_${b};")
+        }
+    }
 
     private fun resolveTypeName(t: TypeRef?): String {
         if (t == null) return "Int"
@@ -4159,6 +4247,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (t.typeArgs.isNotEmpty() && genericIfaceDecls.containsKey(t.name)) {
             val typeArgNames = t.typeArgs.map { resolveTypeName(it) }
             return mangledGenericName(t.name, typeArgNames)
+        }
+        // Intrinsic Pair<A,B> — only when no user-defined class/interface named Pair
+        if (t.name == "Pair" && t.typeArgs.size == 2
+            && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair") && !genericIfaceDecls.containsKey("Pair")) {
+            val a = resolveTypeName(t.typeArgs[0])
+            val b = resolveTypeName(t.typeArgs[1])
+            pairTypes.add(Pair(a, b))
+            pairTypeComponents["Pair_${a}_${b}"] = Pair(a, b)
+            ensurePairType(a, b)
+            return "Pair_${a}_${b}"
         }
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
             val elem = t.typeArgs[0].name
@@ -4244,6 +4342,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (arrType.endsWith("Array") && arrType.length > 5) {
                     val elem = arrType.removeSuffix("Array")
                     if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return pfx(elem)
+                    // Pair or other known types: use cTypeStr
+                    if (elem.startsWith("Pair_")) return cTypeStr(elem)
                 }
             }
             "int32_t"
@@ -4264,6 +4364,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (arrType.endsWith("Array") && arrType.length > 5) {
                     val elem = arrType.removeSuffix("Array")
                     if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return elem
+                    // Pair or other known types
+                    if (elem.startsWith("Pair_")) return elem
                 }
             }
             "Int"

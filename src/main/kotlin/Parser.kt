@@ -91,11 +91,14 @@ class Parser(private val tokens: List<Token>) {
         val list = mutableListOf<Param>()
         skipNL()
         while (!at(TokenType.RPAREN) && !at(TokenType.EOF)) {
+            // Check for 'vararg' modifier (contextual keyword)
+            val isVararg = at(TokenType.IDENT) && cur().value == "vararg"
+            if (isVararg) advance()
             val name = expectIdent()
             expect(TokenType.COLON); skipNL()
             val type = parseTypeRef()
             val default = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
-            list += Param(name, type, default)
+            list += Param(name, type, default, isVararg)
             if (at(TokenType.COMMA)) { advance(); skipNL() } else break
         }
         skipNL()
@@ -481,7 +484,10 @@ class Parser(private val tokens: List<Token>) {
                 val n = advance().value; advance(); n      // consume ident and =
             } else null
             skipNL()
-            list += Arg(name, parseExpr())
+            // Check for spread operator: *array
+            val isSpread = at(TokenType.STAR)
+            if (isSpread) advance()
+            list += Arg(name, parseExpr(), isSpread)
             if (at(TokenType.COMMA)) { advance(); skipNL() } else break
         }
         skipNL()

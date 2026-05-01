@@ -72,7 +72,8 @@ data class PropDecl(
 data class Param(
     val name: String,
     val type: TypeRef,
-    val default: Expr? = null
+    val default: Expr? = null,
+    val isVararg: Boolean = false
 )
 
 data class CtorParam(
@@ -152,7 +153,7 @@ data class FunRefExpr(val name: String) : Expr()   // ::functionName
 
 // ═══════════════════════════ Helpers ═══════════════════════════
 
-data class Arg(val name: String? = null, val expr: Expr)
+data class Arg(val name: String? = null, val expr: Expr, val isSpread: Boolean = false)
 
 sealed class StrPart
 data class LitPart(val text: String) : StrPart()
