@@ -99,4 +99,21 @@ class DataClassTest : TranspilerTestBase() {
         val r = transpileMain("val v = Vec2(1.0f, 2.0f)", decls = vec2Decl)
         r.sourceContains("test_Main_Vec2* test_Main_Vec2_new(float x, float y)")
     }
+
+    // ── Nested data class (struct-type ctor arg passed by value) ─────
+
+    @Test fun nestedDataClassCtorPassesByValue() {
+        val r = transpileMain("""
+            val origin = Vec2(0.0f, 0.0f)
+            val size = Vec2(10.0f, 5.0f)
+            val rect = Rect(origin, size)
+        """, decls = """
+            data class Vec2(val x: Float, val y: Float)
+            data class Rect(val origin: Vec2, val size: Vec2)
+        """)
+        // _create takes Vec2 by value, not by pointer
+        r.sourceContains("test_Main_Rect_create(test_Main_Vec2 origin, test_Main_Vec2 size)")
+        // call site should NOT use &
+        r.sourceContains("test_Main_Rect_create(origin, size)")
+    }
 }

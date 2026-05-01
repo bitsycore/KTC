@@ -3500,7 +3500,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val cp = templateDecl?.ctorParams?.find { p -> p.name == it.first }
                 it.first to cp?.default
             })
-            val expandedArgs = expandCallArgs(filledArgs, ctorParamList)
+            val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
             return "${pfx(mangledName)}_create($expandedArgs)"
         }
         if (classes.containsKey(name)) {
@@ -3513,7 +3513,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     ?.ctorParams?.find { p -> p.name == it.first }
                 it.first to cp?.default
             })
-            val expandedArgs = expandCallArgs(filledArgs, ctorParamList)
+            val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
             return "${pfx(name)}_create($expandedArgs)"
         }
 
@@ -3574,7 +3574,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     /** Expand call arguments: array → (arg, arg$len); nullable → (arg, arg$has); class→interface wrapping; vararg packing. */
-    private fun expandCallArgs(args: List<Arg>, params: List<Param>?): String {
+    private fun expandCallArgs(args: List<Arg>, params: List<Param>?, isCtorCall: Boolean = false): String {
         val parts = mutableListOf<String>()
         if (params == null) {
             for (arg in args) parts += genExpr(arg.expr)
@@ -3639,7 +3639,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     }
                 } else {
                     val argType = inferExprType(arg.expr)
-                    if (classes.containsKey(paramType)) {
+                    if (!isCtorCall && classes.containsKey(paramType)) {
                         if (argType != null && (argType == "${paramType}*" || argType == "${paramType}&" || argType == "${paramType}^")) {
                             parts += expr
                         } else {

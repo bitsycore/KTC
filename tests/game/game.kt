@@ -1,10 +1,9 @@
 package game
-//
-//
-//// ── Data classes ─────────────────────────────────────────────────────
-////data class Vec2(val x: Float, val y: Float)
-////data class Rect(val origin: Vec2, val size: Vec2)
-//
+
+// ── Data classes ─────────────────────────────────────────────────────
+data class Vec2(val x: Float, val y: Float)
+data class Rect(val origin: Vec2, val size: Vec2)
+
 //// ── Class with body properties ───────────────────────────────────────
 //class Player(val name: String) {
 //    var health: Int = 100
@@ -80,14 +79,14 @@ fun testArgs(args: Array<String>) {
     }
 }
 //
-////fun testDataClasses() {
-////    val origin = Vec2(0.0f, 0.0f)
-////    val size = Vec2(10.0f, 5.0f)
-////    val rect = Rect(origin, size)
-////    println(rect)
-////    val p = Vec2(1.0f, 2.0f)
-////    println(p)
-////}
+fun testDataClasses() {
+    val origin = Vec2(0.0f, 0.0f)
+    val size = Vec2(10.0f, 5.0f)
+    val rect = Rect(origin, size)
+    println(rect)
+    val p = Vec2(1.0f, 2.0f)
+    println(p)
+}
 //
 //fun testClassMethods() {
 //    val player = Player("Alice")
@@ -556,8 +555,8 @@ fun testArgs(args: Array<String>) {
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
-////    println("--- testDataClasses ---")
-////    testDataClasses()
+    println("--- testDataClasses ---")
+    testDataClasses()
 //    println("--- testClassMethods ---")
 //    testClassMethods()
 //    println("--- testExtensions ---")
