@@ -415,7 +415,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit star-projection extension functions (one per known instantiation)
         for (f in starExtFunDecls) emitStarExtFunInstantiations(f)
 
-        val srcName = prefix.trimEnd('_').ifEmpty { "main" }
+        val srcName = prefix.trimEnd('_').ifEmpty {
+            sourceFileName.removeSuffix(".kt").ifEmpty { "main" }
+        }
         val src = StringBuilder()
         src.appendLine("#include \"$srcName.h\"")
         src.appendLine()
@@ -964,6 +966,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
             }
         }
+        // Intrinsic Pair<A,B> param: Pair<K, V>, arg=Pair_Int_String → K=Int, V=String
+        if (paramType.name == "Pair" && paramType.typeArgs.size == 2
+            && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
+            val baseType = argType.trimEnd('*', '&', '^', '?', '#')
+            val components = pairTypeComponents[baseType]
+            if (components != null) {
+                val (first, second) = components
+                if (paramType.typeArgs[0].name in typeParams) subst[paramType.typeArgs[0].name] = first
+                if (paramType.typeArgs[1].name in typeParams) subst[paramType.typeArgs[1].name] = second
+            }
+        }
     }
 
     // ═══════════════════════════ Emit declarations ════════════════════
@@ -1192,13 +1205,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun emitMethod(className: String, f: FunDecl) {
         val cClass = pfx(className)
-        val cRet = if (f.returnType != null) cType(f.returnType) else "void"
+        val returnsNullable = f.returnType != null && f.returnType.nullable
+        val cRet = when {
+            returnsNullable -> "bool"
+            f.returnType != null -> cType(f.returnType)
+            else -> "void"
+        }
         val selfParam = "$cClass* \$self"
         val extraParams = expandParams(f.params)
-        val allParams = if (extraParams.isEmpty()) selfParam else "$selfParam, $extraParams"
+        val outParam = if (returnsNullable) "${cType(f.returnType!!)}* \$out" else null
+        val allParts = mutableListOf(selfParam)
+        if (extraParams.isNotEmpty()) allParts += extraParams
+        if (outParam != null) allParts += outParam
+        val allParams = allParts.joinToString(", ")
 
         hdr.appendLine("$cRet ${cClass}_${f.name}($allParams);")
         impl.appendLine("$cRet ${cClass}_${f.name}($allParams) {")
+
+        val prevReturnsNullable = currentFnReturnsNullable
+        val prevReturnsArray = currentFnReturnsArray
+        val prevReturnType = currentFnReturnType
+        currentFnReturnsNullable = returnsNullable
+        currentFnReturnsArray = false
+        currentFnReturnType = if (f.returnType != null) resolveTypeName(f.returnType) else ""
 
         pushScope()
         for (p in f.params) {
@@ -1216,9 +1245,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         val savedDefers = deferStack.toList(); deferStack.clear()
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = true)
-        if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = true)
+        if (f.body?.stmts?.lastOrNull() !is ReturnStmt) {
+            emitDeferredBlocks("    ", insideMethod = true)
+            if (returnsNullable) impl.appendLine("    return false;")
+        }
         deferStack.clear(); deferStack.addAll(savedDefers)
         popScope()
+
+        currentFnReturnsNullable = prevReturnsNullable
+        currentFnReturnsArray = prevReturnsArray
+        currentFnReturnType = prevReturnType
 
         impl.appendLine("}")
         impl.appendLine()
@@ -1313,7 +1349,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val prevReturnsArray = currentFnReturnsArray
             val prevReturnType = currentFnReturnType
             currentFnReturnsArray = returnsArray
-            currentFnReturnType = if (f.returnType != null) resolveTypeName(f.returnType) else ""
+        currentFnReturnType = if (f.returnType != null) {
+            val base = resolveTypeName(f.returnType)
+            if (f.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+        } else ""
 
             pushScope()
             for (p in f.params) {
@@ -1590,9 +1629,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             hdr.appendLine("    $ct (*${p.name})(void* \$self);")
         }
         for (m in allMethods) {
-            val cRet = if (m.returnType != null) cType(m.returnType) else "void"
+            val mReturnsNullable = m.returnType != null && m.returnType.nullable
+            val cRet = if (mReturnsNullable) "bool" else if (m.returnType != null) cType(m.returnType) else "void"
             val extraParams = m.params.joinToString("") { p -> ", ${cType(p.type)} ${p.name}" }
-            hdr.appendLine("    $cRet (*${m.name})(void* \$self$extraParams);")
+            val outParam = if (mReturnsNullable) ", ${cType(m.returnType!!)}* \$out" else ""
+            hdr.appendLine("    $cRet (*${m.name})(void* \$self$extraParams$outParam);")
         }
         hdr.appendLine("} ${cName}_vt;")
         hdr.appendLine()
@@ -1681,9 +1722,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
             }
             for (m in allMethods) {
-                val cRet = if (m.returnType != null) cType(m.returnType) else "void"
+                val mReturnsNullable = m.returnType != null && m.returnType.nullable
+                val cRet = if (mReturnsNullable) "bool" else if (m.returnType != null) cType(m.returnType) else "void"
                 val extraCast = m.params.joinToString("") { p -> ", ${cType(p.type)}" }
-                impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+                val outCast = if (mReturnsNullable) ", ${cType(m.returnType!!)}*" else ""
+                impl.appendLine("    ($cRet (*)(void*$extraCast$outCast)) ${cClass}_${m.name},")
             }
             impl.appendLine("};")
             impl.appendLine()
@@ -1733,9 +1776,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
             }
             for (m in superMethods) {
-                val cRet = if (m.returnType != null) cType(m.returnType) else "void"
+                val mReturnsNullable = m.returnType != null && m.returnType.nullable
+                val cRet = if (mReturnsNullable) "bool" else if (m.returnType != null) cType(m.returnType) else "void"
                 val extraCast = m.params.joinToString("") { p -> ", ${cType(p.type)}" }
-                impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+                val outCast = if (mReturnsNullable) ", ${cType(m.returnType!!)}*" else ""
+                impl.appendLine("    ($cRet (*)(void*$extraCast$outCast)) ${cClass}_${m.name},")
             }
             impl.appendLine("};")
             impl.appendLine()
@@ -3166,6 +3211,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "isNotEmpty" -> if (recvType == "String") {
                 return "($recv.len > 0)"
             }
+            "hashCode" -> {
+                val rt = recvType ?: "Int"
+                return when (rt) {
+                    "Int" -> "kt_hash_i32($recv)"
+                    "Long" -> "kt_hash_i64($recv)"
+                    "Float" -> "kt_hash_f32($recv)"
+                    "Double" -> "kt_hash_f64($recv)"
+                    "Boolean" -> "kt_hash_bool($recv)"
+                    "Char" -> "kt_hash_char($recv)"
+                    "String" -> "kt_hash_str($recv)"
+                    else -> "${pfx(rt)}_hashCode(&($recv))"
+                }
+            }
         }
 
         // Array .size → name\$len
@@ -3178,6 +3236,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val classHasMethod = classes[heapBase]?.methods?.any { it.name == method } == true
             if (classHasMethod) {
                 val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+                val methodDecl = classes[heapBase]?.methods?.find { it.name == method }
+                if (methodDecl?.returnType?.nullable == true) {
+                    return genNullableMethodCall(heapBase, "${pfx(heapBase)}_$method", allArgs, methodDecl)
+                }
                 return "${pfx(heapBase)}_$method($allArgs)"
             }
             when (method) {
@@ -3212,6 +3274,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val classHasMethod = classes[ptrBase]?.methods?.any { it.name == method } == true
             if (classHasMethod) {
                 val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+                val methodDecl = classes[ptrBase]?.methods?.find { it.name == method }
+                if (methodDecl?.returnType?.nullable == true) {
+                    return genNullableMethodCall(ptrBase, "${pfx(ptrBase)}_$method", allArgs, methodDecl)
+                }
                 return "${pfx(ptrBase)}_$method($allArgs)"
             }
             when (method) {
@@ -3259,12 +3325,30 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             // All other method calls → class method, pointer passed directly
             val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+            val methodDecl = classes[valBase]?.methods?.find { it.name == method }
+            if (methodDecl?.returnType?.nullable == true) {
+                return genNullableMethodCall(valBase, "${pfx(valBase)}_$method", allArgs, methodDecl)
+            }
             return "${pfx(valBase)}_$method($allArgs)"
         }
 
         // Interface method dispatch → d.vt->method(d.obj, args)
         if (recvType != null && interfaces.containsKey(recvType)) {
             val allArgs = if (argStr.isEmpty()) "$recv.obj" else "$recv.obj, $argStr"
+            // Check if this interface method returns nullable
+            val ifaceInfo = interfaces[recvType]
+            val ifaceMethod = ifaceInfo?.methods?.find { it.name == method }
+                ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == method }
+            if (ifaceMethod?.returnType?.nullable == true) {
+                val retType = resolveTypeName(ifaceMethod.returnType)
+                val ct = cTypeStr(retType)
+                val t = tmp()
+                preStmts += "$ct $t;"
+                val callArgs = if (allArgs.isEmpty()) "&$t" else "$allArgs, &$t"
+                preStmts += "bool ${t}\$has = $recv.vt->$method($callArgs);"
+                defineVar(t, "${retType}?")
+                return t
+            }
             return "$recv.vt->$method($allArgs)"
         }
 
@@ -3294,6 +3378,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "&$recv, $hasFlag"
             } else "&$recv"
             val allArgs = if (argStr.isEmpty()) selfArg else "$selfArg, $argStr"
+            // Nullable return: use out-pointer pattern
+            val methodDecl = classes[recvType]?.methods?.find { it.name == method }
+            if (methodDecl?.returnType?.nullable == true) {
+                return genNullableMethodCall(recvType, "${pfx(recvType)}_$method", allArgs, methodDecl)
+            }
             return "${pfx(recvType)}_$method($allArgs)"
         }
         // Object method
@@ -3324,6 +3413,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         return "$recv.$method($argStr)"   // fallback
+    }
+
+    /** Generate a method call that returns nullable via out-pointer. */
+    private fun genNullableMethodCall(className: String, fnExpr: String, allArgs: String, methodDecl: FunDecl): String {
+        val retBase = resolveMethodReturnType(className, methodDecl.returnType).removeSuffix("?")
+        val ct = cTypeStr(retBase)
+        val t = tmp()
+        preStmts += "$ct $t;"
+        val callArgs = if (allArgs.isEmpty()) "&$t" else "$allArgs, &$t"
+        preStmts += "bool ${t}\$has = $fnExpr($callArgs);"
+        defineVar(t, "${retBase}?")
+        return t
     }
 
     /** Generate data class copy. `heap` = true when receiver is a heap pointer. */
@@ -3953,14 +4054,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun resolveMethodReturnType(className: String, returnType: TypeRef?): String {
         if (returnType == null) return "Unit"
         val bindings = genericTypeBindings[className]
-        if (bindings != null) {
+        val base = if (bindings != null) {
             val saved = typeSubst
             typeSubst = bindings
             val result = resolveTypeName(returnType)
             typeSubst = saved
-            return result
+            result
+        } else {
+            resolveTypeName(returnType)
         }
-        return resolveTypeName(returnType)
+        return if (returnType.nullable && !base.endsWith("?")) "${base}?" else base
     }
 
     private fun inferMethodReturnType(dot: DotExpr, args: List<Arg>): String? {
@@ -3977,6 +4080,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (method == "toLongOrNull") return "Long?"
         if (method == "toFloatOrNull") return "Float?"
         if (method == "toDoubleOrNull") return "Double?"
+        if (method == "hashCode") return "Int"
         // String methods
         if (recvType == "String") {
             return when (method) {

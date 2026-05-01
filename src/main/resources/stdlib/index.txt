@@ -1,2 +1,4 @@
 Disposable.kt
+Hashable.kt
 Collections.kt
+Map.kt
