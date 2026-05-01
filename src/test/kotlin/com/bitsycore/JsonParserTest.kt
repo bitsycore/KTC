@@ -3,7 +3,7 @@ package com.bitsycore
 import kotlin.test.Test
 
 /**
- * Regression test for the JSON parser showcase (tests/single/JsonParser.kt).
+ * Regression test for the JSON parser showcase (tests/JsonParser/JsonParser.kt).
  *
  * Transpiles the full JsonParser.kt source and asserts on key patterns that
  * previously caused gcc compilation failures:
@@ -15,7 +15,7 @@ import kotlin.test.Test
 class JsonParserTest : TranspilerTestBase() {
 
     private fun transpileJsonParser(): TranspileResult {
-        val src = java.io.File("tests/single/JsonParser.kt").readText()
+        val src = java.io.File("tests/JsonParser/JsonParser.kt").readText()
         return transpile(src)
     }
 

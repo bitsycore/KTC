@@ -1,6 +1,5 @@
 package game
 
-import ktc.*
 import math.*
 
 class Test {
@@ -9,6 +8,7 @@ class Test {
 
 fun main() {
     val a = malloc<Test>()
+    if (a == null) return
     println(a)
     val pts = Point(1, 2)
     println(pts)

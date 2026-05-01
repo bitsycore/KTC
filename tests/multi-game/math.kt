@@ -1,7 +1,4 @@
 package math
-
-import ktc.*
-
 data class Point(val x: Int, val y: Int)
 
 fun add(a: Int, b: Int): Int {

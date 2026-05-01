@@ -1,0 +1,283 @@
+#!/usr/bin/env pwsh
+#
+# run_tests.ps1 — Build the transpiler, then run all integration tests.
+#
+# Each subdirectory under tests/ is one test. All .kt files in the directory
+# are transpiled together. Adding a new directory = adding a new test.
+#
+# Usage:
+#   .\run_tests.ps1                        # Run all tests
+#   .\run_tests.ps1 -Skip unit             # Skip unit tests, only run integration
+#   .\run_tests.ps1 -Run HashMapTest       # Transpile, compile & run a single test
+#
+param(
+    [string]$Skip = "",
+    [string]$Run  = ""
+)
+
+$ErrorActionPreference = "Stop"
+$root = $PSScriptRoot
+$jar  = "$root\build\libs\KotlinToC-1.0-SNAPSHOT.jar"
+$outDir = "$root\test_out"
+$testsDir = "$root\tests"
+
+# ── Colors ──────────────────────────────────────────────────────
+function Write-Pass($msg) { Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host $msg }
+function Write-Fail($msg) { Write-Host "  FAIL " -ForegroundColor Red   -NoNewline; Write-Host $msg }
+function Write-Info($msg) { Write-Host "  ---- " -ForegroundColor Cyan  -NoNewline; Write-Host $msg }
+function Write-Section($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Yellow }
+function Write-Cmd($msg) { Write-Host "  `$ " -ForegroundColor DarkYellow -NoNewline; Write-Host $msg -ForegroundColor White }
+
+# ── Detect C compiler ───────────────────────────────────────────
+$CC = $null
+foreach ($candidate in @("gcc", "clang", "cl")) {
+    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+        $CC = $candidate
+        break
+    }
+}
+if (-not $CC) {
+    Write-Host "ERROR: No C compiler found (tried gcc, clang, cl). Install one and add to PATH." -ForegroundColor Red
+    exit 1
+}
+
+# ── Helper: transpile, compile, run one test directory ──────────
+# Returns $true on success, $false on failure.
+# When $Verbose is set, prints step-by-step output (for -Run mode).
+function Invoke-Test {
+    param(
+        [string]$Name,
+        [string]$TestSrcDir,
+        [string]$TestOutDir,
+        [bool]$Verbose = $false
+    )
+
+    # ── Collect .kt files ───────────────────────────────────────
+    $ktFiles = @(Get-ChildItem "$TestSrcDir\*.kt" | Select-Object -ExpandProperty FullName)
+    if ($ktFiles.Count -eq 0) {
+        if ($Verbose) { Write-Fail "$Name — no .kt files in $TestSrcDir" } else { Write-Fail "$Name (no .kt files)" }
+        return $false
+    }
+
+    if (Test-Path $TestOutDir) { Remove-Item $TestOutDir -Recurse -Force }
+    New-Item $TestOutDir -ItemType Directory -Force | Out-Null
+
+    if ($Verbose) {
+        Write-Info "Input: $($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) "
+        Write-Info "Output dir: $TestOutDir"
+    }
+
+    # ── Transpile ───────────────────────────────────────────────
+    if ($Verbose) { Write-Section "Transpile" }
+    $transpileArgs = @("-jar", $jar) + $ktFiles + @("-o", $TestOutDir)
+    if ($Verbose) {
+        $ktNames = ($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
+        Write-Cmd "java -jar KotlinToC.jar $ktNames -o $TestOutDir"
+        Write-Host ""
+    }
+    $transpileOutput = & java @transpileArgs 2>&1
+    $transpileExit = $LASTEXITCODE
+    if ($Verbose) {
+        foreach ($line in $transpileOutput) { Write-Host "  $line" }
+        Write-Host ""
+    }
+    if ($transpileExit -ne 0) {
+        if ($Verbose) { Write-Fail "Transpilation failed (exit code $transpileExit)" }
+        else {
+            Write-Fail "$Name (transpile failed)"
+            Write-Host "       $transpileOutput" -ForegroundColor DarkGray
+        }
+        return $false
+    }
+    if ($Verbose) { Write-Pass "Transpilation succeeded" }
+
+    # ── Discover generated .c files ─────────────────────────────
+    $cFiles = @(Get-ChildItem "$TestOutDir\*.c" | Select-Object -ExpandProperty Name)
+    if ($cFiles.Count -eq 0) {
+        if ($Verbose) { Write-Fail "No .c files generated" } else { Write-Fail "$Name (no .c files generated)" }
+        return $false
+    }
+    # Sort: ktc.c first, then the rest alphabetically
+    $cFiles = $cFiles | Sort-Object { if ($_ -eq "ktc.c") { 0 } else { 1 } }, { $_ }
+    $cSources = $cFiles | ForEach-Object { "$TestOutDir\$_" }
+
+    # Binary name: first non-ktc .c file without extension
+    $binBase = ($cFiles | Where-Object { $_ -ne "ktc.c" } | Select-Object -First 1) -replace '\.c$', ''
+    if (-not $binBase) { $binBase = $cFiles[0] -replace '\.c$', '' }
+    $exePath = "$TestOutDir\$binBase.exe"
+
+    # ── Compile ─────────────────────────────────────────────────
+    if ($Verbose) { Write-Section "Compile" }
+    $compileArgs = @("-std=c11", "-o", $exePath) + $cSources
+    if ($Verbose) {
+        Write-Cmd "$CC -std=c11 -o $exePath $($cSources -join ' ')"
+        Write-Host ""
+    }
+    $compileOutput = & $CC @compileArgs 2>&1
+    $compileExit = $LASTEXITCODE
+    if ($Verbose -and $compileOutput) {
+        foreach ($line in $compileOutput) { Write-Host "  $line" -ForegroundColor DarkGray }
+        Write-Host ""
+    }
+    if ($compileExit -ne 0) {
+        if ($Verbose) { Write-Fail "Compilation failed (exit code $compileExit)" }
+        else {
+            Write-Fail "$Name (compile failed)"
+            $compileOutput | ForEach-Object { Write-Host "       $_" -ForegroundColor DarkGray }
+        }
+        return $false
+    }
+    if ($Verbose) { Write-Pass "Compilation succeeded -> $exePath" }
+
+    # ── Run ─────────────────────────────────────────────────────
+    if ($Verbose) { Write-Section "Run" }
+    if ($Verbose) {
+        Write-Cmd $exePath
+        Write-Host ""
+    }
+    $runOutput = & $exePath 2>&1
+    $runExit = $LASTEXITCODE
+    if ($Verbose) {
+        $runOutput | ForEach-Object { Write-Host "  $_" }
+        Write-Host ""
+    }
+    if ($runExit -ne 0) {
+        if ($Verbose) { Write-Fail "Runtime error (exit code $runExit)" }
+        else {
+            Write-Fail "$Name (runtime error, exit code $runExit)"
+            $runOutput | ForEach-Object { Write-Host "       $_" -ForegroundColor DarkGray }
+        }
+        return $false
+    }
+    if ($Verbose) { Write-Pass "Program exited successfully (code 0)" }
+
+    # ── Generated files (verbose only) ──────────────────────────
+    if ($Verbose) {
+        Write-Section "Generated Files"
+        Get-ChildItem "$TestOutDir\*" | ForEach-Object {
+            $size = if ($_.Length -ge 1024) { "{0:N1} KB" -f ($_.Length / 1024) } else { "$($_.Length) B" }
+            Write-Info ("{0,-30} {1,10}" -f $_.Name, $size)
+        }
+    }
+
+    if (-not $Verbose) { Write-Pass $Name }
+    return $true
+}
+
+# ════════════════════════════════════════════════════════════════
+# Single-test run mode: -Run <TestDirName>
+# ════════════════════════════════════════════════════════════════
+if ($Run -ne "") {
+    Write-Info "Using C compiler: $CC"
+
+    # ── Build JAR if needed ─────────────────────────────────────
+    Write-Section "Build"
+    if (-not (Test-Path $jar)) {
+        Write-Cmd "gradlew jar"
+        & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
+            Write-Host "ERROR: JAR build failed" -ForegroundColor Red
+            exit 1
+        }
+        Write-Pass "Built $jar"
+    } else {
+        Write-Info "JAR up to date"
+    }
+
+    $testSrcDir = "$testsDir\$Run"
+    if (-not (Test-Path $testSrcDir -PathType Container)) {
+        Write-Host "ERROR: test directory not found: $testSrcDir" -ForegroundColor Red
+        Write-Host "Available tests:" -ForegroundColor Yellow
+        Get-ChildItem $testsDir -Directory | ForEach-Object { Write-Host "  - $($_.Name)" }
+        exit 1
+    }
+
+    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$outDir\$Run" -Verbose $true
+    if ($result) { exit 0 } else { exit 1 }
+}
+
+# ════════════════════════════════════════════════════════════════
+# Normal test-suite mode
+# ════════════════════════════════════════════════════════════════
+
+Write-Info "Using C compiler: $CC"
+
+$totalTests = 0
+$passedTests = 0
+$failedTests = 0
+$failedNames = @()
+
+# ── 1. Unit Tests ───────────────────────────────────────────────
+if ($Skip -ne "unit") {
+    Write-Section "Unit Tests (gradlew test)"
+    & "$root\gradlew.bat" test --quiet 2>&1 | Out-String -Stream | ForEach-Object {
+        if ($_ -match "(\d+) tests completed, (\d+) failed") {
+            $total = [int]$Matches[1]
+            $failed = [int]$Matches[2]
+            $totalTests += $total
+            $passedTests += ($total - $failed)
+            $failedTests += $failed
+            if ($failed -gt 0) { $failedNames += "unit-tests ($failed failures)" }
+        }
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Pass "All unit tests passed"
+    } else {
+        Write-Fail "Unit tests had failures (see above)"
+    }
+}
+
+# ── 2. Build JAR ───────────────────────────────────────────────
+Write-Section "Building transpiler JAR"
+& "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: JAR build failed" -ForegroundColor Red
+    exit 1
+}
+if (-not (Test-Path $jar)) {
+    Write-Host "ERROR: JAR not found at $jar" -ForegroundColor Red
+    exit 1
+}
+Write-Pass "Built $jar"
+
+# ── Prepare output directory ────────────────────────────────────
+if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
+New-Item $outDir -ItemType Directory -Force | Out-Null
+
+# ── 3. Integration Tests — auto-discover from tests/ ───────────
+Write-Section "Integration Tests"
+
+$testDirs = Get-ChildItem $testsDir -Directory | Sort-Object Name
+if ($testDirs.Count -eq 0) {
+    Write-Info "No test directories found in $testsDir"
+} else {
+    foreach ($dir in $testDirs) {
+        $totalTests++
+        $result = Invoke-Test -Name $dir.Name -TestSrcDir $dir.FullName -TestOutDir "$outDir\$($dir.Name)"
+        if ($result) {
+            $passedTests++
+        } else {
+            $failedTests++
+            $failedNames += $dir.Name
+        }
+    }
+}
+
+# ── Summary ─────────────────────────────────────────────────────
+Write-Section "Summary"
+$total = $passedTests + $failedTests
+Write-Host "  Total: $total  |  " -NoNewline
+Write-Host "Passed: $passedTests" -ForegroundColor Green -NoNewline
+Write-Host "  |  " -NoNewline
+if ($failedTests -gt 0) {
+    Write-Host "Failed: $failedTests" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Failed tests:" -ForegroundColor Red
+    foreach ($name in $failedNames) {
+        Write-Host "    - $name" -ForegroundColor Red
+    }
+    exit 1
+} else {
+    Write-Host "Failed: 0" -ForegroundColor Green
+    exit 0
+}
