@@ -2476,6 +2476,47 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun emitAssign(s: AssignStmt, ind: String, method: Boolean) {
 
+        // operator set: a[i] = v → ClassName_set(&a, i, v)
+        if (s.target is IndexExpr && s.op == "=") {
+            val objType = inferExprType(s.target.obj)
+            if (objType != null && classes.containsKey(objType)) {
+                val setMethod = classes[objType]?.methods?.find { it.name == "set" }
+                if (setMethod != null) {
+                    val recv = genExpr(s.target.obj)
+                    val idx = genExpr(s.target.index)
+                    val value = genExpr(s.value)
+                    flushPreStmts(ind)
+                    impl.appendLine("$ind${pfx(objType)}_set(&$recv, $idx, $value);")
+                    return
+                }
+            }
+            if (objType != null && anyIndirectClassName(objType)?.let { classes.containsKey(it) } == true) {
+                val baseClass = anyIndirectClassName(objType)!!
+                val setMethod = classes[baseClass]?.methods?.find { it.name == "set" }
+                if (setMethod != null) {
+                    val recv = genExpr(s.target.obj)
+                    val idx = genExpr(s.target.index)
+                    val value = genExpr(s.value)
+                    flushPreStmts(ind)
+                    impl.appendLine("$ind${pfx(baseClass)}_set($recv, $idx, $value);")
+                    return
+                }
+            }
+            if (objType != null && interfaces.containsKey(objType)) {
+                val ifaceInfo = interfaces[objType]
+                val setMethod = ifaceInfo?.methods?.find { it.name == "set" }
+                    ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "set" }
+                if (setMethod != null) {
+                    val recv = genExpr(s.target.obj)
+                    val idx = genExpr(s.target.index)
+                    val value = genExpr(s.value)
+                    flushPreStmts(ind)
+                    impl.appendLine("$ind$recv.vt->set($recv.obj, $idx, $value);")
+                    return
+                }
+            }
+        }
+
         val target = genLValue(s.target, method)
         val varName = (s.target as? NameExpr)?.name
         val varType = if (varName != null) lookupVar(varName) else null
@@ -2954,6 +2995,57 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (objType == "String") {
                 // String indexing: str[i] → str.ptr[i] (returns char)
                 "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
+            } else if (objType != null && classes.containsKey(objType)) {
+                // Class with get() method → operator[] dispatch
+                val methodDecl = classes[objType]?.methods?.find { it.name == "get" }
+                if (methodDecl != null) {
+                    val recv = genExpr(e.obj)
+                    val idx = genExpr(e.index)
+                    if (methodDecl.returnType?.nullable == true) {
+                        genNullableMethodCall(objType, "${pfx(objType)}_get", "&$recv, $idx", methodDecl)
+                    } else {
+                        "${pfx(objType)}_get(&$recv, $idx)"
+                    }
+                } else {
+                    "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
+                }
+            } else if (objType != null && anyIndirectClassName(objType)?.let { classes.containsKey(it) } == true) {
+                // Heap<T>/Ptr<T>/Value<T> with get() → pointer-based dispatch
+                val baseClass = anyIndirectClassName(objType)!!
+                val methodDecl = classes[baseClass]?.methods?.find { it.name == "get" }
+                if (methodDecl != null) {
+                    val recv = genExpr(e.obj)
+                    val idx = genExpr(e.index)
+                    if (methodDecl.returnType?.nullable == true) {
+                        genNullableMethodCall(baseClass, "${pfx(baseClass)}_get", "$recv, $idx", methodDecl)
+                    } else {
+                        "${pfx(baseClass)}_get($recv, $idx)"
+                    }
+                } else {
+                    "${genExpr(e.obj)}[${genExpr(e.index)}]"
+                }
+            } else if (objType != null && interfaces.containsKey(objType)) {
+                // Interface with get() in vtable → operator[] dispatch
+                val ifaceInfo = interfaces[objType]
+                val ifaceMethod = ifaceInfo?.methods?.find { it.name == "get" }
+                    ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "get" }
+                if (ifaceMethod != null) {
+                    val recv = genExpr(e.obj)
+                    val idx = genExpr(e.index)
+                    if (ifaceMethod.returnType?.nullable == true) {
+                        val retBase = resolveMethodReturnType(objType, ifaceMethod.returnType).removeSuffix("?")
+                        val ct = cTypeStr(retBase)
+                        val t = tmp()
+                        preStmts += "$ct $t;"
+                        preStmts += "bool ${t}\$has = $recv.vt->get($recv.obj, $idx, &$t);"
+                        defineVar(t, "${retBase}?")
+                        t
+                    } else {
+                        "$recv.vt->get($recv.obj, $idx)"
+                    }
+                } else {
+                    "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
+                }
             } else if (objType != null && (objType.endsWith("*") || isArrayType(objType))) {
                 // Typed pointer or array: direct indexing
                 "${genExpr(e.obj)}[${genExpr(e.index)}]"
@@ -3047,6 +3139,48 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // String + → kt_string_cat
         if (e.op == "+" && (lt == "String" || inferExprType(e.right) == "String")) {
             return genStringConcat(e)
+        }
+        // in / !in → contains() dispatch on class or interface
+        if (e.op == "in" || e.op == "!in") {
+            val rt = inferExprType(e.right)
+            val negated = e.op == "!in"
+            if (rt != null && classes.containsKey(rt)) {
+                val containsMethod = classes[rt]?.methods?.find { it.name == "contains" || it.name == "containsKey" }
+                if (containsMethod != null) {
+                    val recv = genExpr(e.right)
+                    val elem = genExpr(e.left)
+                    val call = "${pfx(rt)}_${containsMethod.name}(&$recv, $elem)"
+                    return if (negated) "!$call" else call
+                }
+            }
+            if (rt != null && anyIndirectClassName(rt)?.let { classes.containsKey(it) } == true) {
+                val baseClass = anyIndirectClassName(rt)!!
+                val containsMethod = classes[baseClass]?.methods?.find { it.name == "contains" || it.name == "containsKey" }
+                if (containsMethod != null) {
+                    val recv = genExpr(e.right)
+                    val elem = genExpr(e.left)
+                    val call = "${pfx(baseClass)}_${containsMethod.name}($recv, $elem)"
+                    return if (negated) "!$call" else call
+                }
+            }
+            if (rt != null && interfaces.containsKey(rt)) {
+                val ifaceInfo = interfaces[rt]
+                val allMethods = collectAllIfaceMethods(ifaceInfo!!)
+                val containsMethod = allMethods.find { it.name == "contains" || it.name == "containsKey" }
+                if (containsMethod != null) {
+                    val recv = genExpr(e.right)
+                    val elem = genExpr(e.left)
+                    val call = "$recv.vt->${containsMethod.name}($recv.obj, $elem)"
+                    return if (negated) "!$call" else call
+                }
+            }
+            // Fallback: range-based `in` for IntRange, etc.
+            if (rt != null && (rt == "IntRange" || rt.endsWith("Range"))) {
+                val lo = genExpr((e.right as? BinExpr)?.left ?: e.right)
+                val hi = genExpr((e.right as? BinExpr)?.right ?: e.right)
+                val v = genExpr(e.left)
+                return if (negated) "($v < $lo || $v > $hi)" else "($v >= $lo && $v <= $hi)"
+            }
         }
         return "(${genExpr(e.left)} ${e.op} ${genExpr(e.right)})"
     }
@@ -4472,6 +4606,30 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val t = inferExprType(e.obj) ?: return null
         // String indexing: str[i] → Char
         if (t == "String") return "Char"
+        // Class with get() method → return type of get
+        if (classes.containsKey(t)) {
+            val methodDecl = classes[t]?.methods?.find { it.name == "get" }
+            if (methodDecl?.returnType != null) {
+                return resolveMethodReturnType(t, methodDecl.returnType)
+            }
+        }
+        // Heap<T>/Ptr<T>/Value<T> wrapping a class with get()
+        val indirectBase = anyIndirectClassName(t)
+        if (indirectBase != null && classes.containsKey(indirectBase)) {
+            val methodDecl = classes[indirectBase]?.methods?.find { it.name == "get" }
+            if (methodDecl?.returnType != null) {
+                return resolveMethodReturnType(indirectBase, methodDecl.returnType)
+            }
+        }
+        // Interface with get() in vtable
+        if (interfaces.containsKey(t)) {
+            val ifaceInfo = interfaces[t]
+            val ifaceMethod = ifaceInfo?.methods?.find { it.name == "get" }
+                ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "get" }
+            if (ifaceMethod?.returnType != null) {
+                return resolveMethodReturnType(t, ifaceMethod.returnType)
+            }
+        }
         // Typed pointer: "Int*" → "Int"
         if (t.endsWith("*")) return t.dropLast(1)
         return arrayElementKtType(t)

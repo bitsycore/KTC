@@ -9,6 +9,7 @@ interface Map<K, V> : Disposable {
 
 interface MutableMap<K, V> : Map<K, V> {
 	fun put(key: K, value: V)
+	fun set(key: K, value: V)
 	fun remove(key: K): Boolean
 	fun clear()
 }
@@ -70,6 +71,10 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		vals[idx] = value
 		occ[idx] = true
 		size = size + 1
+	}
+
+	override fun set(key: K, value: V) {
+		this.put(key, value)
 	}
 
 	override fun remove(key: K): Boolean {

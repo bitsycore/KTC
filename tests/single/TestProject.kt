@@ -52,7 +52,7 @@ fun main(args: Array<String>) {
 	v2.add(Vec2(0,0))
 
 	for(i in 0..<v2.size) {
-		println("v2.get($i) = ${v2.get(i)}")
+		println("v2.get($i) = ${v2[i]}")
 	}
 
 	val list = malloc<ArrayList<Int>>(8)!!
