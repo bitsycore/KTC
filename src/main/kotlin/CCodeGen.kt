@@ -32,6 +32,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private data class ClassInfo(
         val name: String, val isData: Boolean,
         val ctorProps: List<Pair<String, TypeRef>>,
+        val ctorPlainParams: List<Pair<String, TypeRef>> = emptyList(),
         val bodyProps: List<BodyProp> = emptyList(),
         val methods: MutableList<FunDecl> = mutableListOf(),
         val initBlocks: List<Block> = emptyList(),
@@ -410,10 +411,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         when (d) {
             is ClassDecl -> {
                 val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
+                val ctorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { it.name to it.type }
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
                     BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line)
                 }
-                val ci = ClassInfo(d.name, d.isData, ctorProps, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams)
+                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
                 for (m in d.members) if (m is FunDecl && m.receiver == null) ci.methods += m
                 classes[d.name] = ci
@@ -691,11 +693,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val ctorProps = templateCi.ctorProps.map { (name, type) ->
                     name to substituteTypeRef(type, subst)
                 }
+                // Substitute types in plain ctor params (not stored as fields)
+                val ctorPlainParams = templateCi.ctorPlainParams.map { (name, type) ->
+                    name to substituteTypeRef(type, subst)
+                }
                 // Substitute types in body props
                 val bodyProps = templateCi.bodyProps.map { bp ->
                     BodyProp(bp.name, substituteTypeRef(bp.type, subst), bp.init, bp.line)
                 }
-                val ci = ClassInfo(mangledName, templateCi.isData, ctorProps, bodyProps,
+                val ci = ClassInfo(mangledName, templateCi.isData, ctorProps, ctorPlainParams, bodyProps,
                     initBlocks = templateCi.initBlocks)
                 // Copy methods from template
                 for (m in templateCi.methods) ci.methods += m
@@ -873,11 +879,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine()
 
         // --- constructor (only takes ctor params, initializes all fields) ---
-        val paramStr = expandCtorParams(ci.ctorProps)
+        val allCtorParams = ci.ctorProps + ci.ctorPlainParams
+        val paramStr = expandCtorParams(allCtorParams)
         val paramDecl = paramStr.ifEmpty { "void" }
         hdr.appendLine("$cName ${cName}_create($paramDecl);")
         impl.appendLine("$cName ${cName}_create($paramDecl) {")
-        if (ci.bodyProps.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
+        if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
             impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { it.first }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
@@ -899,6 +906,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val expr = genExpr(bp.init)
                     flushPreStmts("    ")
                     impl.appendLine("    \$self.${bp.name} = $expr;")
+                    emitBodyPropLenIfArray(bp)
                 }
             }
             impl.appendLine("    return \$self;")
@@ -959,11 +967,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine()
 
         // --- constructor ---
-        val paramStr = expandCtorParams(ci.ctorProps)
+        val allCtorParams = ci.ctorProps + ci.ctorPlainParams
+        val paramStr = expandCtorParams(allCtorParams)
         val paramDecl = paramStr.ifEmpty { "void" }
         hdr.appendLine("$cName ${cName}_create($paramDecl);")
         impl.appendLine("$cName ${cName}_create($paramDecl) {")
-        if (ci.bodyProps.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
+        if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
             impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { it.first }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
@@ -985,6 +994,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val expr = genExpr(bp.init)
                     flushPreStmts("    ")
                     impl.appendLine("    \$self.${bp.name} = $expr;")
+                    emitBodyPropLenIfArray(bp)
                 }
             }
             impl.appendLine("    return \$self;")
@@ -1042,12 +1052,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     /** Generate ClassName_new(args) → ClassName* (heap constructor). */
     private fun emitHeapNew(cName: String, ci: ClassInfo) {
-        val paramStr = expandCtorParams(ci.ctorProps)
+        val allCtorParams = ci.ctorProps + ci.ctorPlainParams
+        val paramStr = expandCtorParams(allCtorParams)
         val paramDecl = paramStr.ifEmpty { "void" }
         hdr.appendLine("$cName* ${cName}_new($paramDecl);")
         impl.appendLine("$cName* ${cName}_new($paramDecl) {")
         impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
-        impl.appendLine("    if (\$p) *\$p = ${cName}_create(${ci.ctorProps.joinToString(", ") { it.first }});")
+        impl.appendLine("    if (\$p) *\$p = ${cName}_create(${allCtorParams.joinToString(", ") { it.first }});")
         impl.appendLine("    return \$p;")
         impl.appendLine("}")
         impl.appendLine()
@@ -1850,6 +1861,30 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return name in setOf("malloc", "calloc", "realloc")
     }
 
+    /** Extract the allocation size argument from malloc<Array<T>>(size) or realloc<Array<T>>(ptr, size).
+     *  Unwraps NotNullExpr (!!). Returns the size Expr or null. */
+    private fun extractAllocSize(e: Expr?): Expr? {
+        val inner = if (e is NotNullExpr) e.expr else e
+        if (inner !is CallExpr) return null
+        val name = (inner.callee as? NameExpr)?.name ?: return null
+        return when (name) {
+            "malloc"  -> inner.args.firstOrNull()?.expr  // malloc<Array<T>>(size)
+            "calloc"  -> inner.args.firstOrNull()?.expr  // calloc<Array<T>>(size)
+            "realloc" -> inner.args.getOrNull(1)?.expr   // realloc<Array<T>>(ptr, size)
+            else      -> null
+        }
+    }
+
+    /** If a body prop is an array type, emit $self.name$len = allocSize after the assignment. */
+    private fun emitBodyPropLenIfArray(bp: BodyProp) {
+        val resolved = resolveTypeName(bp.type)
+        if (!isArrayType(resolved)) return
+        val allocSize = extractAllocSize(bp.init)
+        if (allocSize != null) {
+            impl.appendLine("    \$self.${bp.name}\$len = ${genExpr(allocSize)};")
+        }
+    }
+
     /** Generate a call expression that returns nullable, appending &outVar as extra arg.
      *  The function returns bool (has value), and writes the value through the out pointer. */
     private fun genExprWithNullableOut(e: Expr, outVar: String): String {
@@ -1932,6 +1967,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 impl.appendLine("$ind$target ${s.op} $value;")
                 if (varType != null && varType.endsWith("?") && anyIndirectClassName(varType) == null) {
                     impl.appendLine("$ind${target}\$has = true;")
+                }
+                // Update array $len when assigning from malloc/realloc
+                if (varType != null && isArrayType(varType) && s.op == "=") {
+                    val allocSize = extractAllocSize(s.value)
+                    if (allocSize != null) {
+                        impl.appendLine("$ind${target}\$len = ${genExpr(allocSize)};")
+                    }
                 }
             }
         }
@@ -2591,7 +2633,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val mangledName = mangledGenericName(name, e.typeArgs.map { it.name })
             val ci = classes[mangledName]!!
             val templateDecl = genericClassDecls[name]
-            val filledArgs = fillDefaults(args, ci.ctorProps.map { Param(it.first, it.second) }, ci.ctorProps.associate {
+            val allParams = ci.ctorProps + ci.ctorPlainParams
+            val filledArgs = fillDefaults(args, allParams.map { Param(it.first, it.second) }, allParams.associate {
                 val cp = templateDecl?.ctorParams?.find { p -> p.name == it.first }
                 it.first to cp?.default
             })
@@ -2599,7 +2642,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         if (classes.containsKey(name)) {
             val ci = classes[name]!!
-            val filledArgs = fillDefaults(args, ci.ctorProps.map { Param(it.first, it.second) }, ci.ctorProps.associate {
+            val allParams = ci.ctorProps + ci.ctorPlainParams
+            val filledArgs = fillDefaults(args, allParams.map { Param(it.first, it.second) }, allParams.associate {
                 // find matching ctor param default
                 val cp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == name })
                     ?.ctorParams?.find { p -> p.name == it.first }
