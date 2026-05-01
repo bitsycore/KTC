@@ -2337,6 +2337,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         flushPreStmts(ind)
                         impl.appendLine("$ind$ct ${s.name} = $expr;")
                     }
+                    // Emit $len companion for malloc<Array<T>>(n) / calloc<Array<T>>(n)
+                    if (isAllocArrayCall(s.init)) {
+                        val allocSize = extractAllocSize(s.init)
+                        if (allocSize != null) {
+                            impl.appendLine("${ind}int32_t ${s.name}\$len = ${genExpr(allocSize)};")
+                        }
+                    }
                 }
                 // ── Value nullable (existing system with $has) ──
                 isNullable -> {
@@ -2460,6 +2467,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e !is CallExpr) return false
         val name = (e.callee as? NameExpr)?.name ?: return false
         return name in setOf("malloc", "calloc", "realloc")
+    }
+
+    /** Check if an expression is a malloc/calloc/realloc call with Array<T> type arg. */
+    private fun isAllocArrayCall(e: Expr?): Boolean {
+        val inner = if (e is NotNullExpr) e.expr else e
+        if (inner !is CallExpr) return false
+        val name = (inner.callee as? NameExpr)?.name ?: return false
+        if (name !in setOf("malloc", "calloc", "realloc")) return false
+        return inner.typeArgs.isNotEmpty() && inner.typeArgs[0].name == "Array"
     }
 
     /** Extract the allocation size argument from malloc<Array<T>>(size) or realloc<Array<T>>(ptr, size).
@@ -3253,6 +3269,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (isHeapValueNullable(varType) || isPtrValueNullable(varType) || isValueValueNullable(varType)) {
                     val has = "${varName}\$has"
                     return if (e.op == "==") "!$has" else has
+                }
+                // Raw pointer nullable (e.g. Int*? from malloc<Array<T>>) → compare to NULL
+                if (varType.endsWith("*?")) {
+                    return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
                 }
                 // Value nullable → use $has
                 if (varType.endsWith("?")) {

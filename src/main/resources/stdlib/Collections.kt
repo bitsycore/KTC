@@ -33,11 +33,11 @@ interface MutableList<T> : List<T> {
 class ArrayList<T>(capacity: Int) : MutableList<T> {
 
 	override var size: Int = 0
-	var buf: Heap<Array<T>> = malloc<Array<T>>(capacity)!!
+	var buf: Heap<Array<T>> = malloc<Array<T>>(if (capacity > 0) capacity else 4)!!
 
 	override fun add(value: T) {
 		if (size >= buf.size) {
-			val newSize = buf.size * 2
+			val newSize = if (buf.size > 0) buf.size * 2 else 4
 			buf = realloc<Array<T>>(buf, newSize)!!
 		}
 		buf[size] = value
