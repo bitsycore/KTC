@@ -586,6 +586,22 @@ fun testHashMap() {
     scores.free()
     wordCount.free()
     println("hashmap ok")
+
+    // mapOf sugar
+    val colors = mapOf("red" to 1, "green" to 2, "blue" to 3)
+    println(colors["red"])           // 1
+    println(colors["blue"])          // 3
+    println(colors.size)             // 3
+    println(colors.containsKey("green")) // true
+
+    // mutableMapOf sugar
+    var items = mutableMapOf(10 to 100, 20 to 200)
+    items[30] = 300
+    println(items[10])               // 100
+    println(items[30])               // 300
+    println(items.size)              // 3
+    items.free()
+    println("mapOf ok")
 }
 
 fun main(args: Array<String>) {

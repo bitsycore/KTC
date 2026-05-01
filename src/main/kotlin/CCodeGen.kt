@@ -285,6 +285,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
+    /** Lightweight type inference from AST node during pre-scan (no codegen context). */
+    private fun scanInferType(e: Expr): String? = when (e) {
+        is IntLit    -> "Int"
+        is LongLit   -> "Long"
+        is FloatLit  -> "Float"
+        is DoubleLit -> "Double"
+        is BoolLit   -> "Boolean"
+        is CharLit   -> "Char"
+        is StrLit    -> "String"
+        is CallExpr  -> (e.callee as? NameExpr)?.name?.let { n ->
+            if (classes.containsKey(n)) n else null
+        }
+        else -> null
+    }
+
     /** Pre-scan AST for Array<T> type references to populate classArrayTypes. */
     private fun scanForClassArrayTypes() {
         val primitives = setOf("Int", "Long", "Float", "Double", "Boolean", "Char", "String")
@@ -334,9 +349,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (hmKV != null) {
                     hashMapTypes.add(hmKV)
                 }
+                // mapOf / mutableMapOf / hashMapOf: infer key:value from first "to" pair
+                if ((name == "mapOf" || name == "mutableMapOf" || name == "hashMapOf") && e.args.isNotEmpty()) {
+                    val pair = e.args[0].expr as? BinExpr
+                    if (pair != null && pair.op == "to") {
+                        val keyKt = scanInferType(pair.left)
+                        val valKt = scanInferType(pair.right)
+                        if (keyKt != null && valKt != null) hashMapTypes.add("$keyKt:$valKt")
+                    }
+                }
                 // Recurse into args
                 for (arg in e.args) scanExpr(arg.expr)
             }
+            if (e is BinExpr) { scanExpr(e.left); scanExpr(e.right) }
         }
         fun scanStmt(s: Stmt) {
             when (s) {
@@ -804,7 +829,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         "Double"  -> "({ uint64_t \$b; memcpy(&\$b, &($keyExpr), 8); (uint32_t)(\$b ^ (\$b >> 32)); })"
         "Boolean" -> "((uint32_t)($keyExpr))"
         "Char"    -> "((uint32_t)($keyExpr))"
-        "String"  -> "${tn}_strhash($keyExpr)"
+        "String"  -> "kt_map_strhash($keyExpr)"
         else      -> "((uint32_t)($keyExpr))"  // fallback for class types
     }
 
@@ -832,8 +857,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     /**
-     * Emit a complete open-addressing hash map for a key:value type pair.
-     * Uses a parallel "occupied" bool array for simplicity.
+     * Emit per-type hash map functions for an inlined key:value pair.
+     * No struct typedef — variables are inlined as name$keys, name$vals, name$map.
+     * Mutating functions (put, grow) take K**, V** so realloc propagates.
+     * Read-only functions (get, containsKey) take K*, V*.
+     * clear and free use generic runtime helpers.
      */
     private fun emitHashMap(kv: String) {
         val (keyKt, valKt) = hashMapKV(kv)
@@ -841,146 +869,105 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val valC = cTypeStr(valKt)
         val tn = hashMapCName(kv)
 
-        // If key is String, emit a string hash helper
-        if (keyKt == "String") {
-            hdr.appendLine("uint32_t ${tn}_strhash(kt_String s);")
-            impl.appendLine("uint32_t ${tn}_strhash(kt_String s) {")
-            impl.appendLine("    uint32_t h = 2166136261u;")
-            impl.appendLine("    for (int32_t i = 0; i < s.len; i++) { h ^= (uint8_t)s.ptr[i]; h *= 16777619u; }")
-            impl.appendLine("    return h;")
-            impl.appendLine("}")
-            impl.appendLine()
-        }
+        val hashExpr = hashMapHashExpr(keyKt, "key", tn)
+        val keyEqPut = hashMapKeyEq(keyKt, "(*\$keys)[\$idx]", "key")
+        val keyEqGet = hashMapKeyEq(keyKt, "\$keys[\$idx]", "key")
 
-        // Struct: keys[], vals[], occ[], cap, len
-        hdr.appendLine("typedef struct {")
-        hdr.appendLine("    $keyC*  keys;")
-        hdr.appendLine("    $valC*  vals;")
-        hdr.appendLine("    bool*   occ;")
-        hdr.appendLine("    int32_t cap;")
-        hdr.appendLine("    int32_t len;")
-        hdr.appendLine("} $tn;")
-        hdr.appendLine()
-
-        // create
-        hdr.appendLine("$tn ${tn}_create(int32_t cap);")
-        impl.appendLine("$tn ${tn}_create(int32_t cap) {")
-        impl.appendLine("    $tn m;")
-        impl.appendLine("    m.cap = cap;")
-        impl.appendLine("    m.len = 0;")
-        impl.appendLine("    m.keys = ($keyC*)calloc((size_t)cap, sizeof($keyC));")
-        impl.appendLine("    m.vals = ($valC*)calloc((size_t)cap, sizeof($valC));")
-        impl.appendLine("    m.occ  = (bool*)calloc((size_t)cap, sizeof(bool));")
-        impl.appendLine("    return m;")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        // Internal: grow + rehash
-        hdr.appendLine("void ${tn}_grow($tn* \$self);")
-        impl.appendLine("void ${tn}_grow($tn* \$self) {")
-        impl.appendLine("    int32_t oldCap = \$self->cap;")
-        impl.appendLine("    $keyC* oldKeys = \$self->keys;")
-        impl.appendLine("    $valC* oldVals = \$self->vals;")
-        impl.appendLine("    bool*  oldOcc  = \$self->occ;")
-        impl.appendLine("    int32_t newCap = oldCap * 2;")
-        impl.appendLine("    \$self->keys = ($keyC*)calloc((size_t)newCap, sizeof($keyC));")
-        impl.appendLine("    \$self->vals = ($valC*)calloc((size_t)newCap, sizeof($valC));")
-        impl.appendLine("    \$self->occ  = (bool*)calloc((size_t)newCap, sizeof(bool));")
-        impl.appendLine("    \$self->cap  = newCap;")
-        impl.appendLine("    \$self->len  = 0;")
-        impl.appendLine("    for (int32_t \$i = 0; \$i < oldCap; \$i++) {")
-        impl.appendLine("        if (oldOcc[\$i]) ${tn}_put(\$self, oldKeys[\$i], oldVals[\$i]);")
-        impl.appendLine("    }")
-        impl.appendLine("    free(oldKeys); free(oldVals); free(oldOcc);")
-        impl.appendLine("}")
-        impl.appendLine()
+        // grow (forward declaration needed before put)
+        hdr.appendLine("void ${tn}_grow($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map);")
 
         // put
-        val hashExpr = hashMapHashExpr(keyKt, "key", tn)
-        val keyEq = hashMapKeyEq(keyKt, "\$self->keys[\$idx]", "key")
-        hdr.appendLine("void ${tn}_put($tn* \$self, $keyC key, $valC val);")
-        impl.appendLine("void ${tn}_put($tn* \$self, $keyC key, $valC val) {")
-        impl.appendLine("    if (\$self->len * 2 >= \$self->cap) ${tn}_grow(\$self);")
+        hdr.appendLine("void ${tn}_put($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map, $keyC key, $valC val);")
+        impl.appendLine("void ${tn}_put($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map, $keyC key, $valC val) {")
+        impl.appendLine("    if (\$map->len * 2 >= \$map->cap) ${tn}_grow(\$keys, \$vals, \$map);")
         impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$self->cap);")
-        impl.appendLine("    while (\$self->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEq) { \$self->vals[\$idx] = val; return; }")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$self->cap;")
+        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
+        impl.appendLine("    while (\$map->occ[\$idx]) {")
+        impl.appendLine("        if ($keyEqPut) { (*\$vals)[\$idx] = val; return; }")
+        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
         impl.appendLine("    }")
-        impl.appendLine("    \$self->keys[\$idx] = key;")
-        impl.appendLine("    \$self->vals[\$idx] = val;")
-        impl.appendLine("    \$self->occ[\$idx]  = true;")
-        impl.appendLine("    \$self->len++;")
+        impl.appendLine("    (*\$keys)[\$idx] = key;")
+        impl.appendLine("    (*\$vals)[\$idx] = val;")
+        impl.appendLine("    \$map->occ[\$idx] = true;")
+        impl.appendLine("    \$map->len++;")
         impl.appendLine("}")
         impl.appendLine()
 
-        // get (returns value, undefined if not present — use containsKey first)
-        hdr.appendLine("$valC ${tn}_get($tn* \$self, $keyC key);")
-        impl.appendLine("$valC ${tn}_get($tn* \$self, $keyC key) {")
+        // grow
+        impl.appendLine("void ${tn}_grow($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map) {")
+        impl.appendLine("    int32_t \$oc = \$map->cap;")
+        impl.appendLine("    int32_t \$nc = \$oc * 2;")
+        impl.appendLine("    $keyC* \$ok = *\$keys;")
+        impl.appendLine("    $valC* \$ov = *\$vals;")
+        impl.appendLine("    bool*  \$oo = \$map->occ;")
+        impl.appendLine("    *\$keys = ($keyC*)calloc((size_t)\$nc, sizeof($keyC));")
+        impl.appendLine("    *\$vals = ($valC*)calloc((size_t)\$nc, sizeof($valC));")
+        impl.appendLine("    \$map->occ = (bool*)calloc((size_t)\$nc, sizeof(bool));")
+        impl.appendLine("    \$map->cap = \$nc;")
+        impl.appendLine("    \$map->len = 0;")
+        impl.appendLine("    for (int32_t \$i = 0; \$i < \$oc; \$i++) {")
+        impl.appendLine("        if (\$oo[\$i]) ${tn}_put(\$keys, \$vals, \$map, \$ok[\$i], \$ov[\$i]);")
+        impl.appendLine("    }")
+        impl.appendLine("    free(\$ok); free(\$ov); free(\$oo);")
+        impl.appendLine("}")
+        impl.appendLine()
+
+        // get
+        hdr.appendLine("$valC ${tn}_get($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key);")
+        impl.appendLine("$valC ${tn}_get($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key) {")
         impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$self->cap);")
-        impl.appendLine("    while (\$self->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEq) return \$self->vals[\$idx];")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$self->cap;")
+        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
+        impl.appendLine("    while (\$map->occ[\$idx]) {")
+        impl.appendLine("        if ($keyEqGet) return \$vals[\$idx];")
+        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
         impl.appendLine("    }")
         impl.appendLine("    $valC \$zero = {0}; return \$zero;")
         impl.appendLine("}")
         impl.appendLine()
 
         // containsKey
-        hdr.appendLine("bool ${tn}_containsKey($tn* \$self, $keyC key);")
-        impl.appendLine("bool ${tn}_containsKey($tn* \$self, $keyC key) {")
+        hdr.appendLine("bool ${tn}_containsKey($keyC* \$keys, kt_MapInfo* \$map, $keyC key);")
+        impl.appendLine("bool ${tn}_containsKey($keyC* \$keys, kt_MapInfo* \$map, $keyC key) {")
         impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$self->cap);")
-        impl.appendLine("    while (\$self->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEq) return true;")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$self->cap;")
+        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
+        impl.appendLine("    while (\$map->occ[\$idx]) {")
+        impl.appendLine("        if ($keyEqGet) return true;")
+        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
         impl.appendLine("    }")
         impl.appendLine("    return false;")
         impl.appendLine("}")
         impl.appendLine()
 
-        // remove
-        hdr.appendLine("bool ${tn}_remove($tn* \$self, $keyC key);")
-        impl.appendLine("bool ${tn}_remove($tn* \$self, $keyC key) {")
+        // remove (inlined rehash — no call to put, avoids need for **)
+        val hashRehash = hashMapHashExpr(keyKt, "\$rk", tn)
+        hdr.appendLine("bool ${tn}_remove($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key);")
+        impl.appendLine("bool ${tn}_remove($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key) {")
         impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$self->cap);")
-        impl.appendLine("    while (\$self->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEq) {")
-        impl.appendLine("            \$self->occ[\$idx] = false;")
-        impl.appendLine("            \$self->len--;")
-        // Rehash the cluster after the removed slot
-        impl.appendLine("            int32_t \$j = (\$idx + 1) % \$self->cap;")
-        impl.appendLine("            while (\$self->occ[\$j]) {")
-        impl.appendLine("                $keyC \$rk = \$self->keys[\$j];")
-        impl.appendLine("                $valC \$rv = \$self->vals[\$j];")
-        impl.appendLine("                \$self->occ[\$j] = false;")
-        impl.appendLine("                \$self->len--;")
-        impl.appendLine("                ${tn}_put(\$self, \$rk, \$rv);")
-        impl.appendLine("                \$j = (\$j + 1) % \$self->cap;")
+        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
+        impl.appendLine("    while (\$map->occ[\$idx]) {")
+        impl.appendLine("        if ($keyEqGet) {")
+        impl.appendLine("            \$map->occ[\$idx] = false;")
+        impl.appendLine("            \$map->len--;")
+        impl.appendLine("            int32_t \$j = (\$idx + 1) % \$map->cap;")
+        impl.appendLine("            while (\$map->occ[\$j]) {")
+        impl.appendLine("                $keyC \$rk = \$keys[\$j];")
+        impl.appendLine("                $valC \$rv = \$vals[\$j];")
+        impl.appendLine("                \$map->occ[\$j] = false;")
+        impl.appendLine("                \$map->len--;")
+        impl.appendLine("                uint32_t \$rh = $hashRehash;")
+        impl.appendLine("                int32_t \$ri = (int32_t)(\$rh % (uint32_t)\$map->cap);")
+        impl.appendLine("                while (\$map->occ[\$ri]) \$ri = (\$ri + 1) % \$map->cap;")
+        impl.appendLine("                \$keys[\$ri] = \$rk;")
+        impl.appendLine("                \$vals[\$ri] = \$rv;")
+        impl.appendLine("                \$map->occ[\$ri] = true;")
+        impl.appendLine("                \$map->len++;")
+        impl.appendLine("                \$j = (\$j + 1) % \$map->cap;")
         impl.appendLine("            }")
         impl.appendLine("            return true;")
         impl.appendLine("        }")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$self->cap;")
+        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
         impl.appendLine("    }")
         impl.appendLine("    return false;")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        // clear
-        hdr.appendLine("void ${tn}_clear($tn* \$self);")
-        impl.appendLine("void ${tn}_clear($tn* \$self) {")
-        impl.appendLine("    memset(\$self->occ, 0, (size_t)\$self->cap * sizeof(bool));")
-        impl.appendLine("    \$self->len = 0;")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        // free
-        hdr.appendLine("void ${tn}_free($tn* \$self);")
-        impl.appendLine("void ${tn}_free($tn* \$self) {")
-        impl.appendLine("    free(\$self->keys); free(\$self->vals); free(\$self->occ);")
-        impl.appendLine("    \$self->keys = NULL; \$self->vals = NULL; \$self->occ = NULL;")
-        impl.appendLine("    \$self->cap = 0; \$self->len = 0;")
         impl.appendLine("}")
         impl.appendLine()
 
@@ -1123,10 +1110,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return
         }
 
+        // ── HashMap type: inline to three vars (name$keys, name$vals, name$map) ──
+        if (t.endsWith("HashMap") && hashMapConstructorKV(t) != null) {
+            emitHashMapVarDecl(s, t, ind)
+            return
+        }
+
         val ct = cTypeStr(t)
-        // Don't const class types, Pointer, typed pointers, nullable, ArrayList, or interface types
+        // Don't const class types, Pointer, typed pointers, nullable, ArrayList, HashMap, or interface types
         val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t) && t != "Pointer"
-            && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("ArrayList")
+            && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("ArrayList") && !t.endsWith("HashMap")
             && !isNullable && !isHeapPtrNull && !isHeapValNull) "const " else ""
 
         if (s.init != null) {
@@ -1205,6 +1198,47 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
+    /** Emit inlined HashMap variable: name$keys, name$vals, name$map. */
+    private fun emitHashMapVarDecl(s: VarDeclStmt, t: String, ind: String) {
+        val kv = hashMapConstructorKV(t)!!
+        val (keyKt, valKt) = hashMapKV(kv)
+        val keyC = cTypeStr(keyKt)
+        val valC = cTypeStr(valKt)
+        val tn = hashMapCName(kv)
+        val vn = s.name
+
+        // Determine init expression
+        val initCall = s.init as? CallExpr
+        val calleeName = (initCall?.callee as? NameExpr)?.name
+        val isConstructor = calleeName != null && hashMapConstructorKV(calleeName) != null
+        val isMapOf = calleeName in setOf("mapOf", "mutableMapOf", "hashMapOf")
+
+        val cap = when {
+            isConstructor && initCall!!.args.isNotEmpty() -> genExpr(initCall.args[0].expr)
+            isMapOf && initCall != null -> ((initCall.args.size * 2).coerceAtLeast(16)).toString()
+            else -> "16"
+        }
+
+        impl.appendLine("$ind$keyC* ${vn}\$keys = ($keyC*)calloc($cap, sizeof($keyC));")
+        impl.appendLine("$ind$valC* ${vn}\$vals = ($valC*)calloc($cap, sizeof($valC));")
+        impl.appendLine("${ind}kt_MapInfo ${vn}\$map = (kt_MapInfo){ .occ = (bool*)calloc($cap, sizeof(bool)), .cap = $cap, .len = 0 };")
+
+        // For mapOf, emit put calls for each pair
+        if (isMapOf && initCall != null) {
+            for (a in initCall.args) {
+                val pair = a.expr as? BinExpr
+                if (pair != null && pair.op == "to") {
+                    val k = genExpr(pair.left)
+                    val v = genExpr(pair.right)
+                    flushPreStmts(ind)
+                    impl.appendLine("$ind${tn}_put(&${vn}\$keys, &${vn}\$vals, &${vn}\$map, $k, $v);")
+                }
+            }
+        }
+
+        defineVar(s.name, t)
+    }
+
     private fun tryArrayOfInit(varName: String, init: Expr, ct: String, t: String, ind: String): String? {
         if (init !is CallExpr) return null
         val callee = (init.callee as? NameExpr)?.name ?: return null
@@ -1255,7 +1289,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val key = genExpr(s.target.index)
                 val value = genExpr(s.value)
                 flushPreStmts(ind)
-                impl.appendLine("$ind${typeName}_put(&$obj, $key, $value);")
+                impl.appendLine("$ind${typeName}_put(&${obj}\$keys, &${obj}\$vals, &${obj}\$map, $key, $value);")
                 return
             }
             if (objType != null && objType.endsWith("ArrayList")) {
@@ -1678,8 +1712,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is IndexExpr   -> {
             val objType = inferExprType(e.obj)
             if (objType != null && objType.endsWith("HashMap")) {
-                // HashMap: map[key] → TypeName_get(&map, key)
-                "${cTypeStr(objType)}_get(&${genExpr(e.obj)}, ${genExpr(e.index)})"
+                // HashMap: map[key] → TypeName_get(map$keys, map$vals, &map$map, key)
+                val obj = genExpr(e.obj)
+                "${cTypeStr(objType)}_get(${obj}\$keys, ${obj}\$vals, &${obj}\$map, ${genExpr(e.index)})"
             } else if (objType != null && objType.endsWith("ArrayList")) {
                 // ArrayList: list[idx] → TypeName_get(&list, idx)
                 "${cTypeStr(objType)}_get(&${genExpr(e.obj)}, ${genExpr(e.index)})"
@@ -1815,6 +1850,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "mutableListOf", "arrayListOf" -> {
                 return genMutableListOf(args)
             }
+            "mapOf", "mutableMapOf", "hashMapOf" -> {
+                return genMapOf(args)
+            }
             "intArrayOf", "longArrayOf", "floatArrayOf", "doubleArrayOf",
             "booleanArrayOf", "charArrayOf" -> {
                 // handled in emitVarDecl; if used as expr, wrap in compound literal
@@ -1841,12 +1879,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         // HashMap constructor: IntIntHashMap() or IntIntHashMap(cap)
+        // Inlined: creates three temp vars via preStmts, returns base name
         val hmKV = hashMapConstructorKV(name)
         if (hmKV != null) {
             hashMapTypes.add(hmKV)
-            val typeName = hashMapCName(hmKV)
+            val (keyKt, valKt) = hashMapKV(hmKV)
+            val keyC = cTypeStr(keyKt)
+            val valC = cTypeStr(valKt)
             val cap = if (args.isNotEmpty()) genExpr(args[0].expr) else "16"
-            return "${typeName}_create($cap)"
+            val t = tmp()
+            preStmts.add("$keyC* ${t}\$keys = ($keyC*)calloc($cap, sizeof($keyC));")
+            preStmts.add("$valC* ${t}\$vals = ($valC*)calloc($cap, sizeof($valC));")
+            preStmts.add("kt_MapInfo ${t}\$map = (kt_MapInfo){ .occ = (bool*)calloc($cap, sizeof(bool)), .cap = $cap, .len = 0 };")
+            return t
         }
 
         // Function pointer call: variable with function type → just call it
@@ -2011,18 +2056,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
 
-        // HashMap methods
+        // HashMap methods (inlined: recv$keys, recv$vals, recv$map)
         if (recvType != null && recvType.endsWith("HashMap")) {
             val typeName = cTypeStr(recvType)
             return when (method) {
-                "put"         -> "${typeName}_put(&$recv, $argStr)"
-                "get"         -> "${typeName}_get(&$recv, $argStr)"
-                "containsKey" -> "${typeName}_containsKey(&$recv, $argStr)"
-                "remove"      -> "${typeName}_remove(&$recv, $argStr)"
-                "clear"       -> "${typeName}_clear(&$recv)"
-                "free"        -> "${typeName}_free(&$recv)"
-                "size"        -> "$recv.len"
-                else          -> "$recv.$method($argStr)"
+                "put"         -> "${typeName}_put(&${recv}\$keys, &${recv}\$vals, &${recv}\$map, $argStr)"
+                "get"         -> "${typeName}_get(${recv}\$keys, ${recv}\$vals, &${recv}\$map, $argStr)"
+                "containsKey" -> "${typeName}_containsKey(${recv}\$keys, &${recv}\$map, $argStr)"
+                "remove"      -> "${typeName}_remove(${recv}\$keys, ${recv}\$vals, &${recv}\$map, $argStr)"
+                "clear"       -> "kt_map_clear(&${recv}\$map)"
+                "free"        -> "kt_map_free(${recv}\$keys, ${recv}\$vals, &${recv}\$map)"
+                "size"        -> "${recv}\$map.len"
+                else          -> "/* unknown HashMap method $method */"
             }
         }
 
@@ -2133,7 +2178,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // ArrayList .size
         if (e.name == "size" && recvType?.endsWith("ArrayList") == true) return "$recv.len"
         // HashMap .size
-        if (e.name == "size" && recvType?.endsWith("HashMap") == true) return "$recv.len"
+        if (e.name == "size" && recvType?.endsWith("HashMap") == true) return "${recv}\$map.len"
         if (e.name == "length" && recvType == "String") return "$recv.len"
 
         // Heap class pointer: p->field
@@ -2459,6 +2504,34 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return t
     }
 
+    /** Generates mapOf(k1 to v1, k2 to v2) → inlined create + put calls via preStmts.
+     *  Each arg must be a BinExpr with op=="to". */
+    private fun genMapOf(args: List<Arg>): String {
+        // Infer key/value types from first pair
+        val firstPair = args.firstOrNull()?.expr as? BinExpr
+        val keyKt = if (firstPair != null) inferExprType(firstPair.left) ?: "Int" else "Int"
+        val valKt = if (firstPair != null) inferExprType(firstPair.right) ?: "Int" else "Int"
+        val kv = "$keyKt:$valKt"
+        hashMapTypes.add(kv)
+        val keyC = cTypeStr(keyKt)
+        val valC = cTypeStr(valKt)
+        val tn = hashMapCName(kv)
+        val t = tmp()
+        val cap = (args.size * 2).coerceAtLeast(16)
+        preStmts.add("$keyC* ${t}\$keys = ($keyC*)calloc($cap, sizeof($keyC));")
+        preStmts.add("$valC* ${t}\$vals = ($valC*)calloc($cap, sizeof($valC));")
+        preStmts.add("kt_MapInfo ${t}\$map = (kt_MapInfo){ .occ = (bool*)calloc($cap, sizeof(bool)), .cap = $cap, .len = 0 };")
+        for (a in args) {
+            val pair = a.expr as? BinExpr
+            if (pair != null && pair.op == "to") {
+                val k = genExpr(pair.left)
+                val v = genExpr(pair.right)
+                preStmts.add("${tn}_put(&${t}\$keys, &${t}\$vals, &${t}\$map, $k, $v);")
+            }
+        }
+        return t
+    }
+
     // ── fill default arguments ───────────────────────────────────────
 
     private fun fillDefaults(args: List<Arg>, params: List<Param>, defaults: Map<String, Expr?>): List<Arg> {
@@ -2585,6 +2658,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val elemType = if (e.args.isNotEmpty()) inferExprType(e.args[0].expr) ?: "Int" else "Int"
                 arrayListElemTypes.add(elemType)
                 return "${elemType}ArrayList"
+            }
+            if (name == "mapOf" || name == "mutableMapOf" || name == "hashMapOf") {
+                val firstPair = e.args.firstOrNull()?.expr as? BinExpr
+                val keyKt = if (firstPair != null) inferExprType(firstPair.left) ?: "Int" else "Int"
+                val valKt = if (firstPair != null) inferExprType(firstPair.right) ?: "Int" else "Int"
+                val kv = "$keyKt:$valKt"
+                hashMapTypes.add(kv)
+                return "${keyKt}${valKt}HashMap"
             }
             // ArrayList constructors: IntArrayList(), Vec2ArrayList(cap)
             val alElem = arrayListConstructorElem(name)

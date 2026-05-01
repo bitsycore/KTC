@@ -616,7 +616,7 @@ class Parser(private val tokens: List<Token>) {
     // ═══════════════════════════ Precedence table ════════════════════
 
     companion object {
-        val INFIX_IDS = setOf("until", "downTo", "step")
+        val INFIX_IDS = setOf("until", "downTo", "step", "to")
         // Levels — higher binds tighter
         const val PREC_DISJUNCTION  = 1   // ||
         const val PREC_CONJUNCTION  = 2   // &&

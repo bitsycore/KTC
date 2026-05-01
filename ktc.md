@@ -356,7 +356,31 @@ wordCount.free()
 
 **Constructor:** `IntIntHashMap()` (default cap 16) or `IntIntHashMap(cap)` with explicit initial capacity.
 
-Codegen-driven: open-addressing hash table with linear probing, emitted per key:value type pair on first use. Grows at 50% load factor. String keys use FNV-1a hash. Heap-backed (`malloc` / `realloc`).
+**Sugar functions:**
+```kotlin
+// mapOf — creates pre-populated HashMap (type inferred from first pair)
+val colors = mapOf("red" to 1, "green" to 2, "blue" to 3)
+println(colors["red"])             // 1
+
+// mutableMapOf — same, but var-friendly
+var items = mutableMapOf(10 to 100, 20 to 200)
+items[30] = 300
+
+// hashMapOf — alias for mutableMapOf
+```
+The `to` infix operator creates key-value pairs. Key/value types are inferred from the first argument's left/right expressions.
+
+Codegen-driven: open-addressing hash table with linear probing, emitted per key:value type pair on first use. Grows at 50% load factor. String keys use FNV-1a hash. Heap-backed (`calloc` / `realloc`).
+
+**C representation (inlined, no per-type struct):**
+```c
+// var scores = IntIntHashMap()  →
+int32_t*   scores$keys;   // key array
+int32_t*   scores$vals;   // value array
+kt_MapInfo scores$map;    // generic metadata (occ, cap, len)
+```
+
+`kt_MapInfo` is a single generic struct in the runtime, shared across all HashMap types. Per-type functions (`_put`, `_get`, `_containsKey`, `_remove`, `_grow`) are emitted for hashing/comparison. `clear` and `free` use generic runtime helpers (`kt_map_clear`, `kt_map_free`).
 
 ## Nullables
 

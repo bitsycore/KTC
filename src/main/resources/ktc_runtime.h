@@ -153,6 +153,32 @@ static inline kt_StrBuf kt_sb_arena(kt_Arena* a, int32_t cap) {
     return (kt_StrBuf){(char*)kt_arena_alloc(a, (size_t)cap), 0, cap};
 }
 
+/* ═══════════════════════════ HashMap support ═════════════════════════ */
+
+/* Generic map metadata — shared across all HashMap key:value types. */
+typedef struct {
+    bool*    occ;   /* occupancy bitmap (parallel to keys/vals arrays) */
+    int32_t  cap;   /* capacity */
+    int32_t  len;   /* number of entries */
+} kt_MapInfo;
+
+static inline void kt_map_clear(kt_MapInfo* m) {
+    memset(m->occ, 0, (size_t)m->cap * sizeof(bool));
+    m->len = 0;
+}
+
+static inline void kt_map_free(void* keys, void* vals, kt_MapInfo* m) {
+    free(keys); free(vals); free(m->occ);
+    m->occ = NULL; m->cap = 0; m->len = 0;
+}
+
+/* FNV-1a hash for kt_String keys. */
+static inline uint32_t kt_map_strhash(kt_String s) {
+    uint32_t h = 2166136261u;
+    for (int32_t i = 0; i < s.len; i++) { h ^= (uint8_t)s.ptr[i]; h *= 16777619u; }
+    return h;
+}
+
 /* ═══════════════════════════ Conversion helpers ═════════════════════ */
 
 static inline kt_String kt_int_to_string(char* buf, int bufsz, int32_t v) {
