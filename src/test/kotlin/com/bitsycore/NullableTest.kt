@@ -178,4 +178,33 @@ class NullableTest : TranspilerTestBase() {
         // Passing non-null literal → pass value, true for $has
         r.sourceMatches(Regex("test_Main_show\\(99.*true\\)"))
     }
+
+    // ── Printing nullable values ─────────────────────────────────────
+
+    @Test fun printlnNullableInt() {
+        val r = transpileMain("""
+            var x: Int? = 42
+            println(x)
+        """)
+        r.sourceContains("x\$has")
+        r.sourceContains("printf(\"null")
+    }
+
+    @Test fun printlnNullableString() {
+        val r = transpileMain("""
+            var s: String? = null
+            println(s)
+        """)
+        r.sourceContains("s\$has")
+        r.sourceContains("printf(\"null")
+    }
+
+    @Test fun nullableInStringTemplate() {
+        val r = transpileMain("""
+            var x: Int? = null
+            println("value=${'$'}x")
+        """)
+        r.sourceContains("kt_sb_append_cstr")
+        r.sourceContains("\"null\"")
+    }
 }

@@ -1385,6 +1385,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val expr = genExpr(arg)
         flushPreStmts(ind)
 
+        // Nullable → if ($has) print(value) else print("null")
+        if (t.endsWith("?")) {
+            val baseT = t.removeSuffix("?")
+            val hasExpr = "${expr}\$has"
+            val fmt = printfFmt(baseT) + nl
+            val a = printfArg(expr, baseT)
+            impl.appendLine("${ind}if ($hasExpr) { printf(\"$fmt\", $a); }")
+            impl.appendLine("${ind}else { printf(\"null$nl\"); }")
+            return
+        }
+
         // data class → emit toString into StrBuf, then printf
         if (classes.containsKey(t) && classes[t]!!.isData) {
             val buf = tmp()
@@ -1411,12 +1422,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine("${ind}printf(\"$fmt\", $a);")
     }
 
-    /** Check if a template contains data class expressions (need StrBuf). */
+    /** Check if a template contains data class or nullable expressions (need StrBuf). */
     private fun templateNeedsStrBuf(tmpl: StrTemplateExpr): Boolean {
         return tmpl.parts.any { part ->
             part is ExprPart && run {
                 val t = inferExprType(part.expr) ?: "Int"
-                classes.containsKey(t)
+                classes.containsKey(t) || t.endsWith("?")
             }
         }
     }
@@ -2385,6 +2396,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val t = inferExprType(arg) ?: "Int"
         val expr = genExpr(arg)
 
+        // Nullable → ternary: $has ? printf(value) : printf("null")
+        if (t.endsWith("?")) {
+            val baseT = t.removeSuffix("?")
+            val hasExpr = "${expr}\$has"
+            val fmt = printfFmt(baseT) + nl
+            val a = printfArg(expr, baseT)
+            return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
+        }
+
         // data class → use preStmts for toString buffer
         if (classes.containsKey(t) && classes[t]!!.isData) {
             val buf = tmp()
@@ -2469,6 +2489,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── StrBuf append helper ─────────────────────────────────────────
 
     private fun genSbAppend(sbRef: String, expr: String, type: String): String {
+        // Nullable → conditionally append "null" or the value
+        if (type.endsWith("?")) {
+            val baseT = type.removeSuffix("?")
+            val inner = genSbAppend(sbRef, expr, baseT).removeSuffix(";")
+            return "if (${expr}\$has) { $inner; } else { kt_sb_append_cstr($sbRef, \"null\"); }"
+        }
         return when (type) {
             "Int" -> "kt_sb_append_int($sbRef, $expr);"
             "Long" -> "kt_sb_append_long($sbRef, $expr);"
