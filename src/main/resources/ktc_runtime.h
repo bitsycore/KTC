@@ -154,29 +154,164 @@ static inline kt_StrBuf kt_sb_arena(kt_Arena* a, int32_t cap) {
 }
 
 /* ═══════════════════════════ HashMap support ═════════════════════════ */
+/*
+ * Fully generic open-addressing hash map.
+ * Keys and values are stored as void* arrays; per-type hash/eq functions
+ * are passed as function pointers at each call site.
+ * K is limited to primitives, String, or types implementing Hashable.
+ */
 
-/* Generic map metadata — shared across all HashMap key:value types. */
+typedef uint32_t (*kt_hash_fn)(const void* key);
+typedef bool     (*kt_eq_fn)(const void* a, const void* b);
+
 typedef struct {
-    bool*    occ;   /* occupancy bitmap (parallel to keys/vals arrays) */
-    int32_t  cap;   /* capacity */
-    int32_t  len;   /* number of entries */
+    void*    keys;  /* heap-allocated key array   */
+    void*    vals;  /* heap-allocated value array  */
+    bool*    occ;   /* occupancy bitmap            */
+    int32_t  cap;   /* capacity (slot count)       */
+    int32_t  len;   /* number of live entries       */
+    int32_t  ksz;   /* sizeof(K)                   */
+    int32_t  vsz;   /* sizeof(V)                   */
 } kt_MapInfo;
+
+/* ── hash functions (one per supported key type) ──────────────────── */
+
+static inline uint32_t kt_hash_i32(const void* p)  { return (uint32_t)(*(const int32_t*)p); }
+static inline uint32_t kt_hash_i64(const void* p)  { uint64_t v = *(const uint64_t*)p; return (uint32_t)(v ^ (v >> 32)); }
+static inline uint32_t kt_hash_f32(const void* p)  { uint32_t b; memcpy(&b, p, 4); return b; }
+static inline uint32_t kt_hash_f64(const void* p)  { uint64_t b; memcpy(&b, p, 8); return (uint32_t)(b ^ (b >> 32)); }
+static inline uint32_t kt_hash_bool(const void* p) { return (uint32_t)(*(const bool*)p); }
+static inline uint32_t kt_hash_char(const void* p) { return (uint32_t)(*(const unsigned char*)p); }
+static inline uint32_t kt_hash_str(const void* p) {
+    kt_String s = *(const kt_String*)p;
+    uint32_t h = 2166136261u;
+    for (int32_t i = 0; i < s.len; i++) { h ^= (uint8_t)s.ptr[i]; h *= 16777619u; }
+    return h;
+}
+
+/* ── equality functions ───────────────────────────────────────────── */
+
+static inline bool kt_eq_i32(const void* a, const void* b)  { return *(const int32_t*)a == *(const int32_t*)b; }
+static inline bool kt_eq_i64(const void* a, const void* b)  { return *(const int64_t*)a == *(const int64_t*)b; }
+static inline bool kt_eq_f32(const void* a, const void* b)  { return *(const float*)a == *(const float*)b; }
+static inline bool kt_eq_f64(const void* a, const void* b)  { return *(const double*)a == *(const double*)b; }
+static inline bool kt_eq_bool(const void* a, const void* b) { return *(const bool*)a == *(const bool*)b; }
+static inline bool kt_eq_char(const void* a, const void* b) { return *(const unsigned char*)a == *(const unsigned char*)b; }
+static inline bool kt_eq_str(const void* a, const void* b)  { return kt_string_eq(*(const kt_String*)a, *(const kt_String*)b); }
+
+/* ── map lifecycle ────────────────────────────────────────────────── */
+
+static inline kt_MapInfo kt_map_create(int32_t cap, int32_t ksz, int32_t vsz) {
+    kt_MapInfo m;
+    m.keys = calloc((size_t)cap, (size_t)ksz);
+    m.vals = calloc((size_t)cap, (size_t)vsz);
+    m.occ  = (bool*)calloc((size_t)cap, sizeof(bool));
+    m.cap  = cap;
+    m.len  = 0;
+    m.ksz  = ksz;
+    m.vsz  = vsz;
+    return m;
+}
 
 static inline void kt_map_clear(kt_MapInfo* m) {
     memset(m->occ, 0, (size_t)m->cap * sizeof(bool));
     m->len = 0;
 }
 
-static inline void kt_map_free(void* keys, void* vals, kt_MapInfo* m) {
-    free(keys); free(vals); free(m->occ);
-    m->occ = NULL; m->cap = 0; m->len = 0;
+static inline void kt_map_free(kt_MapInfo* m) {
+    free(m->keys); free(m->vals); free(m->occ);
+    m->keys = NULL; m->vals = NULL; m->occ = NULL;
+    m->cap = 0; m->len = 0;
 }
 
-/* FNV-1a hash for kt_String keys. */
-static inline uint32_t kt_map_strhash(kt_String s) {
-    uint32_t h = 2166136261u;
-    for (int32_t i = 0; i < s.len; i++) { h ^= (uint8_t)s.ptr[i]; h *= 16777619u; }
-    return h;
+/* ── internal: grow (double capacity, rehash all entries) ─────────── */
+
+static inline void kt_map_grow(kt_MapInfo* m, kt_hash_fn hash, kt_eq_fn eq) {
+    int32_t oc = m->cap;
+    int32_t nc = oc * 2;
+    char* ok = (char*)m->keys;
+    char* ov = (char*)m->vals;
+    bool* oo = m->occ;
+    m->keys = calloc((size_t)nc, (size_t)m->ksz);
+    m->vals = calloc((size_t)nc, (size_t)m->vsz);
+    m->occ  = (bool*)calloc((size_t)nc, sizeof(bool));
+    m->cap  = nc;
+    m->len  = 0;
+    for (int32_t i = 0; i < oc; i++) {
+        if (oo[i]) {
+            const void* kp = ok + i * m->ksz;
+            uint32_t h = hash(kp);
+            int32_t idx = (int32_t)(h % (uint32_t)nc);
+            while (m->occ[idx]) idx = (idx + 1) % nc;
+            memcpy((char*)m->keys + idx * m->ksz, kp, (size_t)m->ksz);
+            memcpy((char*)m->vals + idx * m->vsz, ov + i * m->vsz, (size_t)m->vsz);
+            m->occ[idx] = true;
+            m->len++;
+        }
+    }
+    free(ok); free(ov); free(oo);
+}
+
+/* ── put (insert or update) ───────────────────────────────────────── */
+
+static inline void kt_map_put(kt_MapInfo* m, const void* key, const void* val,
+                               kt_hash_fn hash, kt_eq_fn eq) {
+    if (m->len * 2 >= m->cap) kt_map_grow(m, hash, eq);
+    uint32_t h = hash(key);
+    int32_t idx = (int32_t)(h % (uint32_t)m->cap);
+    while (m->occ[idx]) {
+        if (eq((char*)m->keys + idx * m->ksz, key)) {
+            memcpy((char*)m->vals + idx * m->vsz, val, (size_t)m->vsz);
+            return;
+        }
+        idx = (idx + 1) % m->cap;
+    }
+    memcpy((char*)m->keys + idx * m->ksz, key, (size_t)m->ksz);
+    memcpy((char*)m->vals + idx * m->vsz, val, (size_t)m->vsz);
+    m->occ[idx] = true;
+    m->len++;
+}
+
+/* ── find (returns slot index or -1) ──────────────────────────────── */
+
+static inline int32_t kt_map_find(kt_MapInfo* m, const void* key,
+                                   kt_hash_fn hash, kt_eq_fn eq) {
+    uint32_t h = hash(key);
+    int32_t idx = (int32_t)(h % (uint32_t)m->cap);
+    while (m->occ[idx]) {
+        if (eq((char*)m->keys + idx * m->ksz, key)) return idx;
+        idx = (idx + 1) % m->cap;
+    }
+    return -1;
+}
+
+/* ── remove (with cluster rehash) ─────────────────────────────────── */
+
+static inline bool kt_map_remove(kt_MapInfo* m, const void* key,
+                                  kt_hash_fn hash, kt_eq_fn eq) {
+    int32_t fi = kt_map_find(m, key, hash, eq);
+    if (fi < 0) return false;
+    m->occ[fi] = false;
+    m->len--;
+    /* rehash the cluster following fi */
+    int32_t j = (fi + 1) % m->cap;
+    while (m->occ[j]) {
+        void* kp = (char*)m->keys + j * m->ksz;
+        void* vp = (char*)m->vals + j * m->vsz;
+        m->occ[j] = false;
+        m->len--;
+        uint32_t rh = hash(kp);
+        int32_t ri = (int32_t)(rh % (uint32_t)m->cap);
+        while (m->occ[ri]) ri = (ri + 1) % m->cap;
+        if (ri != j) {
+            memcpy((char*)m->keys + ri * m->ksz, kp, (size_t)m->ksz);
+            memcpy((char*)m->vals + ri * m->vsz, vp, (size_t)m->vsz);
+        }
+        m->occ[ri] = true;
+        m->len++;
+        j = (j + 1) % m->cap;
+    }
+    return true;
 }
 
 /* ═══════════════════════════ Conversion helpers ═════════════════════ */

@@ -63,9 +63,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // Each entry is the element Kotlin type, e.g. "Int", "String", "Vec2"
     private val arrayListElemTypes = mutableSetOf<String>()
 
-    // Track HashMap types used: each entry is "KeyType:ValueType", e.g. "Int:Int", "String:Int"
-    private val hashMapTypes = mutableSetOf<String>()
-
     // ── Per-scope variable → type mapping ────────────────────────────
     private val scopes = ArrayDeque<MutableMap<String, String>>()
     private fun pushScope() { scopes.addLast(mutableMapOf()) }
@@ -193,9 +190,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Emit ArrayList struct + methods for each element type used
         for (elem in arrayListElemTypes) emitArrayList(elem)
-
-        // Emit HashMap struct + methods for each key:value type pair used
-        for (kv in hashMapTypes) emitHashMap(kv)
 
         // Emit top-level functions and properties
         for (d in file.decls) when (d) {
@@ -344,20 +338,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (alElem != null) {
                     arrayListElemTypes.add(alElem)
                 }
-                // HashMap constructors: IntIntHashMap(), StringIntHashMap()
-                val hmKV = if (name != null) hashMapConstructorKV(name) else null
-                if (hmKV != null) {
-                    hashMapTypes.add(hmKV)
-                }
-                // mapOf / mutableMapOf / hashMapOf: infer key:value from first "to" pair
-                if ((name == "mapOf" || name == "mutableMapOf" || name == "hashMapOf") && e.args.isNotEmpty()) {
-                    val pair = e.args[0].expr as? BinExpr
-                    if (pair != null && pair.op == "to") {
-                        val keyKt = scanInferType(pair.left)
-                        val valKt = scanInferType(pair.right)
-                        if (keyKt != null && valKt != null) hashMapTypes.add("$keyKt:$valKt")
-                    }
-                }
+                // HashMap and mapOf use generic runtime — no per-type scanning needed
                 // Recurse into args
                 for (arg in e.args) scanExpr(arg.expr)
             }
@@ -801,177 +782,42 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine()
     }
 
-    // ── HashMap codegen ──────────────────────────────────────────────
+    // ── HashMap codegen (generic runtime) ──────────────────────────────
 
-    /** Parse "KeyType:ValueType" pair. */
-    private fun hashMapKV(kv: String): Pair<String, String> {
-        val parts = kv.split(":")
-        return parts[0] to parts[1]
+    /** Check if a type string represents a HashMap type, e.g. "HashMap<Int,Int>". */
+    private fun isHashMapType(t: String): Boolean = t.startsWith("HashMap<") && t.endsWith(">")
+
+    /** Extract key/value Kotlin types from "HashMap<K,V>" string. */
+    private fun hashMapKVTypes(t: String): Pair<String, String>? {
+        if (!isHashMapType(t)) return null
+        val inner = t.removePrefix("HashMap<").removeSuffix(">")
+        val comma = inner.indexOf(',')
+        if (comma < 0) return null
+        return inner.substring(0, comma).trim() to inner.substring(comma + 1).trim()
     }
 
-    /** C type name for a HashMap. e.g. "Int:Int" → "kt_IntIntHashMap", "String:Vec2" → "kt_StringGame_Vec2HashMap" */
-    private fun hashMapCName(kv: String): String {
-        val (keyKt, valKt) = hashMapKV(kv)
-        return "${hashMapCPrefix(keyKt)}${valKt}HashMap"
+    /** Runtime hash function name for a given Kotlin key type. */
+    private fun hashFnName(keyKt: String): String = when (keyKt) {
+        "Int"     -> "kt_hash_i32"
+        "Long"    -> "kt_hash_i64"
+        "Float"   -> "kt_hash_f32"
+        "Double"  -> "kt_hash_f64"
+        "Boolean" -> "kt_hash_bool"
+        "Char"    -> "kt_hash_char"
+        "String"  -> "kt_hash_str"
+        else      -> "kt_hash_i32"  // fallback — will be replaced by Hashable interface
     }
 
-    /** C prefix for HashMap key type: primitives → "kt_Key", classes → pfx(Key) */
-    private fun hashMapCPrefix(keyKt: String): String = when (keyKt) {
-        "Int", "Long", "Float", "Double", "Boolean", "Char", "String" -> "kt_${keyKt}"
-        else -> pfx(keyKt)
-    }
-
-    /** Hash expression for a key type. */
-    private fun hashMapHashExpr(keyKt: String, keyExpr: String, tn: String): String = when (keyKt) {
-        "Int"     -> "((uint32_t)($keyExpr))"
-        "Long"    -> "((uint32_t)(($keyExpr) ^ (($keyExpr) >> 32)))"
-        "Float"   -> "((uint32_t)(*(uint32_t*)&($keyExpr)))"
-        "Double"  -> "({ uint64_t \$b; memcpy(&\$b, &($keyExpr), 8); (uint32_t)(\$b ^ (\$b >> 32)); })"
-        "Boolean" -> "((uint32_t)($keyExpr))"
-        "Char"    -> "((uint32_t)($keyExpr))"
-        "String"  -> "kt_map_strhash($keyExpr)"
-        else      -> "((uint32_t)($keyExpr))"  // fallback for class types
-    }
-
-    /** Equality expression for a key type. */
-    private fun hashMapKeyEq(keyKt: String, a: String, b: String): String = when (keyKt) {
-        "String" -> "kt_string_eq($a, $b)"
-        else     -> "($a == $b)"
-    }
-
-    /** Default/empty key value for a type. */
-    private fun hashMapEmptyKey(keyKt: String): String = when (keyKt) {
-        "Int"     -> "0"
-        "Long"    -> "0"
-        "Float"   -> "0.0f"
-        "Double"  -> "0.0"
-        "Boolean" -> "false"
-        "Char"    -> "'\\0'"
-        "String"  -> "(kt_String){NULL, 0}"
-        else      -> "{0}"
-    }
-
-    /** Expression to check if a slot is occupied. */
-    private fun hashMapSlotOccupied(slotExpr: String): String {
-        return "$slotExpr"
-    }
-
-    /**
-     * Emit per-type hash map functions for an inlined key:value pair.
-     * No struct typedef — variables are inlined as name$keys, name$vals, name$map.
-     * Mutating functions (put, grow) take K**, V** so realloc propagates.
-     * Read-only functions (get, containsKey) take K*, V*.
-     * clear and free use generic runtime helpers.
-     */
-    private fun emitHashMap(kv: String) {
-        val (keyKt, valKt) = hashMapKV(kv)
-        val keyC = cTypeStr(keyKt)
-        val valC = cTypeStr(valKt)
-        val tn = hashMapCName(kv)
-
-        val hashExpr = hashMapHashExpr(keyKt, "key", tn)
-        val keyEqPut = hashMapKeyEq(keyKt, "(*\$keys)[\$idx]", "key")
-        val keyEqGet = hashMapKeyEq(keyKt, "\$keys[\$idx]", "key")
-
-        // grow (forward declaration needed before put)
-        hdr.appendLine("void ${tn}_grow($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map);")
-
-        // put
-        hdr.appendLine("void ${tn}_put($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map, $keyC key, $valC val);")
-        impl.appendLine("void ${tn}_put($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map, $keyC key, $valC val) {")
-        impl.appendLine("    if (\$map->len * 2 >= \$map->cap) ${tn}_grow(\$keys, \$vals, \$map);")
-        impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
-        impl.appendLine("    while (\$map->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEqPut) { (*\$vals)[\$idx] = val; return; }")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
-        impl.appendLine("    }")
-        impl.appendLine("    (*\$keys)[\$idx] = key;")
-        impl.appendLine("    (*\$vals)[\$idx] = val;")
-        impl.appendLine("    \$map->occ[\$idx] = true;")
-        impl.appendLine("    \$map->len++;")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        // grow
-        impl.appendLine("void ${tn}_grow($keyC** \$keys, $valC** \$vals, kt_MapInfo* \$map) {")
-        impl.appendLine("    int32_t \$oc = \$map->cap;")
-        impl.appendLine("    int32_t \$nc = \$oc * 2;")
-        impl.appendLine("    $keyC* \$ok = *\$keys;")
-        impl.appendLine("    $valC* \$ov = *\$vals;")
-        impl.appendLine("    bool*  \$oo = \$map->occ;")
-        impl.appendLine("    *\$keys = ($keyC*)calloc((size_t)\$nc, sizeof($keyC));")
-        impl.appendLine("    *\$vals = ($valC*)calloc((size_t)\$nc, sizeof($valC));")
-        impl.appendLine("    \$map->occ = (bool*)calloc((size_t)\$nc, sizeof(bool));")
-        impl.appendLine("    \$map->cap = \$nc;")
-        impl.appendLine("    \$map->len = 0;")
-        impl.appendLine("    for (int32_t \$i = 0; \$i < \$oc; \$i++) {")
-        impl.appendLine("        if (\$oo[\$i]) ${tn}_put(\$keys, \$vals, \$map, \$ok[\$i], \$ov[\$i]);")
-        impl.appendLine("    }")
-        impl.appendLine("    free(\$ok); free(\$ov); free(\$oo);")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        // get
-        hdr.appendLine("$valC ${tn}_get($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key);")
-        impl.appendLine("$valC ${tn}_get($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key) {")
-        impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
-        impl.appendLine("    while (\$map->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEqGet) return \$vals[\$idx];")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
-        impl.appendLine("    }")
-        impl.appendLine("    $valC \$zero = {0}; return \$zero;")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        // containsKey
-        hdr.appendLine("bool ${tn}_containsKey($keyC* \$keys, kt_MapInfo* \$map, $keyC key);")
-        impl.appendLine("bool ${tn}_containsKey($keyC* \$keys, kt_MapInfo* \$map, $keyC key) {")
-        impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
-        impl.appendLine("    while (\$map->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEqGet) return true;")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
-        impl.appendLine("    }")
-        impl.appendLine("    return false;")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        // remove (inlined rehash — no call to put, avoids need for **)
-        val hashRehash = hashMapHashExpr(keyKt, "\$rk", tn)
-        hdr.appendLine("bool ${tn}_remove($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key);")
-        impl.appendLine("bool ${tn}_remove($keyC* \$keys, $valC* \$vals, kt_MapInfo* \$map, $keyC key) {")
-        impl.appendLine("    uint32_t \$h = $hashExpr;")
-        impl.appendLine("    int32_t \$idx = (int32_t)(\$h % (uint32_t)\$map->cap);")
-        impl.appendLine("    while (\$map->occ[\$idx]) {")
-        impl.appendLine("        if ($keyEqGet) {")
-        impl.appendLine("            \$map->occ[\$idx] = false;")
-        impl.appendLine("            \$map->len--;")
-        impl.appendLine("            int32_t \$j = (\$idx + 1) % \$map->cap;")
-        impl.appendLine("            while (\$map->occ[\$j]) {")
-        impl.appendLine("                $keyC \$rk = \$keys[\$j];")
-        impl.appendLine("                $valC \$rv = \$vals[\$j];")
-        impl.appendLine("                \$map->occ[\$j] = false;")
-        impl.appendLine("                \$map->len--;")
-        impl.appendLine("                uint32_t \$rh = $hashRehash;")
-        impl.appendLine("                int32_t \$ri = (int32_t)(\$rh % (uint32_t)\$map->cap);")
-        impl.appendLine("                while (\$map->occ[\$ri]) \$ri = (\$ri + 1) % \$map->cap;")
-        impl.appendLine("                \$keys[\$ri] = \$rk;")
-        impl.appendLine("                \$vals[\$ri] = \$rv;")
-        impl.appendLine("                \$map->occ[\$ri] = true;")
-        impl.appendLine("                \$map->len++;")
-        impl.appendLine("                \$j = (\$j + 1) % \$map->cap;")
-        impl.appendLine("            }")
-        impl.appendLine("            return true;")
-        impl.appendLine("        }")
-        impl.appendLine("        \$idx = (\$idx + 1) % \$map->cap;")
-        impl.appendLine("    }")
-        impl.appendLine("    return false;")
-        impl.appendLine("}")
-        impl.appendLine()
-
-        hdr.appendLine()
+    /** Runtime equality function name for a given Kotlin key type. */
+    private fun eqFnName(keyKt: String): String = when (keyKt) {
+        "Int"     -> "kt_eq_i32"
+        "Long"    -> "kt_eq_i64"
+        "Float"   -> "kt_eq_f32"
+        "Double"  -> "kt_eq_f64"
+        "Boolean" -> "kt_eq_bool"
+        "Char"    -> "kt_eq_char"
+        "String"  -> "kt_eq_str"
+        else      -> "kt_eq_i32"  // fallback
     }
 
     // ── top-level fun ────────────────────────────────────────────────
@@ -1110,8 +956,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return
         }
 
-        // ── HashMap type: inline to three vars (name$keys, name$vals, name$map) ──
-        if (t.endsWith("HashMap") && hashMapConstructorKV(t) != null) {
+        // ── HashMap type: single kt_MapInfo variable ──
+        if (isHashMapType(t)) {
             emitHashMapVarDecl(s, t, ind)
             return
         }
@@ -1119,7 +965,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val ct = cTypeStr(t)
         // Don't const class types, Pointer, typed pointers, nullable, ArrayList, HashMap, or interface types
         val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t) && t != "Pointer"
-            && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("ArrayList") && !t.endsWith("HashMap")
+            && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("ArrayList") && !isHashMapType(t)
             && !isNullable && !isHeapPtrNull && !isHeapValNull) "const " else ""
 
         if (s.init != null) {
@@ -1198,19 +1044,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
-    /** Emit inlined HashMap variable: name$keys, name$vals, name$map. */
+    /** Emit single kt_MapInfo variable for a HashMap declaration. */
     private fun emitHashMapVarDecl(s: VarDeclStmt, t: String, ind: String) {
-        val kv = hashMapConstructorKV(t)!!
-        val (keyKt, valKt) = hashMapKV(kv)
+        val (keyKt, valKt) = hashMapKVTypes(t)!!
         val keyC = cTypeStr(keyKt)
         val valC = cTypeStr(valKt)
-        val tn = hashMapCName(kv)
         val vn = s.name
 
         // Determine init expression
         val initCall = s.init as? CallExpr
         val calleeName = (initCall?.callee as? NameExpr)?.name
-        val isConstructor = calleeName != null && hashMapConstructorKV(calleeName) != null
+        val isConstructor = calleeName == "HashMap"
         val isMapOf = calleeName in setOf("mapOf", "mutableMapOf", "hashMapOf")
 
         val cap = when {
@@ -1219,19 +1063,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else -> "16"
         }
 
-        impl.appendLine("$ind$keyC* ${vn}\$keys = ($keyC*)calloc($cap, sizeof($keyC));")
-        impl.appendLine("$ind$valC* ${vn}\$vals = ($valC*)calloc($cap, sizeof($valC));")
-        impl.appendLine("${ind}kt_MapInfo ${vn}\$map = (kt_MapInfo){ .occ = (bool*)calloc($cap, sizeof(bool)), .cap = $cap, .len = 0 };")
+        impl.appendLine("${ind}kt_MapInfo $vn = kt_map_create($cap, sizeof($keyC), sizeof($valC));")
 
         // For mapOf, emit put calls for each pair
         if (isMapOf && initCall != null) {
+            val hf = hashFnName(keyKt)
+            val ef = eqFnName(keyKt)
             for (a in initCall.args) {
                 val pair = a.expr as? BinExpr
                 if (pair != null && pair.op == "to") {
                     val k = genExpr(pair.left)
                     val v = genExpr(pair.right)
                     flushPreStmts(ind)
-                    impl.appendLine("$ind${tn}_put(&${vn}\$keys, &${vn}\$vals, &${vn}\$map, $k, $v);")
+                    impl.appendLine("$ind{ $keyC \$k = $k; $valC \$v = $v; kt_map_put(&$vn, &\$k, &\$v, $hf, $ef); }")
                 }
             }
         }
@@ -1283,13 +1127,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // HashMap/ArrayList index assignment: map[key] = value → put/set call
         if (s.target is IndexExpr && s.op == "=") {
             val objType = inferExprType(s.target.obj)
-            if (objType != null && objType.endsWith("HashMap")) {
-                val typeName = cTypeStr(objType)
+            if (objType != null && isHashMapType(objType)) {
+                val (keyKt, valKt) = hashMapKVTypes(objType)!!
+                val keyC = cTypeStr(keyKt)
+                val valC = cTypeStr(valKt)
                 val obj = genExpr(s.target.obj)
                 val key = genExpr(s.target.index)
                 val value = genExpr(s.value)
                 flushPreStmts(ind)
-                impl.appendLine("$ind${typeName}_put(&${obj}\$keys, &${obj}\$vals, &${obj}\$map, $key, $value);")
+                impl.appendLine("$ind{ $keyC \$k = $key; $valC \$v = $value; kt_map_put(&$obj, &\$k, &\$v, ${hashFnName(keyKt)}, ${eqFnName(keyKt)}); }")
                 return
             }
             if (objType != null && objType.endsWith("ArrayList")) {
@@ -1711,10 +1557,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is SafeDotExpr -> genSafeDot(e)
         is IndexExpr   -> {
             val objType = inferExprType(e.obj)
-            if (objType != null && objType.endsWith("HashMap")) {
-                // HashMap: map[key] → TypeName_get(map$keys, map$vals, &map$map, key)
+            if (objType != null && isHashMapType(objType)) {
+                // HashMap: map[key] → kt_map_find + ternary
+                val (keyKt, valKt) = hashMapKVTypes(objType)!!
+                val keyC = cTypeStr(keyKt)
+                val valC = cTypeStr(valKt)
                 val obj = genExpr(e.obj)
-                "${cTypeStr(objType)}_get(${obj}\$keys, ${obj}\$vals, &${obj}\$map, ${genExpr(e.index)})"
+                val key = genExpr(e.index)
+                val kt = tmp(); val fi = tmp()
+                preStmts.add("$keyC $kt = $key;")
+                preStmts.add("int32_t $fi = kt_map_find(&$obj, &$kt, ${hashFnName(keyKt)}, ${eqFnName(keyKt)});")
+                "($fi >= 0 ? (($valC*)$obj.vals)[$fi] : ($valC){0})"
             } else if (objType != null && objType.endsWith("ArrayList")) {
                 // ArrayList: list[idx] → TypeName_get(&list, idx)
                 "${cTypeStr(objType)}_get(&${genExpr(e.obj)}, ${genExpr(e.index)})"
@@ -1878,19 +1731,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return "${typeName}_create($cap)"
         }
 
-        // HashMap constructor: IntIntHashMap() or IntIntHashMap(cap)
-        // Inlined: creates three temp vars via preStmts, returns base name
-        val hmKV = hashMapConstructorKV(name)
-        if (hmKV != null) {
-            hashMapTypes.add(hmKV)
-            val (keyKt, valKt) = hashMapKV(hmKV)
+        // HashMap constructor: HashMap<Int, Int>() or HashMap<Int, Int>(cap)
+        // Creates single kt_MapInfo via preStmts, returns temp name
+        if (name == "HashMap" && e.typeArgs.size == 2) {
+            val keyKt = resolveTypeName(e.typeArgs[0])
+            val valKt = resolveTypeName(e.typeArgs[1])
             val keyC = cTypeStr(keyKt)
             val valC = cTypeStr(valKt)
             val cap = if (args.isNotEmpty()) genExpr(args[0].expr) else "16"
             val t = tmp()
-            preStmts.add("$keyC* ${t}\$keys = ($keyC*)calloc($cap, sizeof($keyC));")
-            preStmts.add("$valC* ${t}\$vals = ($valC*)calloc($cap, sizeof($valC));")
-            preStmts.add("kt_MapInfo ${t}\$map = (kt_MapInfo){ .occ = (bool*)calloc($cap, sizeof(bool)), .cap = $cap, .len = 0 };")
+            preStmts.add("kt_MapInfo $t = kt_map_create($cap, sizeof($keyC), sizeof($valC));")
             return t
         }
 
@@ -1989,26 +1839,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return null
     }
 
-    /** Returns "KeyType:ValueType" if `name` is a HashMap constructor like "IntIntHashMap", else null.
-     *  Convention: names are <KeyType><ValueType>HashMap.
-     *  Both key and value type start with uppercase. We try to split by matching known type prefixes. */
-    private fun hashMapConstructorKV(name: String): String? {
-        if (!name.endsWith("HashMap") || name.length <= 7) return null
-        val body = name.removeSuffix("HashMap")
-        // Try to split body into two known type names
-        val types = listOf("Int", "Long", "Float", "Double", "Boolean", "Char", "String") + classes.keys + enums.keys
-        for (kt in types.sortedByDescending { it.length }) {
-            if (body.startsWith(kt)) {
-                val rest = body.removePrefix(kt)
-                if (rest.isNotEmpty() && rest[0].isUpperCase()) {
-                    // Check if rest is also a known type
-                    if (rest in types) return "$kt:$rest"
-                }
-            }
-        }
-        return null
-    }
-
     private fun genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val recvType = inferExprType(dot.obj)
         val recv = genExpr(dot.obj)
@@ -2056,18 +1886,45 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
 
-        // HashMap methods (inlined: recv$keys, recv$vals, recv$map)
-        if (recvType != null && recvType.endsWith("HashMap")) {
-            val typeName = cTypeStr(recvType)
+        // HashMap methods (generic runtime: single kt_MapInfo variable)
+        if (recvType != null && isHashMapType(recvType)) {
+            val (keyKt, valKt) = hashMapKVTypes(recvType)!!
+            val keyC = cTypeStr(keyKt)
+            val valC = cTypeStr(valKt)
+            val hf = hashFnName(keyKt)
+            val ef = eqFnName(keyKt)
             return when (method) {
-                "put"         -> "${typeName}_put(&${recv}\$keys, &${recv}\$vals, &${recv}\$map, $argStr)"
-                "get"         -> "${typeName}_get(${recv}\$keys, ${recv}\$vals, &${recv}\$map, $argStr)"
-                "containsKey" -> "${typeName}_containsKey(${recv}\$keys, &${recv}\$map, $argStr)"
-                "remove"      -> "${typeName}_remove(${recv}\$keys, ${recv}\$vals, &${recv}\$map, $argStr)"
-                "clear"       -> "kt_map_clear(&${recv}\$map)"
-                "free"        -> "kt_map_free(${recv}\$keys, ${recv}\$vals, &${recv}\$map)"
-                "size"        -> "${recv}\$map.len"
-                else          -> "/* unknown HashMap method $method */"
+                "put" -> {
+                    val k = genExpr(args[0].expr)
+                    val v = genExpr(args[1].expr)
+                    val kt = tmp(); val vt = tmp()
+                    preStmts.add("$keyC $kt = $k;")
+                    preStmts.add("$valC $vt = $v;")
+                    "kt_map_put(&$recv, &$kt, &$vt, $hf, $ef)"
+                }
+                "get" -> {
+                    val k = genExpr(args[0].expr)
+                    val kt = tmp(); val fi = tmp()
+                    preStmts.add("$keyC $kt = $k;")
+                    preStmts.add("int32_t $fi = kt_map_find(&$recv, &$kt, $hf, $ef);")
+                    "($fi >= 0 ? (($valC*)$recv.vals)[$fi] : ($valC){0})"
+                }
+                "containsKey" -> {
+                    val k = genExpr(args[0].expr)
+                    val kt = tmp()
+                    preStmts.add("$keyC $kt = $k;")
+                    "(kt_map_find(&$recv, &$kt, $hf, $ef) >= 0)"
+                }
+                "remove" -> {
+                    val k = genExpr(args[0].expr)
+                    val kt = tmp()
+                    preStmts.add("$keyC $kt = $k;")
+                    "kt_map_remove(&$recv, &$kt, $hf, $ef)"
+                }
+                "clear" -> "kt_map_clear(&$recv)"
+                "free"  -> "kt_map_free(&$recv)"
+                "size"  -> "$recv.len"
+                else    -> "/* unknown HashMap method $method */"
             }
         }
 
@@ -2178,7 +2035,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // ArrayList .size
         if (e.name == "size" && recvType?.endsWith("ArrayList") == true) return "$recv.len"
         // HashMap .size
-        if (e.name == "size" && recvType?.endsWith("HashMap") == true) return "${recv}\$map.len"
+        if (e.name == "size" && recvType != null && isHashMapType(recvType)) return "$recv.len"
         if (e.name == "length" && recvType == "String") return "$recv.len"
 
         // Heap class pointer: p->field
@@ -2511,22 +2368,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val firstPair = args.firstOrNull()?.expr as? BinExpr
         val keyKt = if (firstPair != null) inferExprType(firstPair.left) ?: "Int" else "Int"
         val valKt = if (firstPair != null) inferExprType(firstPair.right) ?: "Int" else "Int"
-        val kv = "$keyKt:$valKt"
-        hashMapTypes.add(kv)
         val keyC = cTypeStr(keyKt)
         val valC = cTypeStr(valKt)
-        val tn = hashMapCName(kv)
+        val hf = hashFnName(keyKt)
+        val ef = eqFnName(keyKt)
         val t = tmp()
         val cap = (args.size * 2).coerceAtLeast(16)
-        preStmts.add("$keyC* ${t}\$keys = ($keyC*)calloc($cap, sizeof($keyC));")
-        preStmts.add("$valC* ${t}\$vals = ($valC*)calloc($cap, sizeof($valC));")
-        preStmts.add("kt_MapInfo ${t}\$map = (kt_MapInfo){ .occ = (bool*)calloc($cap, sizeof(bool)), .cap = $cap, .len = 0 };")
+        preStmts.add("kt_MapInfo $t = kt_map_create($cap, sizeof($keyC), sizeof($valC));")
         for (a in args) {
             val pair = a.expr as? BinExpr
             if (pair != null && pair.op == "to") {
                 val k = genExpr(pair.left)
                 val v = genExpr(pair.right)
-                preStmts.add("${tn}_put(&${t}\$keys, &${t}\$vals, &${t}\$map, $k, $v);")
+                val kt = tmp(); val vt = tmp()
+                preStmts.add("$keyC $kt = $k;")
+                preStmts.add("$valC $vt = $v;")
+                preStmts.add("kt_map_put(&$t, &$kt, &$vt, $hf, $ef);")
             }
         }
         return t
@@ -2663,22 +2520,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val firstPair = e.args.firstOrNull()?.expr as? BinExpr
                 val keyKt = if (firstPair != null) inferExprType(firstPair.left) ?: "Int" else "Int"
                 val valKt = if (firstPair != null) inferExprType(firstPair.right) ?: "Int" else "Int"
-                val kv = "$keyKt:$valKt"
-                hashMapTypes.add(kv)
-                return "${keyKt}${valKt}HashMap"
+                return "HashMap<$keyKt,$valKt>"
+            }
+            // HashMap<K,V>() constructor
+            if (name == "HashMap" && e.typeArgs.size == 2) {
+                val keyKt = resolveTypeName(e.typeArgs[0])
+                val valKt = resolveTypeName(e.typeArgs[1])
+                return "HashMap<$keyKt,$valKt>"
             }
             // ArrayList constructors: IntArrayList(), Vec2ArrayList(cap)
             val alElem = arrayListConstructorElem(name)
             if (alElem != null) {
                 arrayListElemTypes.add(alElem)
                 return "${alElem}ArrayList"
-            }
-            // HashMap constructors: IntIntHashMap(), StringIntHashMap(cap)
-            val hmKV = hashMapConstructorKV(name)
-            if (hmKV != null) {
-                hashMapTypes.add(hmKV)
-                val (keyKt, valKt) = hashMapKV(hmKV)
-                return "${keyKt}${valKt}HashMap"
             }
             funSigs[name]?.returnType?.let { return resolveTypeName(it) }
         }
@@ -2725,19 +2579,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
         // HashMap methods
-        if (recvType.endsWith("HashMap") && !recvType.endsWith("ArrayList")) {
-            val body = recvType.removeSuffix("HashMap")
-            val kvStr = hashMapConstructorKV("${body}HashMap")
-            if (kvStr != null) {
-                val (_, valKt) = hashMapKV(kvStr)
-                return when (method) {
-                    "get"         -> valKt
-                    "containsKey" -> "Boolean"
-                    "remove"      -> "Boolean"
-                    "size"        -> "Int"
-                    "put", "clear", "free" -> "Unit"
-                    else -> null
-                }
+        if (isHashMapType(recvType)) {
+            val (_, valKt) = hashMapKVTypes(recvType)!!
+            return when (method) {
+                "get"         -> valKt
+                "containsKey" -> "Boolean"
+                "remove"      -> "Boolean"
+                "size"        -> "Int"
+                "put", "clear", "free" -> "Unit"
+                else -> null
             }
         }
         // Interface method
@@ -2767,7 +2617,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val recvType = inferExprType(e.obj) ?: return null
         if (e.name == "size" && recvType.endsWith("Array")) return "Int"
         if (e.name == "size" && recvType.endsWith("ArrayList")) return "Int"
-        if (e.name == "size" && recvType.endsWith("HashMap")) return "Int"
+        if (e.name == "size" && isHashMapType(recvType)) return "Int"
         if (e.name == "length" && recvType == "String") return "Int"
         // Heap pointer field access → look up in base class
         val heapBase = heapClassName(recvType)
@@ -2785,12 +2635,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun inferIndexType(e: IndexExpr): String? {
         val t = inferExprType(e.obj) ?: return null
         // HashMap: map[key] → value type
-        if (t.endsWith("HashMap")) {
-            val kv = hashMapConstructorKV(t)
-            if (kv != null) {
-                val (_, valKt) = hashMapKV(kv)
-                return valKt
-            }
+        if (isHashMapType(t)) {
+            val (_, valKt) = hashMapKVTypes(t)!!
+            return valKt
         }
         // Typed pointer: "Int*" → "Int"
         if (t.endsWith("*")) return t.dropLast(1)
@@ -2881,11 +2728,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val elem = t.removeSuffix("ArrayList")
                 return "${arrayListCPrefix(elem)}ArrayList"
             }
-            // HashMap types: "IntIntHashMap" → "kt_IntIntHashMap"
-            if (t.endsWith("HashMap")) {
-                val kv = hashMapConstructorKV(t)
-                if (kv != null) return hashMapCName(kv)
-            }
+            // HashMap types: "HashMap<Int,Int>" → "kt_MapInfo" (generic runtime struct)
+            if (isHashMapType(t)) return "kt_MapInfo"
             pfx(t)   // class/enum/object type
         }
     }
@@ -2932,6 +2776,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (t.name == "Heap" && t.typeArgs.isNotEmpty()) {
             val inner = t.typeArgs[0]
             return if (inner.nullable) "${inner.name}*#" else "${inner.name}*"
+        }
+        if ((t.name == "HashMap" || t.name == "MutableMap") && t.typeArgs.size == 2) {
+            val keyKt = resolveTypeName(t.typeArgs[0])
+            val valKt = resolveTypeName(t.typeArgs[1])
+            return "HashMap<$keyKt,$valKt>"
         }
         return t.name
     }

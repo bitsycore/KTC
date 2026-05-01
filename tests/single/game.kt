@@ -554,7 +554,7 @@ fun testInterface() {
 // ── HashMap ─────────────────────────────────────────────────────────
 fun testHashMap() {
     // Int → Int map
-    var scores = IntIntHashMap()
+    var scores = HashMap<Int, Int>()
     scores.put(1, 100)
     scores.put(2, 200)
     scores.put(3, 300)
@@ -574,7 +574,7 @@ fun testHashMap() {
     println(scores.containsKey(2)) // false
 
     // String → Int map
-    var wordCount = StringIntHashMap()
+    var wordCount = HashMap<String, Int>()
     wordCount.put("hello", 1)
     wordCount.put("world", 2)
     println(wordCount.get("hello"))       // 1
