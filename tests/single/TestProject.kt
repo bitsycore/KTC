@@ -1,71 +1,16 @@
 package TestProject.Main
 
-// ── MutableListInt ─ ArrayList<Int> built with malloc/realloc ────────
-
-class MutableList<T>(capacity: Int) {
-
-	var size: Int = 0
-	var buf: Heap<Array<T>> = malloc<Array<T>>(capacity)!!
-
-	fun add(value: T) {
-		if (size >= buf.size) {
-			val newSize = buf.size * 2
-			buf = realloc<Array<T>>(buf, newSize)!!
-		}
-		buf[size] = value
-		size = size + 1
-	}
-
-	fun get(index: Int): T {
-		return buf[index]
-	}
-
-	fun set(index: Int, value: T) {
-		buf[index] = value
-	}
-
-	fun removeAt(index: Int): T {
-		val removed = buf[index]
-		for (i in index until size - 1) {
-			buf[i] = buf[i + 1]
-		}
-		size = size - 1
-		return removed
-	}
-
-	fun contains(value: T): Boolean {
-		for (i in 0 until size) {
-			if (buf[i] == value) return true
-		}
-		return false
-	}
-
-	fun indexOf(value: T): Int {
-		for (i in 0 until size) {
-			if (buf[i] == value) return i
-		}
-		return -1
-	}
-
-	fun clear() {
-		size = 0
-	}
-
-	fun dispose() {
-		free(buf)
-	}
-
-}
+// Disposable, List<T>, MutableList<T>, ArrayList<T> come from ktc stdlib (auto-imported)
 
 fun createMutableListInt(capacity: Int = 8): MutableList<Int> {
-	return MutableList<Int>(capacity)
+	return ArrayList<Int>(capacity)
 }
 
-fun <T> sizeOfList(list: MutableList<T>): Int {
+fun <T> sizeOfList(list: List<T>): Int {
 	return list.size
 }
 
-fun MutableList<*>.sizeOf(): Int {
+fun List<*>.sizeOf(): Int {
 	return size
 }
 
@@ -87,7 +32,7 @@ fun main(args: Array<String>) {
 	println("Sizeof array2: ${array2.size}")
 	println("Sizeof array3: ${array3.size}")
 
-	val listVec = malloc<MutableList<Vec2>>(8)
+	val listVec = malloc<ArrayList<Vec2>>(8)
 	if (listVec == null) return
 	defer free(listVec)
 	val v2 = listVec.value()
@@ -110,7 +55,7 @@ fun main(args: Array<String>) {
 		println("v2.get($i) = ${v2.get(i)}")
 	}
 
-	val list = malloc<MutableList<Int>>(8)!!
+	val list = malloc<ArrayList<Int>>(8)!!
 	val v = list.value()
 
 	v.add(10)

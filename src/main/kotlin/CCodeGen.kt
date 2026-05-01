@@ -298,16 +298,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("#include \"ktc_runtime.h\"")
         hdr.appendLine()
 
-        // Imports → #include (skip ktc stdlib imports — they're JVM-only)
+        // Imports → #include (skip ktc stdlib imports — handled below)
         for (imp in file.imports) {
-            if (imp.startsWith("ktc")) continue  // ktc stdlib is built into the runtime
-            // import foo.bar.* → #include "foo_bar.h"
-            // import foo.bar.Baz → #include "foo_bar.h"
+            if (imp.startsWith("ktc")) continue
             val parts = imp.removeSuffix(".*").split('.')
             val headerName = parts.joinToString("_")
             hdr.appendLine("#include \"$headerName.h\"")
         }
-        if (file.imports.any { !it.startsWith("ktc") }) hdr.appendLine()
+        // Auto-include ktc.h for non-stdlib packages when stdlib is present
+        val hasStdlib = allFiles.any { it.pkg == "ktc" }
+        if (hasStdlib && file.pkg != "ktc") {
+            hdr.appendLine("#include \"ktc.h\"")
+        }
+        hdr.appendLine()
 
         // Pre-scan for Array<T> type references to discover class array types early
         scanForClassArrayTypes()
@@ -342,7 +345,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Emit only monomorphized copies (not already emitted above as non-generic AST decl)
             if (name !in emittedIfaceNames && info.typeParams.isEmpty()
                 && genericIfaceDecls.values.none { it.name == name }) {
-                emitIfaceInfo(info)
+                // Skip non-generic interfaces from other packages (they're in that package's header).
+                // Monomorphized generics (e.g. MutableList_Int from MutableList<T>) are always
+                // emitted here because they may reference user-defined types.
+                val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
+                if (isMonomorphized) {
+                    emitIfaceInfo(info)
+                } else {
+                    val isCrossPackage = symbolPrefix[name]?.let { it.isNotEmpty() && it != prefix } == true
+                    if (!isCrossPackage) {
+                        emitIfaceInfo(info)
+                    }
+                }
             }
         }
 

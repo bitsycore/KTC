@@ -49,6 +49,28 @@ fun main(args: Array<String>) {
     // ── Lex & Parse all files ────────────────────────────────────────
     data class ParsedSource(val file: File, val ast: KtFile, val sourceLines: List<String>)
     val parsedFiles = mutableListOf<ParsedSource>()
+
+    // Load stdlib .kt files from resources (package ktc, auto-imported)
+    val stdlibIndex = object {}.javaClass.getResourceAsStream("/stdlib/index.txt")
+    if (stdlibIndex != null) {
+        val stdlibFileNames = stdlibIndex.bufferedReader().readLines().filter { it.isNotBlank() }
+        for (name in stdlibFileNames) {
+            val res = object {}.javaClass.getResourceAsStream("/stdlib/$name")
+            if (res != null) {
+                val source = res.bufferedReader().readText()
+                try {
+                    val tokens = Lexer(source).tokenize()
+                    val ast = Parser(tokens).parseFile()
+                    // Use a virtual File for the ParsedSource
+                    parsedFiles += ParsedSource(File("stdlib/$name"), ast, source.lines())
+                } catch (e: Exception) {
+                    System.err.println("Stdlib error in $name: ${e.message}")
+                    exitProcess(1)
+                }
+            }
+        }
+    }
+
     for (inputFile in inputFiles) {
         val source = inputFile.readText()
         val tokens: List<Token>
@@ -114,8 +136,9 @@ fun main(args: Array<String>) {
         System.err.println("Warning: ktc_runtime.h not found in resources, copy it manually.")
     }
 
-    // Print compile command
-    val sourceNames = allOutputNames.joinToString(" ") { "$it.c" }
-    val firstBase = allOutputNames.first()
-    println("Done. Compile with:  cc -std=c11 -o $firstBase $sourceNames")
+    // Print compile command (ensure ktc.c is first if present)
+    val sortedNames = allOutputNames.sortedBy { if (it == "ktc") 0 else 1 }
+    val sourceNames = sortedNames.joinToString(" ") { "$it.c" }
+    val mainBase = sortedNames.find { it != "ktc" } ?: sortedNames.first()
+    println("Done. Compile with:  cc -std=c11 -o $mainBase $sourceNames")
 }
