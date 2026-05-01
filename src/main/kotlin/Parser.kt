@@ -565,7 +565,7 @@ class Parser(private val tokens: List<Token>) {
 
     /** Lookahead: does `<` here start type args? Check for `<Ident>` or `<Ident,` pattern. */
     private fun looksLikeTypeArgs(): Boolean {
-        // Save position, peek ahead: < IDENT > ( or < IDENT , ...
+        // Save position, peek ahead: < IDENT > ( or < IDENT , ... or < IDENT < (nested type args)
         val saved = pos
         try {
             if (!at(TokenType.LT)) return false
@@ -574,7 +574,7 @@ class Parser(private val tokens: List<Token>) {
             val name = tokens[pos].value
             if (name.isEmpty() || name[0].isLowerCase()) return false  // types start uppercase
             advance(); skipNL()
-            return at(TokenType.GT) || at(TokenType.COMMA)
+            return at(TokenType.GT) || at(TokenType.COMMA) || at(TokenType.LT)
         } finally {
             pos = saved
         }

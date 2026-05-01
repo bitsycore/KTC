@@ -283,4 +283,90 @@ class HeapTest : TranspilerTestBase() {
         )
         r.sourceContains("v->x")
     }
+
+    // ── malloc<Array<T>>(n) → typed array allocation ─────────────────
+
+    @Test fun mallocArrayInt() {
+        val r = transpileMain("val buf = malloc<Array<Int>>(10)")
+        r.sourceContains("(int32_t*)malloc(sizeof(int32_t) * (size_t)(10))")
+    }
+
+    @Test fun mallocArrayFloat() {
+        val r = transpileMain("val buf = malloc<Array<Float>>(5)")
+        r.sourceContains("(float*)malloc(sizeof(float) * (size_t)(5))")
+    }
+
+    @Test fun mallocArrayLong() {
+        val r = transpileMain("val buf = malloc<Array<Long>>(3)")
+        r.sourceContains("(int64_t*)malloc(sizeof(int64_t) * (size_t)(3))")
+    }
+
+    // ── malloc<T>() with no args → single element allocation ─────────
+
+    @Test fun mallocSingleInt() {
+        val r = transpileMain("val p = malloc<Int>()")
+        r.sourceContains("(int32_t*)malloc(sizeof(int32_t))")
+    }
+
+    @Test fun mallocSingleFloat() {
+        val r = transpileMain("val p = malloc<Float>()")
+        r.sourceContains("(float*)malloc(sizeof(float))")
+    }
+
+    // ── realloc<Array<T>>(ptr, n) → typed array realloc ──────────────
+
+    @Test fun reallocArrayInt() {
+        val r = transpileMain("val buf = malloc<Array<Int>>(10)\nval buf2 = realloc<Array<Int>>(buf, 20)")
+        r.sourceContains("(int32_t*)realloc(buf, sizeof(int32_t) * (size_t)(20))")
+    }
+
+    // ── calloc<Array<T>>(n) → typed array calloc ─────────────────────
+
+    @Test fun callocArrayInt() {
+        val r = transpileMain("val buf = calloc<Array<Int>>(10)")
+        r.sourceContains("(int32_t*)calloc((size_t)(10), sizeof(int32_t))")
+    }
+
+    // ── Pointer<Array<T>> type resolution ────────────────────────────
+
+    @Test fun pointerArrayIntType() {
+        val r = transpileMain("var buf: Pointer<Array<Int>> = malloc<Array<Int>>(10)")
+        r.sourceContains("int32_t* buf")
+        r.sourceContains("(int32_t*)malloc(sizeof(int32_t) * (size_t)(10))")
+    }
+
+    @Test fun pointerArrayIntIndexRead() {
+        val r = transpileMain("val buf: Pointer<Array<Int>> = malloc<Array<Int>>(10)\nprintln(buf[0])")
+        r.sourceContains("buf[0]")
+    }
+
+    @Test fun pointerArrayIntIndexWrite() {
+        val r = transpileMain("var buf: Pointer<Array<Int>> = malloc<Array<Int>>(10)\nbuf[0] = 42")
+        r.sourceContains("buf[0] = 42;")
+    }
+
+    // ── Body prop with initializer referencing ctor param ────────────
+
+    @Test fun bodyPropInitFromCtorParam() {
+        val decl = """
+            class Buf(var capacity: Int) {
+                var buf: Pointer<Array<Int>> = malloc<Array<Int>>(capacity)
+            }
+        """
+        val r = transpileMain("val b = Buf(16)", decls = decl)
+        // struct field: int32_t* buf
+        r.headerContains("int32_t* buf;")
+        // _create initializes body prop from ctor param
+        r.sourceContains("(int32_t*)malloc(sizeof(int32_t) * (size_t)(capacity))")
+    }
+
+    @Test fun bodyPropInitConstant() {
+        val decl = """
+            class Counter(var name: String) {
+                var count: Int = 0
+            }
+        """
+        val r = transpileMain("val c = Counter(\"hello\")", decls = decl)
+        r.sourceContains("\$self.count = 0;")
+    }
 }

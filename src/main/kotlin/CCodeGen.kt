@@ -1402,10 +1402,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (name == "println") { emitPrintlnStmt(e.args, ind); return }
             if (name == "print")   { emitPrintStmt(e.args, ind); return }
         }
-        // Heap/Ptr/Value .set(val) as statement — also updates $has for value-nullable
+        // Heap/Ptr/Value .set(val) as statement — only when class has no own set() method
         if (e is CallExpr && e.callee is DotExpr && e.callee.name == "set") {
             val recvType = inferExprType(e.callee.obj)
-            if (anyIndirectClassName(recvType) != null) {
+            val baseClass = anyIndirectClassName(recvType)
+            if (baseClass != null && classes[baseClass]?.methods?.any { it.name == "set" } != true) {
                 val recv = genExpr(e.callee.obj)
                 val argStr = e.args.joinToString(", ") { genExpr(it.expr) }
                 flushPreStmts(ind)
@@ -1881,29 +1882,41 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "print"   -> return genPrint(args)
             "malloc"  -> {
                 if (e.typeArgs.isNotEmpty()) {
-                    val typeName = e.typeArgs[0].name
+                    val ta = e.typeArgs[0]
+                    // malloc<Array<T>>(n) → typed array allocation: (elemC*)malloc(sizeof(elemC) * (size_t)(n))
+                    if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                        val elemC = cTypeStr(ta.typeArgs[0].name)
+                        return "($elemC*)malloc(sizeof($elemC) * (size_t)(${genExpr(args[0].expr)}))"
+                    }
+                    val typeName = ta.name
                     // Class heap constructor: malloc<MyClass>(args) → MyClass_new(args)
                     if (classes.containsKey(typeName)) {
                         val cName = pfx(typeName)
                         val argStr = args.joinToString(", ") { genExpr(it.expr) }
                         return "${cName}_new($argStr)"
                     }
-                    // Primitive typed malloc: malloc<Int>(n) → (int32_t*)malloc(...)
+                    // malloc<T>() with no args → single element: (T*)malloc(sizeof(T))
                     val elemC = cTypeStr(typeName)
+                    if (args.isEmpty()) {
+                        return "($elemC*)malloc(sizeof($elemC))"
+                    }
+                    // malloc<T>(n) → array allocation: (T*)malloc(sizeof(T) * (size_t)(n))
                     return "($elemC*)malloc(sizeof($elemC) * (size_t)(${genExpr(args[0].expr)}))"
                 }
                 return "malloc((size_t)(${genExpr(args[0].expr)}))"
             }
             "calloc"  -> {
                 if (e.typeArgs.isNotEmpty()) {
-                    val elemC = cTypeStr(e.typeArgs[0].name)
+                    val ta = e.typeArgs[0]
+                    val elemC = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) cTypeStr(ta.typeArgs[0].name) else cTypeStr(ta.name)
                     return "($elemC*)calloc((size_t)(${genExpr(args[0].expr)}), sizeof($elemC))"
                 }
                 return "calloc((size_t)(${genExpr(args[0].expr)}), (size_t)(${genExpr(args[1].expr)}))"
             }
             "realloc" -> {
                 if (e.typeArgs.isNotEmpty()) {
-                    val elemC = cTypeStr(e.typeArgs[0].name)
+                    val ta = e.typeArgs[0]
+                    val elemC = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) cTypeStr(ta.typeArgs[0].name) else cTypeStr(ta.name)
                     return "($elemC*)realloc(${genExpr(args[0].expr)}, sizeof($elemC) * (size_t)(${genExpr(args[1].expr)}))"
                 }
                 return "realloc(${genExpr(args[0].expr)}, (size_t)(${genExpr(args[1].expr)}))"
@@ -2169,6 +2182,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Heap class pointer methods
         val heapBase = heapClassName(recvType)
         if (heapBase != null) {
+            // If class defines the method, delegate to it (e.g. class has its own set/get)
+            val classHasMethod = classes[heapBase]?.methods?.any { it.name == method } == true
+            if (classHasMethod) {
+                val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+                return "${pfx(heapBase)}_$method($allArgs)"
+            }
             when (method) {
                 // .value() → same pointer, typed as Value<T> (no copy)
                 "value" -> return recv
@@ -2198,6 +2217,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Ptr<T> methods
         val ptrBase = ptrClassName(recvType)
         if (ptrBase != null) {
+            val classHasMethod = classes[ptrBase]?.methods?.any { it.name == method } == true
+            if (classHasMethod) {
+                val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+                return "${pfx(ptrBase)}_$method($allArgs)"
+            }
             when (method) {
                 // .value() → same pointer, typed as Value<T> (no copy)
                 "value" -> return recv
@@ -2848,7 +2872,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (name != null) {
             if (classes.containsKey(name)) return name
             if (name == "malloc" || name == "calloc" || name == "realloc") {
-                if (e.typeArgs.isNotEmpty()) return "${e.typeArgs[0].name}*"
+                if (e.typeArgs.isNotEmpty()) {
+                    val ta = e.typeArgs[0]
+                    // malloc<Array<Int>>(n) → Int* (element type pointer)
+                    if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) return "${ta.typeArgs[0].name}*"
+                    return "${ta.name}*"
+                }
                 return "Pointer"
             }
             if (name == "intArrayOf" || name == "IntArray") return "IntArray"
@@ -2912,6 +2941,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Heap pointer methods
         val heapBase = heapClassName(recvType)
         if (heapBase != null) {
+            // Class method takes priority over built-in pointer methods
+            val classMethod = classes[heapBase]?.methods?.find { it.name == method }
+            if (classMethod != null) {
+                return if (classMethod.returnType != null) resolveTypeName(classMethod.returnType) else "Unit"
+            }
             return when (method) {
                 "value" -> "${heapBase}&"               // .value() → Value<T> (no copy)
                 "deref" -> heapBase                     // .deref() → T (stack copy)
@@ -2919,16 +2953,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "copy" -> heapBase                      // .copy() → T (stack copy)
                 "toHeap" -> "${heapBase}*"              // identity, already heap
                 "toPtr" -> "${heapBase}^"               // .toPtr() → Ptr<T>
-                else -> {
-                    // Delegate to class method lookup
-                    val m = classes[heapBase]?.methods?.find { it.name == method }
-                    if (m != null) (if (m.returnType != null) resolveTypeName(m.returnType) else "Unit") else null
-                }
+                else -> null
             }
         }
         // Ptr<T> methods
         val ptrBase = ptrClassName(recvType)
         if (ptrBase != null) {
+            val classMethod = classes[ptrBase]?.methods?.find { it.name == method }
+            if (classMethod != null) {
+                return if (classMethod.returnType != null) resolveTypeName(classMethod.returnType) else "Unit"
+            }
             return when (method) {
                 "value" -> "${ptrBase}&"                // .value() → Value<T> (no copy)
                 "deref" -> ptrBase                      // .deref() → T (stack copy)
@@ -2938,10 +2972,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "asHeap" -> "${ptrBase}*?"              // .asHeap() → Heap<T>? (pointer-nullable)
                 "toPtr" -> "${ptrBase}^"                // identity
                 "toHeap" -> "${ptrBase}*"
-                else -> {
-                    val m = classes[ptrBase]?.methods?.find { it.name == method }
-                    if (m != null) (if (m.returnType != null) resolveTypeName(m.returnType) else "Unit") else null
-                }
+                else -> null
             }
         }
         // Value<T> methods — transparent delegation
@@ -3168,7 +3199,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return "${elem}ArrayList"
         }
         if (t.name == "Pointer" && t.typeArgs.isNotEmpty()) {
-            return "${t.typeArgs[0].name}*"
+            val inner = t.typeArgs[0]
+            // Pointer<Array<Int>> → "Int*" (element type pointer, same C representation)
+            if (inner.name == "Array" && inner.typeArgs.isNotEmpty()) {
+                return "${inner.typeArgs[0].name}*"
+            }
+            return "${inner.name}*"
         }
         // Heap<MyClass> → "MyClass*"; Heap<MyClass?> → "MyClass*#" (value-nullable)
         if (t.name == "Heap" && t.typeArgs.isNotEmpty()) {
