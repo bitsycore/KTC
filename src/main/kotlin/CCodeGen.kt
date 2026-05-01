@@ -1051,9 +1051,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // --- heap constructor: ClassName_new(args) → ClassName* ---
         emitHeapNew(cName, ci)
 
-        // --- toHeap: ClassName_toHeap(value) → ClassName* ---
-        emitToHeap(cName)
-
         // --- methods ---
         currentClass = d.name
         selfIsPointer = true
@@ -1132,7 +1129,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // --- heap constructor ---
         emitHeapNew(cName, ci)
-        emitToHeap(cName)
 
         // --- methods (from template AST, but with typeSubst active) ---
         currentClass = mangledName
@@ -1187,17 +1183,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine("$cName* ${cName}_new($paramDecl) {")
         impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
         impl.appendLine("    if (\$p) *\$p = ${cName}_create(${allCtorParams.joinToString(", ") { it.first }});")
-        impl.appendLine("    return \$p;")
-        impl.appendLine("}")
-        impl.appendLine()
-    }
-
-    /** Generate ClassName_toHeap(value) → ClassName* (stack→heap copy). */
-    private fun emitToHeap(cName: String) {
-        hdr.appendLine("$cName* ${cName}_toHeap($cName \$v);")
-        impl.appendLine("$cName* ${cName}_toHeap($cName \$v) {")
-        impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
-        impl.appendLine("    if (\$p) *\$p = \$v;")
         impl.appendLine("    return \$p;")
         impl.appendLine("}")
         impl.appendLine()
@@ -3358,9 +3343,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (method == "copy" && classes[recvType]?.isData == true) {
                 return genDataClassCopy(recv, recvType, args, heap = false)
             }
-            // .toHeap() → ClassName_toHeap(value)
+            // .toHeap() → inline malloc + struct copy
             if (method == "toHeap") {
-                return "${pfx(recvType)}_toHeap($recv)"
+                val cName = pfx(recvType)
+                val t = tmp()
+                preStmts += "$cName* $t = ($cName*)${tMalloc("sizeof($cName)")};"
+                preStmts += "if ($t) *$t = $recv;"
+                return t
             }
             // .toPtr() → &value, $heap = false
             if (method == "toPtr") {
