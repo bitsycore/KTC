@@ -252,17 +252,14 @@ if [[ -n "$RUN_TEST" ]]; then
 
     # ── Build JAR if needed ─────────────────────────────────────
     section "Build"
+
+    showcmd "gradlew jar"
+    "$ROOT/gradlew" jar --quiet 2>&1
     if [[ ! -f "$JAR" ]]; then
-        showcmd "gradlew jar"
-        "$ROOT/gradlew" jar --quiet 2>&1
-        if [[ ! -f "$JAR" ]]; then
-            echo "ERROR: JAR build failed"
-            exit 1
-        fi
-        pass "Built $JAR"
-    else
-        info "JAR up to date"
+        echo "ERROR: JAR build failed"
+        exit 1
     fi
+    pass "Built $JAR"
 
     test_src_dir="$TESTS_DIR/$RUN_TEST"
     if [[ ! -d "$test_src_dir" ]]; then

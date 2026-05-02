@@ -180,17 +180,13 @@ if ($Run -ne "") {
 
     # ── Build JAR if needed ─────────────────────────────────────
     Write-Section "Build"
-    if (-not (Test-Path $jar)) {
-        Write-Cmd "gradlew jar"
-        & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
-            Write-Host "ERROR: JAR build failed" -ForegroundColor Red
-            exit 1
-        }
-        Write-Pass "Built $jar"
-    } else {
-        Write-Info "JAR up to date"
+    Write-Cmd "gradlew jar"
+    & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
+        Write-Host "ERROR: JAR build failed" -ForegroundColor Red
+        exit 1
     }
+    Write-Pass "Built $jar"
 
     $testSrcDir = "$testsDir\$Run"
     if (-not (Test-Path $testSrcDir -PathType Container)) {
