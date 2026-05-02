@@ -9,6 +9,7 @@ class Test {
 fun main() {
     val a = HeapAlloc<Test>()
     if (a == null) return
+    defer HeapFree(a)
     println(a)
     val pts = Point(1, 2)
     println(pts)

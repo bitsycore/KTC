@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <time.h>
+
 /* ═══════════════════════════ random ═══════════════════════════ */
 #define KTC_RAND_MAX UINT32_MAX  // 4294967295
 
