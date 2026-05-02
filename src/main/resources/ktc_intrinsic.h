@@ -242,50 +242,6 @@ static inline void kt_sb_append_bool(kt_StrBuf* sb, bool v) {
     kt_sb_append_cstr(sb, v ? "true" : "false");
 }
 
-/* ═══════════════════════════ Arena allocator ═════════════════════════ */
-
-#ifndef KT_ARENA_SIZE
-#define KT_ARENA_SIZE (64 * 1024)   /* 64 KiB default */
-#endif
-
-typedef struct {
-    char    buf[KT_ARENA_SIZE];
-    size_t  off;
-} kt_Arena;
-
-static inline void kt_arena_init(kt_Arena* a) {
-    a->off = 0;
-}
-
-static inline void* kt_arena_alloc(kt_Arena* a, size_t n) {
-    size_t aligned = (n + 7u) & ~(size_t)7u;
-    if (a->off + aligned > KT_ARENA_SIZE) {
-        fprintf(stderr, "kt_Arena: out of memory (%zu requested, %zu/%d used)\n",
-                n, a->off, KT_ARENA_SIZE);
-        abort();
-    }
-    void* p = a->buf + a->off;
-    a->off += aligned;
-    return p;
-}
-
-static inline void kt_arena_reset(kt_Arena* a) {
-    a->off = 0;
-}
-
-/* Allocate a string in the arena (copies data). */
-static inline kt_String kt_arena_string(kt_Arena* a, const char* p, int32_t len) {
-    char* dst = (char*)kt_arena_alloc(a, (size_t)len + 1);
-    memcpy(dst, p, (size_t)len);
-    dst[len] = '\0';
-    return (kt_String){dst, len};
-}
-
-/* Arena-backed string builder. */
-static inline kt_StrBuf kt_sb_arena(kt_Arena* a, int32_t cap) {
-    return (kt_StrBuf){(char*)kt_arena_alloc(a, (size_t)cap), 0, cap};
-}
-
 /* ═══════════════════════════ Hash helpers (for monomorphized HashMap) */
 
 static inline int32_t kt_hash_i32(int32_t v)  { return (int32_t)(uint32_t)v; }
