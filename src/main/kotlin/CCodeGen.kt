@@ -4225,13 +4225,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         // Object method
         if (recvType != null && objects.containsKey(recvType)) {
-            return "${pfx(recvType)}_$method($argStr)"
+            val vObjMethod = objects[recvType]?.methods?.find { it.name == method }
+            val vObjArgs = if (vObjMethod != null)
+                fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default })
+                else args
+            val vObjArgStr = vObjArgs.joinToString(", ") { genExpr(it.expr) }
+            return "${pfx(recvType)}_$method($vObjArgStr)"
         }
         // Companion object method: Foo.bar() where Foo has a companion object
         val vDotObjName = (dot.obj as? NameExpr)?.name
         if (vDotObjName != null && classCompanions.containsKey(vDotObjName)) {
             val vCompanionName = classCompanions[vDotObjName]!!
-            return "${pfx(vCompanionName)}_$method($argStr)"
+            val vCompMethod = objects[vCompanionName]?.methods?.find { it.name == method }
+            val vCompArgs = if (vCompMethod != null)
+                fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default })
+                else args
+            val vCompArgStr = vCompArgs.joinToString(", ") { genExpr(it.expr) }
+            return "${pfx(vCompanionName)}_$method($vCompArgStr)"
         }
         // Enum → field access
         if (recvType != null && enums.containsKey(recvType)) {

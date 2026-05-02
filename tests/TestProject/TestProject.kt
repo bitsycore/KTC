@@ -25,8 +25,11 @@ fun <T> newArray(size: Int = 100) : Ptr<Array<T>> {
 fun main(args: Array<String>) {
 
 	val array = newArray<Int>(5)
+	defer HeapFree(array)
 	val array2 = newArray<Int>()
+	defer HeapFree(array2)
 	val array3 = newArray<Int>(180)
+	defer HeapFree(array3)
 
 	println("Sizeof array: ${array.size}")
 	println("Sizeof array2: ${array2.size}")

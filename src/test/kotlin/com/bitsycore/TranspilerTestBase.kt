@@ -41,6 +41,84 @@ open class TranspilerTestBase {
         )
     }
 
+    /*
+    Loads and parses all stdlib .kt files listed in /stdlib/index.txt from resources.
+    Returns a list of ASTs ready to be passed as allAsts to CCodeGen.
+    */
+    protected fun loadStdlibAsts(): List<KtFile> {
+        val vIndex = object {}.javaClass.getResourceAsStream("/stdlib/index.txt")
+            ?: return emptyList()
+        val vNames = vIndex.bufferedReader().readLines().filter { it.isNotBlank() }
+        return vNames.mapNotNull { vName ->
+            val vRes = object {}.javaClass.getResourceAsStream("/stdlib/$vName") ?: return@mapNotNull null
+            val vSrc = vRes.bufferedReader().readText()
+            val vTokens = Lexer(vSrc).tokenize()
+            Parser(vTokens).parseFile().copy(sourceFile = vName)
+        }
+    }
+
+    /*
+    Transpiles [src] with the full stdlib included in the allAsts context,
+    so stdlib types (Random, ArrayList, etc.) are visible to the codegen.
+    The generated output is for the primary file only.
+    */
+    protected fun transpileWithStdlib(src: String): TranspileResult {
+        val vSource = src.trimIndent()
+        val vTokens = Lexer(vSource).tokenize()
+        val vAst = Parser(vTokens).parseFile()
+        val vAllAsts = loadStdlibAsts() + vAst
+        val vOutput = CCodeGen(vAst, vAllAsts, vSource.lines()).generate()
+        return TranspileResult(
+            header = vOutput.header,
+            source = vOutput.source,
+            pkg = vAst.pkg ?: "test"
+        )
+    }
+
+    /*
+    Transpiles a single stdlib .kt file (by filename, e.g. "Random.kt") as the
+    primary output, with all other stdlib files as cross-file context.
+    Use this to verify declarations emitted by the stdlib itself.
+    */
+    protected fun transpileStdlibFile(vFileName: String): TranspileResult {
+        val vRes = object {}.javaClass.getResourceAsStream("/stdlib/$vFileName")
+            ?: error("stdlib file not found: $vFileName")
+        val vSource = vRes.bufferedReader().readText()
+        val vTokens = Lexer(vSource).tokenize()
+        val vAst = Parser(vTokens).parseFile().copy(sourceFile = vFileName)
+        val vAllAsts = loadStdlibAsts()
+        val vOutput = CCodeGen(vAst, vAllAsts, vSource.lines()).generate()
+        return TranspileResult(
+            header = vOutput.header,
+            source = vOutput.source,
+            pkg = vAst.pkg ?: "ktc"
+        )
+    }
+
+    /*
+    Shorthand: wrap body in a test package + main, transpile with stdlib context.
+    */
+    protected fun transpileMainWithStdlib(
+        body: String,
+        decls: String = "",
+        pkg: String = "test.Main"
+    ): TranspileResult {
+        val vSrc = buildString {
+            appendLine("package $pkg")
+            appendLine()
+            if (decls.isNotBlank()) {
+                appendLine(decls.trimIndent())
+                appendLine()
+            }
+            appendLine("fun main(args: Array<String>) {")
+            for (vLine in body.trimIndent().lines()) {
+                appendLine("    $vLine")
+            }
+            appendLine("}")
+        }
+        return transpileWithStdlib(vSrc)
+    }
+
     /**
      * Shorthand: wrap body in a test package + main function, transpile.
      * [body] is placed inside `fun main(args: Array<String>) { ... }`.
