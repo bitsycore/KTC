@@ -3227,7 +3227,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is IfExpr      -> genIfExpr(e)
         is WhenExpr    -> genWhenExpr(e)
         is NotNullExpr -> genNotNull(e)
-        is ElvisExpr   -> "(${genExpr(e.left)}\$has ? ${genExpr(e.left)} : ${genExpr(e.right)})"
+        is ElvisExpr   -> { val l = genExpr(e.left); val r = genExpr(e.right); "(${l}\$has ? $l : $r)" }
         is StrTemplateExpr -> genStrTemplate(e)
         is IsCheckExpr -> "/* is-check */ true"
         is CastExpr    -> "(${cType(e.type)})(${genExpr(e.expr)})"
@@ -4000,11 +4000,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "$recvName != NULL"
             else -> "${recvName}\$has"
         }
-        // Determine the default value for the false branch
+        // Determine the return type
         val retType = inferMethodReturnType(dotExpr, args)
-        val falseBranch = if (retType != null) defaultVal(retType) else "0"
-        // x?.method(args) → guard ? ClassName_method(x, args) : defaultVal
-        return "($guard ? $call : $falseBranch)"
+        if (retType == null || retType == "Unit") {
+            // Void call — statement handler should catch this, but fallback to comma expr
+            return "($guard ? ($call, 0) : 0)"
+        }
+        // Emit temp with $has companion
+        val ct = cTypeStr(retType)
+        val defVal = defaultVal(retType)
+        val t = tmp()
+        preStmts += "$ct $t = $guard ? $call : $defVal;"
+        preStmts += "bool ${t}\$has = $guard;"
+        return t
     }
 
     // ── dot access (property, enum) ──────────────────────────────────
@@ -4055,9 +4063,40 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun genSafeDot(e: SafeDotExpr): String {
+        val recvType = inferExprType(e.obj)
         val recv = genExpr(e.obj)
-        // x?.field → x$has ? x.field : 0
-        return "(${recv}\$has ? $recv.${e.name} : 0)"
+        val recvName = (e.obj as? NameExpr)?.name
+
+        // Determine the null guard expression
+        val guard = if (recvName != null && recvType != null) {
+            when {
+                isHeapPtrNullable(recvType) || isPtrPtrNullable(recvType) ||
+                        isValuePtrNullable(recvType) || (recvType.endsWith("*?") && !recvType.endsWith("*#")) ->
+                    "$recvName != NULL"
+                recvType.endsWith("#") || recvType.endsWith("?") ->
+                    "${recvName}\$has"
+                else -> "${recv}\$has"
+            }
+        } else "${recv}\$has"
+
+        // Determine field access expression (same logic as genDot but without nullable check)
+        val fieldAccess = when {
+            anyIndirectClassName(recvType) != null -> "$recv->${e.name}"
+            e.name == "size" && recvType != null && isArrayType(recvType) -> "${recv}\$len"
+            e.name == "length" && recvType == "String" -> "$recv.len"
+            else -> "$recv.${e.name}"
+        }
+
+        // Infer field type for proper default and C type
+        val fieldType = inferDotType(DotExpr(e.obj, e.name))
+        val ct = if (fieldType != null) cTypeStr(fieldType) else "int32_t"
+        val defVal = if (fieldType != null) defaultVal(fieldType) else "0"
+
+        // Emit temp with $has companion
+        val t = tmp()
+        preStmts += "$ct $t = $guard ? $fieldAccess : $defVal;"
+        preStmts += "bool ${t}\$has = $guard;"
+        return t
     }
 
     // ── !! (not-null assertion) ─────────────────────────────────────────
@@ -4619,6 +4658,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             funSigs[name]?.returnType?.let { return resolveTypeName(it) }
         }
         if (e.callee is DotExpr) return inferMethodReturnType(e.callee, e.args)
+        if (e.callee is SafeDotExpr) {
+            val retType = inferMethodReturnType(DotExpr(e.callee.obj, e.callee.name), e.args) ?: return null
+            if (retType == "Unit") return retType
+            return if (retType.endsWith("?") || retType.endsWith("#")) retType else "${retType}?"
+        }
         return null
     }
 
@@ -4670,6 +4714,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (classMethod != null) {
                 return resolveMethodReturnType(heapBase, classMethod.returnType)
             }
+            // Extension function on the base class
+            val extFun = extensionFuns[heapBase]?.find { it.name == method }
+            if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
             return when (method) {
                 "value" -> "${heapBase}&"               // .value() → Value<T> (no copy)
                 "deref" -> heapBase                     // .deref() → T (stack copy)
@@ -4687,6 +4734,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (classMethod != null) {
                 return resolveMethodReturnType(ptrBase, classMethod.returnType)
             }
+            val extFun = extensionFuns[ptrBase]?.find { it.name == method }
+            if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
             return when (method) {
                 "value" -> "${ptrBase}&"                // .value() → Value<T> (no copy)
                 "deref" -> ptrBase                      // .deref() → T (stack copy)
@@ -4705,7 +4754,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "toPtr" -> "${valBase}^"                // .toPtr() → Ptr<T>
                 else -> {
                     val m = classes[valBase]?.methods?.find { it.name == method }
-                    if (m != null) resolveMethodReturnType(valBase, m.returnType) else null
+                    if (m != null) return resolveMethodReturnType(valBase, m.returnType)
+                    val extFun = extensionFuns[valBase]?.find { it.name == method }
+                    if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
+                    null
                 }
             }
         }
@@ -4766,7 +4818,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return if (prop != null) resolveTypeName(prop.second) else null
     }
 
-    private fun inferDotTypeSafe(e: SafeDotExpr): String? = null
+    private fun inferDotTypeSafe(e: SafeDotExpr): String? {
+        val base = inferDotType(DotExpr(e.obj, e.name)) ?: return null
+        return if (base.endsWith("?") || base.endsWith("#")) base else "${base}?"
+    }
     private fun inferIndexType(e: IndexExpr): String? {
         val t = inferExprType(e.obj) ?: return null
         // String indexing: str[i] → Char

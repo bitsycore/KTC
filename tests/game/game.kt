@@ -466,6 +466,52 @@ fun testHeapNullable() {
     HeapFree(r)
 }
 
+fun testSafeDotExpr() {
+    // ── safe dot property access assigned to nullable-inferred variable ──
+    var r: Heap<Vec2?> = HeapAlloc<Vec2>(5.0, 6.0)
+
+    // r is non-null: val fx = r?.x  → inferred as Float?, should be 5.0
+    val fx = r?.x
+    if (fx != null) {
+        println(fx)
+    }
+
+    // r is non-null: safe dot with elvis → non-nullable
+    val fy = r?.y ?: -1.0
+    println(fy)
+
+    // ── safe method call assigned to nullable-inferred variable ──
+    val flen = r?.lengthSquared()
+    if (flen != null) {
+        println(flen)
+    }
+
+    // safe method call with elvis
+    val flen2 = r?.lengthSquared() ?: -1.0
+    println(flen2)
+
+    // ── now set r to null and repeat: all should take the null/elvis path ──
+    r = null
+
+    val nx = r?.x
+    if (nx == null) {
+        println("nx is null")
+    }
+
+    val ny = r?.y ?: -1.0
+    println(ny)
+
+    val nlen = r?.lengthSquared()
+    if (nlen == null) {
+        println("nlen is null")
+    }
+
+    val nlen2 = r?.lengthSquared() ?: -1.0
+    println(nlen2)
+
+    HeapFree(r)
+}
+
 fun addTwo(a: Int, b: Int): Int {
     return a + b
 }
@@ -598,6 +644,8 @@ fun main(args: Array<String>) {
     testHeap()
     println("--- testHeapNullable ---")
     testHeapNullable()
+    println("--- testSafeDotExpr ---")
+    testSafeDotExpr()
     println("--- testFunPtr ---")
     testFunPtr()
     println("--- testDefer ---")
