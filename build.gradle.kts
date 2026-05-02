@@ -22,6 +22,9 @@ tasks.jar {
             if (it.isDirectory) it else zipTree(it)
         }
     })
+
+    // Re-run whenever a resource file changes (e.g. stdlib/*.kt)
+    inputs.dir("src/main/resources")
 }
 
 repositories {
