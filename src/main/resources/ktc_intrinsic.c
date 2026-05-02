@@ -91,11 +91,7 @@ void ktc_time_sleep_ms(uint32_t ms)
     struct timespec req;
     req.tv_sec  = ms / 1000;
     req.tv_nsec = (ms % 1000) * 1000000L;
-
-    // nanosleep can be interrupted, so loop until done
-    while (nanosleep(&req, &req) == -1 && errno == EINTR) {
-        // retry with remaining time
-    }
+    while (nanosleep(&req, &req) == -1 && errno == EINTR) {}
 
 #endif
 }
