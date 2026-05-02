@@ -40,21 +40,6 @@ object Config {
     var debug: Boolean = false
 }
 
-object Random {
-
-    init {
-        c.srand(c.time(c.NULL))
-    }
-
-    fun nextInt(): Int {
-        return c.rand()
-    }
-
-    fun nextRange(bound: Int): Int {
-        return c.rand() % bound
-    }
-}
-
 // ── Helper functions ─────────────────────────────────────────────────
 fun add(a: Int, b: Int): Int {
     return a + b
@@ -670,13 +655,13 @@ fun testCRandom() {
     val b = Random.nextInt()
     println("nextInt: $b")
 
-    val c = Random.nextRange(100)
+    val c = Random.nextInt(100)
     println("nextRange(100): $c")
 
     // Range-limited random: all in [0, 100)
     var allInRange = true
     for (i in 0 until 20) {
-        val r = Random.nextRange(100)
+        val r = Random.nextInt(100)
         if (r < 0 || r >= 100) {
             allInRange = false
         }
