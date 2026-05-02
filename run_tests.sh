@@ -9,6 +9,7 @@
 #   ./run_tests.sh                        # Run all tests
 #   ./run_tests.sh --skip-unit            # Skip unit tests, only run integration
 #   ./run_tests.sh --run HashMapTest      # Transpile, compile & run a single test
+#   ./run_tests.sh --run game --args "--mem-track"  # Pass extra args to transpiler
 #
 set -euo pipefail
 
@@ -19,11 +20,13 @@ TESTS_DIR="$ROOT/tests"
 
 SKIP_UNIT=false
 RUN_TEST=""
+EXTRA_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-unit) SKIP_UNIT=true; shift ;;
         --run)       RUN_TEST="$2"; shift 2 ;;
+        --args)      EXTRA_ARGS="$2"; shift 2 ;;
         *)           echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -58,13 +61,14 @@ if [[ -z "$CC" ]]; then
 fi
 
 # ── Helper: transpile, compile, run one test directory ──────────
-# Usage: invoke_test <name> <test_src_dir> <test_out_dir> [verbose]
+# Usage: invoke_test <name> <test_src_dir> <test_out_dir> [verbose] [extra_args]
 # Returns 0 on success, 1 on failure.
 invoke_test() {
     local name="$1"
     local test_src_dir="$2"
     local test_out_dir="$3"
     local verbose="${4:-false}"
+    local extra_args="${5:-}"
 
     # ── Collect .kt files ───────────────────────────────────────
     local kt_files=()
@@ -95,12 +99,15 @@ invoke_test() {
         section "Transpile"
         local kt_names=""
         for f in "${kt_files[@]}"; do kt_names+="$(basename "$f") "; done
-        showcmd "java -jar KotlinToC.jar $kt_names -o $test_out_dir"
+        local extra_display=""
+        [[ -n "$extra_args" ]] && extra_display=" $extra_args"
+        showcmd "java -jar KotlinToC.jar $kt_names -o $test_out_dir$extra_display"
         echo ""
     fi
     set +e
     local output
-    output=$(java -jar "$JAR" "${kt_files[@]}" -o "$test_out_dir" 2>&1)
+    # shellcheck disable=SC2086
+    output=$(java -jar "$JAR" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
     local transpile_exit=$?
     set -e
     if [[ "$verbose" == "true" ]]; then
@@ -267,7 +274,7 @@ if [[ -n "$RUN_TEST" ]]; then
         exit 1
     fi
 
-    if invoke_test "$RUN_TEST" "$test_src_dir" "$OUT_DIR/$RUN_TEST" "true"; then
+    if invoke_test "$RUN_TEST" "$test_src_dir" "$OUT_DIR/$RUN_TEST" "true" "$EXTRA_ARGS"; then
         exit 0
     else
         exit 1
@@ -327,7 +334,7 @@ else
     for dir in "${test_dirs[@]}"; do
         dir_name="$(basename "$dir")"
         ((TOTAL++)) || true
-        if invoke_test "$dir_name" "$dir" "$OUT_DIR/$dir_name"; then
+        if invoke_test "$dir_name" "$dir" "$OUT_DIR/$dir_name" "false" "$EXTRA_ARGS"; then
             ((PASSED++)) || true
         else
             ((FAILED++)) || true

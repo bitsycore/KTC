@@ -9,10 +9,12 @@
 #   .\run_tests.ps1                        # Run all tests
 #   .\run_tests.ps1 -Skip unit             # Skip unit tests, only run integration
 #   .\run_tests.ps1 -Run HashMapTest       # Transpile, compile & run a single test
+#   .\run_tests.ps1 -Run game -TranspilerArgs "--mem-track"  # Pass extra args to transpiler
 #
 param(
     [string]$Skip = "",
-    [string]$Run  = ""
+    [string]$Run  = "",
+    [string]$TranspilerArgs = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,7 +51,8 @@ function Invoke-Test {
         [string]$Name,
         [string]$TestSrcDir,
         [string]$TestOutDir,
-        [bool]$Verbose = $false
+        [bool]$Verbose = $false,
+        [string]$ExtraArgs = ""
     )
 
     # ── Collect .kt files ───────────────────────────────────────
@@ -70,9 +73,14 @@ function Invoke-Test {
     # ── Transpile ───────────────────────────────────────────────
     if ($Verbose) { Write-Section "Transpile" }
     $transpileArgs = @("-jar", $jar) + $ktFiles + @("-o", $TestOutDir)
+    if ($ExtraArgs -ne "") {
+        $transpileArgs += ($ExtraArgs -split '\s+')
+    }
     if ($Verbose) {
         $ktNames = ($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
-        Write-Cmd "java -jar KotlinToC.jar $ktNames -o $TestOutDir"
+        $cmdLine = "java -jar KotlinToC.jar $ktNames -o $TestOutDir"
+        if ($ExtraArgs -ne "") { $cmdLine += " $ExtraArgs" }
+        Write-Cmd $cmdLine
         Write-Host ""
     }
     $transpileOutput = & java @transpileArgs 2>&1
@@ -192,7 +200,7 @@ if ($Run -ne "") {
         exit 1
     }
 
-    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$outDir\$Run" -Verbose $true
+    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$outDir\$Run" -Verbose $true -ExtraArgs $TranspilerArgs
     if ($result) { exit 0 } else { exit 1 }
 }
 
@@ -253,7 +261,7 @@ if ($testDirs.Count -eq 0) {
 } else {
     foreach ($dir in $testDirs) {
         $totalTests++
-        $result = Invoke-Test -Name $dir.Name -TestSrcDir $dir.FullName -TestOutDir "$outDir\$($dir.Name)"
+        $result = Invoke-Test -Name $dir.Name -TestSrcDir $dir.FullName -TestOutDir "$outDir\$($dir.Name)" -ExtraArgs $TranspilerArgs
         if ($result) {
             $passedTests++
         } else {

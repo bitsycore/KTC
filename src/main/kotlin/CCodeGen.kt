@@ -2182,7 +2182,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit deferred blocks at end unless last stmt was a return (already emitted there)
         val lastStmt = f.body?.stmts?.lastOrNull()
         if (lastStmt !is ReturnStmt) emitDeferredBlocks("    ")
-        if (isMain && memTrack) impl.appendLine("    ktc_mem_report();")
+        if (isMain && memTrack) {
+            impl.appendLine("    fflush(stdout);")
+            impl.appendLine("    ktc_mem_report();")
+        }
         if (isMain) impl.appendLine("    return 0;")
         else if (returnsNullable && lastStmt !is ReturnStmt) impl.appendLine("    return false;")
         popScope()
