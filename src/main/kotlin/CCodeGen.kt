@@ -514,6 +514,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun collectDecl(d: Decl) {
         when (d) {
             is ClassDecl -> {
+                for (p in d.ctorParams) {
+                    if ((p.isVal || p.isVar) && isRawArrayTypeRef(p.type)) {
+                        codegenError("Class property '${p.name}' cannot have raw array type '${p.type.name}'. Use Heap<Array<T>> or Ptr<Array<T>> instead")
+                    }
+                }
+                for (p in d.members.filterIsInstance<PropDecl>()) {
+                    val propType = p.type ?: TypeRef(inferExprType(p.init) ?: "Int")
+                    if (isRawArrayTypeRef(propType)) {
+                        currentStmtLine = p.line
+                        codegenError("Class property '${p.name}' cannot have raw array type '${propType.name}'. Use Heap<Array<T>> or Ptr<Array<T>> instead")
+                    }
+                }
                 val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
                 val ctorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { it.name to it.type }
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
@@ -521,7 +533,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
-                for (m in d.members) if (m is FunDecl && m.receiver == null) ci.methods += m
+                for (m in d.members) if (m is FunDecl && m.receiver == null) {
+                    if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
+                        codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use Heap<Array<T>> or Ptr<Array<T>> instead")
+                    }
+                    ci.methods += m
+                }
                 classes[d.name] = ci
                 if (d.typeParams.isNotEmpty()) genericClassDecls[d.name] = d
                 if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces.map { it.name }
@@ -535,12 +552,27 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
             }
             is ObjectDecl -> {
+                for (p in d.members.filterIsInstance<PropDecl>()) {
+                    val propType = p.type ?: TypeRef(inferExprType(p.init) ?: "Int")
+                    if (isRawArrayTypeRef(propType)) {
+                        currentStmtLine = p.line
+                        codegenError("Object property '${p.name}' cannot have raw array type '${propType.name}'. Use Heap<Array<T>> or Ptr<Array<T>> instead")
+                    }
+                }
                 val props = d.members.filterIsInstance<PropDecl>().map { it.name to (it.type ?: TypeRef("Int")) }
                 val oi = ObjInfo(d.name, props)
-                for (m in d.members) if (m is FunDecl) oi.methods += m
+                for (m in d.members) if (m is FunDecl) {
+                    if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
+                        codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use Heap<Array<T>> or Ptr<Array<T>> instead")
+                    }
+                    oi.methods += m
+                }
                 objects[d.name] = oi
             }
             is FunDecl -> {
+                if (d.returnType != null && isRawArrayTypeRef(d.returnType)) {
+                    codegenError("Function '${d.name}' cannot return raw array type '${d.returnType.name}'. Use Heap<Array<T>> or Ptr<Array<T>> instead")
+                }
                 if (d.typeParams.isNotEmpty()) {
                     // Generic function template — store for monomorphization
                     // (dedup: overwrite funSig, but only add to list if not already present)
@@ -3437,7 +3469,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                         val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                         val elemC = cTypeStr(elemName)
-                        return "($elemC*)${tMalloc("sizeof($elemC) * (size_t)(${genExpr(args[0].expr)})")}"
+                        val sizeExpr = genExpr(args[0].expr)
+                        val t = tmp()
+                        preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
+                        preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                        return t
                     }
                     var typeName = typeSubst[ta.name] ?: ta.name
                     // Resolve generic class: HeapAlloc<MyList<Int>>(...) → MyList_Int_new(...)
@@ -3470,26 +3506,41 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "HeapArrayZero"  -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
-                    val elemName = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                    val isArray = ta.name == "Array" && ta.typeArgs.isNotEmpty()
+                    val elemName = if (isArray) {
                         typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                     } else {
                         typeSubst[ta.name] ?: ta.name
                     }
                     val elemC = cTypeStr(elemName)
-                    return "($elemC*)${tCalloc("(size_t)(${genExpr(args[0].expr)})", "sizeof($elemC)")}"
+                    val sizeExpr = genExpr(args[0].expr)
+                    val t = tmp()
+                    preStmts += "$elemC* $t = ($elemC*)${tCalloc("(size_t)($sizeExpr)", "sizeof($elemC)")};"
+                    if (isArray) {
+                        preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    }
+                    return t
                 }
                 return tCalloc("(size_t)(${genExpr(args[0].expr)})", "(size_t)(${genExpr(args[1].expr)})")
             }
             "HeapArrayResize" -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
-                    val elemName = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                    val isArray = ta.name == "Array" && ta.typeArgs.isNotEmpty()
+                    val elemName = if (isArray) {
                         typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                     } else {
                         typeSubst[ta.name] ?: ta.name
                     }
                     val elemC = cTypeStr(elemName)
-                    return "($elemC*)${tRealloc(genExpr(args[0].expr), "sizeof($elemC) * (size_t)(${genExpr(args[1].expr)})")}"
+                    val ptrExpr = genExpr(args[0].expr)
+                    val sizeExpr = genExpr(args[1].expr)
+                    val t = tmp()
+                    preStmts += "$elemC* $t = ($elemC*)${tRealloc(ptrExpr, "sizeof($elemC) * (size_t)($sizeExpr)")};"
+                    if (isArray) {
+                        preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    }
+                    return t
                 }
                 return tRealloc(genExpr(args[0].expr), "(size_t)(${genExpr(args[1].expr)})")
             }
@@ -4153,6 +4204,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             val t = tmp()
             preStmts += "$ct $t = $inner;"
+            if (isArrayType(baseType) || isAllocArrayCall(e.expr)) {
+                preStmts += "const int32_t ${t}\$len = ${inner}\$len;"
+            }
             preStmts += "if (!$t) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
             return t
         }
@@ -5105,6 +5159,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     /** True if the internal type name represents an array (IntArray, LongArray, Vec2Array, etc.) */
     private fun isArrayType(t: String): Boolean =
         t.endsWith("Array")
+
+    /** True if the TypeRef is a raw Array<T> or primitive array type (not wrapped in Heap, Ptr, or Value). */
+    private fun isRawArrayTypeRef(t: TypeRef): Boolean {
+        if (t.name == "Array") return true
+        if (t.name in setOf("IntArray", "LongArray", "FloatArray", "DoubleArray", "BooleanArray", "CharArray", "StringArray")) return true
+        return false
+    }
 
     private fun arrayElementCType(arrType: String?): String = when (arrType) {
         "IntArray"     -> "int32_t"

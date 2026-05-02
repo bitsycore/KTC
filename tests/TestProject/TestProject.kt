@@ -18,8 +18,8 @@ data class Vec2(val x: Int, val y: Int)
 
 // ── main ─────────────────────────────────────────────────────────────
 
-fun <T> newArray(size: Int = 100) : Array<T> {
-	return Array<T>(size)
+fun <T> newArray(size: Int = 100) : Ptr<Array<T>> {
+	return HeapAlloc<Array<T>>(size)!!
 }
 
 fun main(args: Array<String>) {
