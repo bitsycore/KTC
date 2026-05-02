@@ -687,6 +687,21 @@ fun testCRandom() {
     println("nextInt: $a2")
 }
 
+fun testArrayResult(recursion: Int = 10): @Size(5) IntArray {
+    if (recursion > 0) {
+        return testArrayResult(recursion - 1)
+    } else {
+        return arrayOf(recursion, 2, 3, 4, 5)
+    }
+}
+
+fun testArrayUsage() {
+    val array = testArrayResult()
+    for (n in array) {
+        println(n)
+    }
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -742,4 +757,6 @@ fun main(args: Array<String>) {
     testCInterop()
     println("--- testCRandom ---")
     testCRandom()
+    println("--- testArrayResult ---")
+    testArrayUsage()
 }

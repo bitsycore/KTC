@@ -7,7 +7,8 @@ data class TypeRef(
     val nullable: Boolean = false,
     val typeArgs: List<TypeRef> = emptyList(),
     val funcParams: List<TypeRef>? = null,   // non-null → this is a function type: (params) -> returnType
-    val funcReturn: TypeRef? = null           // return type when funcParams != null
+    val funcReturn: TypeRef? = null,           // return type when funcParams != null
+    val annotations: List<Annotation> = emptyList()
 )
 
 // ═══════════════════════════ File ═══════════════════════════
@@ -154,6 +155,11 @@ data class CastExpr(val expr: Expr, val type: TypeRef) : Expr()
 data class FunRefExpr(val name: String) : Expr()   // ::functionName
 
 // ═══════════════════════════ Helpers ═══════════════════════════
+
+data class Annotation(
+    val name: String,
+    val args: List<Expr> = emptyList()
+)
 
 data class Arg(val name: String? = null, val expr: Expr, val isSpread: Boolean = false)
 

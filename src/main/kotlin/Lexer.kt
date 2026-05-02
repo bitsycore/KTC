@@ -224,6 +224,7 @@ class Lexer(private val src: String) {
             c == '?' && nc == '.' -> { advance(); advance(); emit(TokenType.QUESTION_DOT, "?.") }
             c == '?' && nc == ':' -> { advance(); advance(); emit(TokenType.QUESTION_COLON, "?:") }
             c == '?' -> { advance(); emit(TokenType.QUESTION, "?") }
+            c == '@' -> { advance(); emit(TokenType.AT, "@") }
             else -> error("Unexpected character '$c' at line $line col $col")
         }
     }

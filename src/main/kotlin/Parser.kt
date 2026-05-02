@@ -657,6 +657,8 @@ class Parser(private val tokens: List<Token>) {
     }
 
     private fun parseTypeRef(): TypeRef {
+        // Parse annotations: @Size(5) Array<Int>
+        val annotations = parseAnnotations()
         // Function type: (T, T, ...) -> R
         if (at(TokenType.LPAREN)) {
             val saved = pos
@@ -687,7 +689,34 @@ class Parser(private val tokens: List<Token>) {
             args
         } else emptyList()
         val nullable = if (at(TokenType.QUESTION)) { advance(); true } else false
-        return TypeRef(name, nullable, typeArgs)
+        return TypeRef(name, nullable, typeArgs, annotations = annotations)
+    }
+
+    // ═══════════════════════════ Annotations ════════════════════════
+
+    private fun parseAnnotations(): List<Annotation> {
+        val anns = mutableListOf<Annotation>()
+        while (at(TokenType.AT)) {
+            anns += parseAnnotation()
+            skipNL()
+        }
+        return anns
+    }
+
+    private fun parseAnnotation(): Annotation {
+        expect(TokenType.AT)
+        val name = expectIdent()
+        val args = if (at(TokenType.LPAREN)) {
+            advance(); nesting++; skipNL()
+            val args = mutableListOf<Expr>()
+            while (!at(TokenType.RPAREN) && !at(TokenType.EOF)) {
+                args += parseExpr()
+                if (at(TokenType.COMMA)) { advance(); skipNL() } else break
+            }
+            expect(TokenType.RPAREN); nesting--
+            args
+        } else emptyList()
+        return Annotation(name, args)
     }
 
     // ═══════════════════════════ Precedence table ════════════════════

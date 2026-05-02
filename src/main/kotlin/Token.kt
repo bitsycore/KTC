@@ -40,6 +40,9 @@ enum class TokenType {
     LBRACKET, RBRACKET,
     COMMA, COLON, COLON_COLON, SEMICOLON,
 
+    // Annotations
+    AT,
+
     // Special
     NEWLINE, EOF
 }
