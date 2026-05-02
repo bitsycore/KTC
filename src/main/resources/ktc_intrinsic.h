@@ -98,7 +98,7 @@ static inline void ktc_free(void* p, const char* file, int line) {
         }
     }
     /* unknown or double-free */
-    fprintf(stderr, "[mem] WARNING: free(%p) unknown pointer at %s:%d\n", p, file, line);
+    printf("[mem] WARNING: free(%p) unknown pointer at %s:%d\n", p, file, line);
     ktc_mem_frees++;
     (free)(p);
 }
@@ -106,14 +106,14 @@ static inline void ktc_free(void* p, const char* file, int line) {
 static inline void ktc_mem_report(void) {
     int leaks = 0;
     size_t leaked_bytes = 0;
-    fprintf(stderr, "\n====== ktc memory report ======\n");
-    fprintf(stderr, "  total allocs : %d\n", ktc_mem_allocs);
-    fprintf(stderr, "  total frees  : %d\n", ktc_mem_frees);
-    fprintf(stderr, "  balance      : %d\n", ktc_mem_allocs - ktc_mem_frees);
+    printf("\n====== ktc memory report ======\n");
+    printf("  total allocs : %d\n", ktc_mem_allocs);
+    printf("  total frees  : %d\n", ktc_mem_frees);
+    printf("  balance      : %d\n", ktc_mem_allocs - ktc_mem_frees);
     for (int i = 0; i < ktc_mem_count; i++) {
         if (ktc_mem_records[i].active) {
-            if (leaks == 0) fprintf(stderr, "\n  LEAKS:\n");
-            fprintf(stderr, "    %p  %6zu bytes  %s:%d\n",
+            if (leaks == 0) printf("\n  LEAKS:\n");
+            printf("    %p  %6zu bytes  %s:%d\n",
                 ktc_mem_records[i].ptr, ktc_mem_records[i].size,
                 ktc_mem_records[i].file, ktc_mem_records[i].line);
             leaks++;
@@ -121,11 +121,11 @@ static inline void ktc_mem_report(void) {
         }
     }
     if (leaks == 0) {
-        fprintf(stderr, "  status       : OK, no leaks\n");
+        printf("  status       : OK, no leaks\n");
     } else {
-        fprintf(stderr, "  leaked       : %d allocs, %zu bytes\n", leaks, leaked_bytes);
+        printf("  leaked       : %d allocs, %zu bytes\n", leaks, leaked_bytes);
     }
-    fprintf(stderr, "===============================\n");
+    printf("===============================\n");
 }
 
 /* Macro overrides — must come AFTER the tracking functions */

@@ -442,6 +442,10 @@ fun testHeap() {
 fun testHeapNullable() {
     // Heap<T>? — pointer nullable
     var q : Heap<Vec2>? = HeapAlloc<Vec2>(3.0, 4.0)
+
+    val b = q
+    defer HeapFree(b)
+
     if (q == null) {
         return
     }
