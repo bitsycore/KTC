@@ -4532,8 +4532,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is NullLit  -> null
         is ThisExpr -> lookupVar("\$self") ?: currentExtRecvType ?: currentClass
         is NameExpr -> lookupVar(e.name) ?: run {
-            // Could be enum type
-            if (enums.containsKey(e.name)) e.name else null
+            // Could be enum or object type
+            if (enums.containsKey(e.name)) e.name
+            else if (objects.containsKey(e.name)) e.name
+            else null
         }
         is BinExpr  -> {
             if (e.op in setOf("==", "!=", "<", ">", "<=", ">=", "&&", "||", "in", "!in")) "Boolean"

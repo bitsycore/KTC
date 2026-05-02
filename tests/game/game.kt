@@ -40,6 +40,20 @@ object Config {
     var debug: Boolean = false
 }
 
+object Random {
+    fun seed(s: Int) {
+        c.srand(s)
+    }
+
+    fun nextInt(): Int {
+        return c.rand()
+    }
+
+    fun nextRange(bound: Int): Int {
+        return c.rand() % bound
+    }
+}
+
 // ── Helper functions ─────────────────────────────────────────────────
 fun add(a: Int, b: Int): Int {
     return a + b
@@ -607,6 +621,77 @@ fun testInterface() {
     printShape(s)
 }
 
+fun testCInterop() {
+    // ── c.printf with format string (raw C string passthrough) ──
+    c.printf("c.printf: %d + %d = %d\n", 10, 20, 30)
+
+    // ── c.sprintf into a stack buffer ──
+    val buf = Array<Char>(64)
+    c.sprintf(buf, "formatted: %d", 42)
+    c.printf("sprintf: %s\n", buf)
+
+    // ── c.strlen on a raw C string literal ──
+    c.printf("strlen: %d\n", c.strlen("hello"))
+
+    // ── c.memset + c.memcpy ──
+    val src = intArrayOf(10, 20, 30, 40)
+    val dst = IntArray(4)
+    c.memset(dst, 0, 4 * 4)
+    c.memcpy(dst, src, 4 * 4)
+    println(dst[0])
+    println(dst[2])
+
+    // ── c.abs ──
+    val neg = -99
+    println(c.abs(neg))
+
+    // ── c.atoi on a raw C string literal ──
+    val parsed = c.atoi("256")
+    println(parsed)
+
+    // ── c.NULL constant ──
+    val p: Heap<Vec2>? = c.NULL
+    if (p == null) {
+        println("p is null")
+    }
+
+    // ── c.snprintf for safe formatted output ──
+    val buf2 = Array<Char>(32)
+    c.snprintf(buf2, 32, "val=%d", 777)
+    c.printf("snprintf: %s\n", buf2)
+}
+
+fun testCRandom() {
+    // Seed with a known value for deterministic output
+    Random.seed(42)
+
+    // Generate two random numbers
+    val a = Random.nextInt()
+    val b = Random.nextInt()
+    println(a > 0 || a == 0)  // true — non-negative (rand() >= 0)
+    println(a != b)           // true — very unlikely to be equal
+
+    // Range-limited random: all in [0, 100)
+    var allInRange = true
+    for (i in 0 until 20) {
+        val r = Random.nextRange(100)
+        if (r < 0 || r >= 100) {
+            allInRange = false
+        }
+    }
+    println(allInRange)
+
+    // Re-seed with same value → same first number (deterministic)
+    Random.seed(42)
+    val a2 = Random.nextInt()
+    println(a == a2)
+
+    // Different seed → different sequence
+    Random.seed(999)
+    val c = Random.nextInt()
+    println(a != c || a == c) // always true, just prove it runs
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -658,4 +743,8 @@ fun main(args: Array<String>) {
     testDeferReturn()
     println("--- testInterface ---")
     testInterface()
+    println("--- testCInterop ---")
+    testCInterop()
+    println("--- testCRandom ---")
+    testCRandom()
 }
