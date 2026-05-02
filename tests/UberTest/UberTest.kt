@@ -698,6 +698,14 @@ fun testPassByValue() {
     println(aVec)
 }
 
+fun testTime() {
+    val currentTime = Time.currentMs()
+    println("Current time in ms: $currentTime")
+    Time.sleepMs(100)
+    val currentTime2 = Time.currentMs()
+    println("Current time in ms: $currentTime2")
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -757,4 +765,6 @@ fun main(args: Array<String>) {
     testArrayUsage()
     println("--- testPassByValue ---")
     testPassByValue()
+    println("--- testTime ---")
+    testTime()
 }

@@ -30,3 +30,77 @@ uint32_t ktc_rand_range(uint32_t bound) {
             return r % bound;
     }
 }
+
+double ktc_time_seconds(void)
+{
+#if defined(_WIN32)
+    static LARGE_INTEGER freq;
+    static int initialized = 0;
+
+    if (!initialized) {
+        QueryPerformanceFrequency(&freq);
+        initialized = 1;
+    }
+
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+
+    return (double)counter.QuadPart / (double)freq.QuadPart;
+
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+#endif
+}
+
+uint64_t ktc_time_ms(void)
+{
+#if defined(_WIN32)
+    static LARGE_INTEGER freq;
+    static int initialized = 0;
+
+    if (!initialized) {
+        QueryPerformanceFrequency(&freq);
+        initialized = 1;
+    }
+
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+
+    return (uint64_t)((counter.QuadPart * 1000ULL) / freq.QuadPart);
+
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    return (uint64_t)ts.tv_sec * 1000ULL +
+           (uint64_t)ts.tv_nsec / 1000000ULL;
+#endif
+}
+
+void ktc_time_sleep_ms(uint32_t ms)
+{
+#if defined(_WIN32)
+
+    Sleep(ms);
+
+#else
+
+    struct timespec req;
+    req.tv_sec  = ms / 1000;
+    req.tv_nsec = (ms % 1000) * 1000000L;
+
+    // nanosleep can be interrupted, so loop until done
+    while (nanosleep(&req, &req) == -1 && errno == EINTR) {
+        // retry with remaining time
+    }
+
+#endif
+}
+
+void ktc_time_sleep_seconds(double seconds)
+{
+    ktc_time_sleep_ms((uint32_t)(seconds * 1000.0));
+}

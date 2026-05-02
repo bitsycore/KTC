@@ -12,7 +12,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
+#if defined(_WIN32)
+    #include <windows.h>
+#endif
 #include <time.h>
+
+/* ═══════════════════════════ time ═══════════════════════════ */
+uint64_t ktc_time_ms(void);
+double ktc_time_seconds(void);
+void ktc_time_sleep_seconds(double seconds);
+void ktc_time_sleep_ms(uint32_t ms);
 
 /* ═══════════════════════════ random ═══════════════════════════ */
 #define KTC_RAND_MAX UINT32_MAX  // 4294967295
