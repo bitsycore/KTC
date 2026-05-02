@@ -62,6 +62,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val topProps = mutableSetOf<String>()  // top-level property names (need pfx)
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
     private val interfaces = mutableMapOf<String, IfaceInfo>()
+    // Maps class name → synthetic companion object name (e.g. "Foo" → "Foo_Companion")
+    private val classCompanions = mutableMapOf<String, String>()
 
     // Generic functions: fun <T> name(...) — stored as templates
     private val genericFunDecls = mutableListOf<FunDecl>()
@@ -361,7 +363,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit struct/enum/object declarations (defines the element types needed by generic interfaces)
         // Skip generic templates — they are emitted per concrete instantiation
         for (d in file.decls) when (d) {
-            is ClassDecl  -> if (d.typeParams.isEmpty()) emitClass(d)
+            is ClassDecl  -> if (d.typeParams.isEmpty()) {
+                emitClass(d)
+                // Emit companion objects declared inside this class
+                for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
+                    emitObject(ObjectDecl("${d.name}_${vMember.name}", vMember.members))
+                }
+            }
             is EnumDecl   -> emitEnum(d)
             is ObjectDecl -> emitObject(d)
             else -> {}
@@ -487,7 +495,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 // Record the prefix for cross-file symbols
                 when (d) {
-                    is ClassDecl -> symbolPrefix[d.name] = fpfx
+                    is ClassDecl -> {
+                        symbolPrefix[d.name] = fpfx
+                        // Register companion object prefix
+                        for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
+                            symbolPrefix["${d.name}_${vMember.name}"] = fpfx
+                        }
+                    }
                     is EnumDecl -> symbolPrefix[d.name] = fpfx
                     is InterfaceDecl -> symbolPrefix[d.name] = fpfx
                     is ObjectDecl -> symbolPrefix[d.name] = fpfx
@@ -502,7 +516,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for (d in file.decls) {
             collectDecl(d)
             when (d) {
-                is ClassDecl -> symbolPrefix[d.name] = prefix
+                is ClassDecl -> {
+                    symbolPrefix[d.name] = prefix
+                    // Register companion object prefix
+                    for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
+                        symbolPrefix["${d.name}_${vMember.name}"] = prefix
+                    }
+                }
                 is EnumDecl -> symbolPrefix[d.name] = prefix
                 is InterfaceDecl -> symbolPrefix[d.name] = prefix
                 is ObjectDecl -> symbolPrefix[d.name] = prefix
@@ -545,6 +565,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 classes[d.name] = ci
                 if (d.typeParams.isNotEmpty()) genericClassDecls[d.name] = d
                 if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces.map { it.name }
+                // Collect companion objects declared inside this class
+                for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
+                    val vCompanionSynthName = "${d.name}_${vMember.name}" // e.g. "Foo_Companion"
+                    classCompanions[d.name] = vCompanionSynthName
+                    collectDecl(ObjectDecl(vCompanionSynthName, vMember.members))
+                }
             }
             is EnumDecl  -> enums[d.name] = EnumInfo(d.name, d.entries)
             is InterfaceDecl -> {
@@ -2803,6 +2829,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val objName = (s.target.obj as NameExpr).name
             impl.appendLine("$ind${pfx(objName)}_\$ensure_init();")
         }
+        // Companion object property write: ensure lazy init before assignment
+        if (s.target is DotExpr && s.target.obj is NameExpr && classCompanions.containsKey((s.target.obj as NameExpr).name)) {
+            val vClassName = (s.target.obj as NameExpr).name
+            val vCompanionName = classCompanions[vClassName]!!
+            impl.appendLine("$ind${pfx(vCompanionName)}_\$ensure_init();")
+        }
 
         val target = genLValue(s.target, method)
         val varName = (s.target as? NameExpr)?.name
@@ -4195,6 +4227,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (recvType != null && objects.containsKey(recvType)) {
             return "${pfx(recvType)}_$method($argStr)"
         }
+        // Companion object method: Foo.bar() where Foo has a companion object
+        val vDotObjName = (dot.obj as? NameExpr)?.name
+        if (vDotObjName != null && classCompanions.containsKey(vDotObjName)) {
+            val vCompanionName = classCompanions[vDotObjName]!!
+            return "${pfx(vCompanionName)}_$method($argStr)"
+        }
         // Enum → field access
         if (recvType != null && enums.containsKey(recvType)) {
             return "${pfx(recvType)}_$method"
@@ -4291,8 +4329,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val recvType = inferExprType(e.obj)
         val recv = genExpr(e.obj)
 
-        // Reject non-safe access on nullable receiver (enum/object are never nullable)
-        val isEnumOrObj = e.obj is NameExpr && (enums.containsKey(e.obj.name) || objects.containsKey(e.obj.name))
+        // Reject non-safe access on nullable receiver (enum/object/companion are never nullable)
+        val isEnumOrObj = e.obj is NameExpr && (enums.containsKey(e.obj.name) || objects.containsKey(e.obj.name) || classCompanions.containsKey(e.obj.name))
         if (recvType != null && recvType.endsWith("?") && !isEnumOrObj) {
             val recvSrc = (e.obj as? NameExpr)?.name ?: e.obj.toString()
             codegenError("Only safe (?.) access is allowed on a nullable receiver of type '$recvType': $recvSrc.${e.name}")
@@ -4306,6 +4344,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
             preStmts += "${pfx(e.obj.name)}_\$ensure_init();"
             return "${pfx(e.obj.name)}.${e.name}"
+        }
+        // Companion object field: Foo.bar → game_Foo_Companion.bar (with lazy init guard)
+        if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
+            val vCompanionName = classCompanions[e.obj.name]!!
+            preStmts += "${pfx(vCompanionName)}_\$ensure_init();"
+            return "${pfx(vCompanionName)}.${e.name}"
         }
         // Array .size → name\$len
         if (e.name == "size" && recvType != null && isArrayType(recvType)) return "${recv}\$len"
@@ -4769,6 +4813,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is DotExpr -> {
                 if (e.obj is NameExpr && objects.containsKey(e.obj.name))
                     "${pfx(e.obj.name)}.${e.name}"
+                else if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
+                    val vCompanionName = classCompanions[e.obj.name]!!
+                    "${pfx(vCompanionName)}.${e.name}"
+                }
                 else {
                     val recvType = inferExprType(e.obj)
                     val op = if (anyIndirectClassName(recvType) != null) "->" else "."
@@ -4956,6 +5004,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun inferMethodReturnType(dot: DotExpr, args: List<Arg>): String? {
         // C package: can't infer return type of C functions
         if (dot.obj is NameExpr && dot.obj.name == "c") return null
+        // Companion object method return type
+        val vDotObjName = (dot.obj as? NameExpr)?.name
+        val vCompanionName = vDotObjName?.let { classCompanions[it] }
+        if (vCompanionName != null) {
+            val vMethod = objects[vCompanionName]?.methods?.find { it.name == dot.name }
+            return if (vMethod != null && vMethod.returnType != null) resolveTypeName(vMethod.returnType) else null
+        }
         val recvType = inferExprType(dot.obj) ?: return null
         val method = dot.name
         if (method == "toString") return "String"
@@ -5063,6 +5118,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
             val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
             return if (prop != null) resolveTypeName(prop.second) else null
+        }
+        // Companion object property: Foo.bar → look up in companion's ObjInfo
+        if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
+            val vCompanionName = classCompanions[e.obj.name]!!
+            val vProp = objects[vCompanionName]?.props?.find { it.first == e.name }
+            return if (vProp != null) resolveTypeName(vProp.second) else null
         }
         val recvType = inferExprType(e.obj) ?: return null
         if (recvType.startsWith("Pair_")) {

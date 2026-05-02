@@ -31,6 +31,10 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
             at(TokenType.INTERFACE) -> parseInterfaceDecl()
+            at(TokenType.IDENT) && cur().value == "companion" && peek().type == TokenType.OBJECT -> {
+                advance()  // consume "companion"
+                parseCompanionObjectDecl()
+            }
             at(TokenType.OBJECT) -> parseObjectDecl()
             at(TokenType.VAL)    -> parsePropDecl(mutable = false)
             at(TokenType.VAR)    -> parsePropDecl(mutable = true)
@@ -252,6 +256,34 @@ class Parser(private val tokens: List<Token>) {
         }
         skipTerminator()
         return ObjectDecl(name, members)
+    }
+
+    // ── companion object ─────────────────────────────────────────────
+
+    /*
+    Parses a companion object declaration.
+    "companion" has already been consumed by the caller.
+    Supports: companion object { ... }
+    and:      companion object Name { ... }
+    The companion is stored as ObjectDecl with name "Companion" when unnamed,
+    or with its explicit name when provided.
+    */
+    private fun parseCompanionObjectDecl(): ObjectDecl {
+        expect(TokenType.OBJECT)
+        skipNL()
+        val vName = if (at(TokenType.IDENT)) expectIdent() else "Companion" // explicit or default name
+        skipNL()
+        val vMembers = mutableListOf<Decl>()
+        if (at(TokenType.LBRACE)) {
+            advance(); nesting++; skipNL()
+            while (!at(TokenType.RBRACE) && !at(TokenType.EOF)) {
+                skipNL(); if (at(TokenType.RBRACE)) break
+                vMembers += parseDecl(); skipNL()
+            }
+            expect(TokenType.RBRACE); nesting--
+        }
+        skipTerminator()
+        return ObjectDecl(vName, vMembers)
     }
 
     // ── val / var (top-level or class-level property) ────────────────
