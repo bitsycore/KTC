@@ -712,7 +712,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         when (e) {
             is CallExpr -> {
                 val name = (e.callee as? NameExpr)?.name
-                // Constructor call: MyList<Int>(...) or malloc<MyList<Int>>(...)
+                // Constructor call: MyList<Int>(...) or HeapAlloc<MyList<Int>>(...)
                 for (ta in e.typeArgs) {
                     if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
                         val concreteArgs = ta.typeArgs.map { it.name }
@@ -1094,7 +1094,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         }
                     }
                 }
-                // Check typeArgs for nested generic types (e.g., malloc<Array<T>>)
+                // Check typeArgs for nested generic types (e.g., HeapAlloc<Array<T>>)
                 for (ta in e.typeArgs) if (scanTypeRefWithSubst(ta, subst)) found = true
                 // Check if it's a call to another generic function with resolvable type args
                 if (name != null) {
@@ -2466,7 +2466,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun isAllocCall(e: Expr?): Boolean {
         if (e !is CallExpr) return false
         val name = (e.callee as? NameExpr)?.name ?: return false
-        return name in setOf("malloc", "calloc", "realloc")
+        return name in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize")
     }
 
     /** Check if an expression is a malloc/calloc/realloc call with Array<T> type arg. */
@@ -2474,7 +2474,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val inner = if (e is NotNullExpr) e.expr else e
         if (inner !is CallExpr) return false
         val name = (inner.callee as? NameExpr)?.name ?: return false
-        if (name !in setOf("malloc", "calloc", "realloc")) return false
+        if (name !in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize")) return false
         return inner.typeArgs.isNotEmpty() && inner.typeArgs[0].name == "Array"
     }
 
@@ -2485,9 +2485,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (inner !is CallExpr) return null
         val name = (inner.callee as? NameExpr)?.name ?: return null
         return when (name) {
-            "malloc"  -> inner.args.firstOrNull()?.expr  // malloc<Array<T>>(size)
-            "calloc"  -> inner.args.firstOrNull()?.expr  // calloc<Array<T>>(size)
-            "realloc" -> inner.args.getOrNull(1)?.expr   // realloc<Array<T>>(ptr, size)
+            "HeapAlloc"  -> inner.args.firstOrNull()?.expr  // HeapAlloc<Array<T>>(size)
+            "HeapArrayZero"  -> inner.args.firstOrNull()?.expr  // HeapArrayZero<Array<T>>(size)
+            "HeapArrayResize" -> inner.args.getOrNull(1)?.expr   // HeapArrayResize<Array<T>>(ptr, size)
             else      -> null
         }
     }
@@ -3383,21 +3383,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         when (name) {
             "println" -> return genPrintln(args)
             "print"   -> return genPrint(args)
-            "malloc"  -> {
+            "HeapAlloc"  -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
-                    // malloc<Array<T>>(n) → typed array allocation: (elemC*)malloc(sizeof(elemC) * (size_t)(n))
+                    // HeapAlloc<Array<T>>(n) → typed array allocation: (elemC*)malloc(sizeof(elemC) * (size_t)(n))
                     if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                         val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                         val elemC = cTypeStr(elemName)
                         return "($elemC*)${tMalloc("sizeof($elemC) * (size_t)(${genExpr(args[0].expr)})")}"
                     }
                     var typeName = typeSubst[ta.name] ?: ta.name
-                    // Resolve generic class: malloc<MyList<Int>>(...) → MyList_Int_new(...)
+                    // Resolve generic class: HeapAlloc<MyList<Int>>(...) → MyList_Int_new(...)
                     if (ta.typeArgs.isNotEmpty() && classes.containsKey(typeName) && classes[typeName]!!.isGeneric) {
                         typeName = mangledGenericName(typeName, ta.typeArgs.map { it.name })
                     }
-                    // Class heap constructor: malloc<MyClass>(args) → inline alloc + create
+                    // Class heap constructor: HeapAlloc<MyClass>(args) → inline alloc + create
                     if (classes.containsKey(typeName)) {
                         val cName = pfx(typeName)
                         val argStr = args.joinToString(", ") { genExpr(it.expr) }
@@ -3410,17 +3410,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         }
                         return "${cName}_new($argStr)"
                     }
-                    // malloc<T>() with no args → single element: (T*)malloc(sizeof(T))
+                    // HeapAlloc<T>() with no args → single element: (T*)malloc(sizeof(T))
                     val elemC = cTypeStr(typeName)
                     if (args.isEmpty()) {
                         return "($elemC*)${tMalloc("sizeof($elemC)")}"
                     }
-                    // malloc<T>(n) → array allocation: (T*)malloc(sizeof(T) * (size_t)(n))
+                    // HeapAlloc<T>(n) → array allocation: (T*)malloc(sizeof(T) * (size_t)(n))
                     return "($elemC*)${tMalloc("sizeof($elemC) * (size_t)(${genExpr(args[0].expr)})")}"
                 }
                 return tMalloc("(size_t)(${genExpr(args[0].expr)})")
             }
-            "calloc"  -> {
+            "HeapArrayZero"  -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
                     val elemName = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
@@ -3433,7 +3433,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 return tCalloc("(size_t)(${genExpr(args[0].expr)})", "(size_t)(${genExpr(args[1].expr)})")
             }
-            "realloc" -> {
+            "HeapArrayResize" -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
                     val elemName = if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
@@ -3446,7 +3446,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 return tRealloc(genExpr(args[0].expr), "(size_t)(${genExpr(args[1].expr)})")
             }
-            "free"    -> return tFree(genExpr(args[0].expr))
+            "HeapFree"    -> return tFree(genExpr(args[0].expr))
             "intArrayOf", "longArrayOf", "floatArrayOf", "doubleArrayOf",
             "booleanArrayOf", "charArrayOf" -> {
                 // handled in emitVarDecl; if used as expr, wrap in compound literal
@@ -4522,15 +4522,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return mangledGenericName(name, resolvedArgs)
             }
             if (classes.containsKey(name)) return name
-            if (name == "malloc" || name == "calloc" || name == "realloc") {
+            if (name == "HeapAlloc" || name == "HeapArrayZero" || name == "HeapArrayResize") {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
-                    // malloc<Array<Int>>(n) → Int* (element type pointer)
+                    // HeapAlloc<Array<Int>>(n) → Int* (element type pointer)
                     if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                         val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                         return "${elemName}*"
                     }
-                    // malloc<MyList<Int>>(...) → MyList_Int* (generic class heap pointer)
+                    // HeapAlloc<MyList<Int>>(...) → MyList_Int* (generic class heap pointer)
                     if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
                         return "${mangledGenericName(ta.name, ta.typeArgs.map { it.name })}*"
                     }

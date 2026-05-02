@@ -10,7 +10,7 @@ package json.Main
 //   - String methods (substring, length)
 //   - When expressions (subject-based dispatch)
 //   - Recursive-descent parsing
-//   - Heap allocation (malloc, realloc, free)
+//   - Heap allocation (HeapAlloc, HeapArrayResize, HeapFree)
 //   - Defer for cleanup
 //   - C interop (c.printf, c.exit)
 //   - For/while loops, ..<  operator
@@ -22,12 +22,12 @@ package json.Main
 
 class MutableList<T>(capacity: Int) {
     var size: Int = 0
-    var buf: Heap<Array<T>> = malloc<Array<T>>(capacity)!!
+    var buf: Heap<Array<T>> = HeapAlloc<Array<T>>(capacity)!!
 
     fun add(value: T) {
         if (size >= buf.size) {
             val newCap = buf.size * 2
-            buf = realloc<Array<T>>(buf, newCap)!!
+            buf = HeapArrayResize<Array<T>>(buf, newCap)!!
         }
         buf[size] = value
         size = size + 1
@@ -42,7 +42,7 @@ class MutableList<T>(capacity: Int) {
     }
 
     fun dispose() {
-        free(buf)
+        HeapFree(buf)
     }
 }
 

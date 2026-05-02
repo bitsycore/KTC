@@ -7,7 +7,7 @@ class Test {
 }
 
 fun main() {
-    val a = malloc<Test>()
+    val a = HeapAlloc<Test>()
     if (a == null) return
     println(a)
     val pts = Point(1, 2)

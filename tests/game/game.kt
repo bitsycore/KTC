@@ -188,7 +188,7 @@ fun testArrayList() {
 }
 
 fun testMalloc() {
-    val buf = malloc<Array<Int>>(8)
+    val buf = HeapAlloc<Array<Int>>(8)
     if (buf == null) return
     for (i in 0 until 8) {
         buf[i] = i * 10
@@ -196,17 +196,17 @@ fun testMalloc() {
     println(buf[0])
     println(buf[3])
     println(buf[7])
-    free(buf)
+    HeapFree(buf)
 }
 //
 //fun testTypedPointer() {
-//    val ints = malloc<Array<Int>>(5)
+//    val ints = HeapAlloc<Array<Int>>(5)
 //    if (ints == null) return
 //    for (i in 0 until 5) {
 //        ints[i] = i * 10
 //    }
 //    println(ints[2])
-//    free(ints)
+//    HeapFree(ints)
 //}
 //
 //fun testNullable() {
@@ -405,7 +405,7 @@ fun testMalloc() {
 //
 //fun testHeap() {
 //    // Heap<T> — always allocated, non-null
-//    val p = malloc<Vec2>(10.0, 20.0)
+//    val p = HeapAlloc<Vec2>(10.0, 20.0)
 //    if (p == null) return
 //    println(p.x)       // -> access
 //    println(p.y)
@@ -435,13 +435,13 @@ fun testMalloc() {
 //    val hp = sv.toHeap()
 //    println(hp.x)
 //    println(hp.y)
-//    free(hp)
-//    free(p)
+//    HeapFree(hp)
+//    HeapFree(p)
 //}
 //
 //fun testHeapNullable() {
 //    // Heap<T>? — pointer nullable
-//    var q: Heap<Vec2>? = malloc<Vec2>(3.0, 4.0)
+//    var q: Heap<Vec2>? = HeapAlloc<Vec2>(3.0, 4.0)
 //    if (q != null) {
 //        println(q?.x)
 //    }
@@ -451,7 +451,7 @@ fun testMalloc() {
 //    }
 //
 //    // Heap<T?> — value nullable, pointer always allocated
-//    var r: Heap<Vec2?> = malloc<Vec2>(7.0, 8.0)
+//    var r: Heap<Vec2?> = HeapAlloc<Vec2>(7.0, 8.0)
 //    if (r != null) {
 //        println(r.x)
 //    }
@@ -463,7 +463,7 @@ fun testMalloc() {
 //    if (r != null) {
 //        println(r.x)
 //    }
-//    free(r)
+//    HeapFree(r)
 //}
 ////
 ////fun addTwo(a: Int, b: Int): Int {
@@ -495,9 +495,9 @@ fun testMalloc() {
 ////}
 //
 //fun deferredReturn(): Int {
-//    val p = malloc<Vec2>(1.0, 2.0)
+//    val p = HeapAlloc<Vec2>(1.0, 2.0)
 //    if (p == null) return -1
-//    defer free(p)
+//    defer HeapFree(p)
 //    p.x = 42.0
 //    return p.x.toInt()
 //}

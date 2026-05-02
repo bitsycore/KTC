@@ -50,8 +50,8 @@ class DeferTest : TranspilerTestBase() {
             package test.Main
             $decls
             fun deferredReturn(): Int {
-                val p = malloc<Vec2>(1.0f, 2.0f)!!
-                defer free(p)
+                val p = HeapAlloc<Vec2>(1.0f, 2.0f)!!
+                defer HeapFree(p)
                 p.x = 42.0f
                 return p.x.toInt()
             }

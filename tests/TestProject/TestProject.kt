@@ -32,9 +32,9 @@ fun main(args: Array<String>) {
 	println("Sizeof array2: ${array2.size}")
 	println("Sizeof array3: ${array3.size}")
 
-	val listVec = malloc<ArrayList<Vec2>>(8)
+	val listVec = HeapAlloc<ArrayList<Vec2>>(8)
 	if (listVec == null) return
-	defer free(listVec)
+	defer HeapFree(listVec)
 	val v2 = listVec.value()
 	defer {
 		v2.dispose()
@@ -55,7 +55,7 @@ fun main(args: Array<String>) {
 		println("v2.get($i) = ${v2[i]}")
 	}
 
-	val list = malloc<ArrayList<Int>>(8)!!
+	val list = HeapAlloc<ArrayList<Int>>(8)!!
 	val v = list.value()
 
 	v.add(10)
@@ -100,5 +100,5 @@ fun main(args: Array<String>) {
 	println(v.size)
 
 	v.dispose()
-	free(list)
+	HeapFree(list)
 }

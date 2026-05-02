@@ -149,17 +149,17 @@ class GenericsTest : TranspilerTestBase() {
         r.sourceContains("count = 0")
     }
 
-    // ── malloc with generic class ───────────────────────────────────
+    // ── HeapAlloc with generic class ───────────────────────────────────
 
-    @Test fun mallocGenericClass() {
+    @Test fun heapAllocGenericClass() {
         val r = transpile("""
             package test.Main
             class Box<T>(val item: T)
             fun main(args: Array<String>) {
-                val b = malloc<Box<Int>>(42)
+                val b = HeapAlloc<Box<Int>>(42)
             }
         """)
-        // malloc<Box<Int>>(42) → Box_Int_new(42)
+        // HeapAlloc<Box<Int>>(42) → Box_Int_new(42)
         r.sourceContains("test_Main_Box_Int_new(42)")
     }
 

@@ -4,16 +4,16 @@ import org.junit.jupiter.api.assertThrows
 import kotlin.test.Test
 
 /**
- * Tests for Heap<T> (heap-allocated objects), Ptr<T>, Value<T>, malloc, free.
+ * Tests for Heap<T> (heap-allocated objects), Ptr<T>, Value<T>, HeapAlloc, HeapFree.
  */
 class HeapTest : TranspilerTestBase() {
 
     private val vec2Decl = "data class Vec2(val x: Float, val y: Float)"
 
-    // ── malloc<Class> → heap constructor ─────────────────────────────
+    // ── HeapAlloc<Class> → heap constructor ─────────────────────────────
 
-    @Test fun mallocClass() {
-        val r = transpileMain("val p = malloc<Vec2>(10.0f, 20.0f)", decls = vec2Decl)
+    @Test fun heapAllocClass() {
+        val r = transpileMain("val p = HeapAlloc<Vec2>(10.0f, 20.0f)", decls = vec2Decl)
         r.sourceContains("test_Main_Vec2_new(10.0f, 20.0f)")
     }
 
@@ -21,7 +21,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapFieldRead() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)!!\nprintln(p.x)",
+            "val p = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nprintln(p.x)",
             decls = vec2Decl
         )
         r.sourceContains("p->x")
@@ -29,7 +29,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapFieldWrite() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)!!\np.x = 99.0f",
+            "val p = HeapAlloc<Vec2>(10.0f, 20.0f)!!\np.x = 99.0f",
             decls = vec2Decl
         )
         r.sourceContains("p->x = 99.0f;")
@@ -39,7 +39,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapValue() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)!!\nval v = p.value()",
+            "val p = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = p.value()",
             decls = vec2Decl
         )
         // .value() returns same pointer (Value<T>), NOT a dereference copy
@@ -51,7 +51,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapDeref() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)!!\nval v = p.deref()",
+            "val p = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = p.deref()",
             decls = vec2Decl
         )
         r.sourceContains("(*p)")
@@ -61,7 +61,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapSet() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)\np.set(Vec2(1.0f, 2.0f))",
+            "val p = HeapAlloc<Vec2>(10.0f, 20.0f)\np.set(Vec2(1.0f, 2.0f))",
             decls = vec2Decl
         )
         r.sourceContains("*p =")
@@ -78,11 +78,11 @@ class HeapTest : TranspilerTestBase() {
         r.sourceContains("*$") // struct copy: if ($t) *$t = v;
     }
 
-    // ── free ─────────────────────────────────────────────────────────
+    // ── HeapFree ─────────────────────────────────────────────────────
 
     @Test fun freeHeapPointer() {
         val r = transpileMain(
-            "val p = malloc<Vec2>(10.0f, 20.0f)\nfree(p)",
+            "val p = HeapAlloc<Vec2>(10.0f, 20.0f)\nHeapFree(p)",
             decls = vec2Decl
         )
         r.sourceContains("free(p)")
@@ -90,47 +90,47 @@ class HeapTest : TranspilerTestBase() {
 
     // ── Typed raw pointer ────────────────────────────────────────────
 
-    @Test fun typedPointerMalloc() {
-        val r = transpileMain("val ints = malloc<Int>(5)")
+    @Test fun typedPointerHeapAlloc() {
+        val r = transpileMain("val ints = HeapAlloc<Int>(5)")
         r.sourceContains("(int32_t*)malloc(sizeof(int32_t) *")
     }
 
     @Test fun typedPointerIndexRead() {
-        val r = transpileMain("val ints = malloc<Int>(5)!!\nprintln(ints[2])")
+        val r = transpileMain("val ints = HeapAlloc<Int>(5)!!\nprintln(ints[2])")
         r.sourceContains("ints[2]")
     }
 
     @Test fun typedPointerIndexWrite() {
-        val r = transpileMain("val ints = malloc<Int>(5)!!\nints[0] = 42")
+        val r = transpileMain("val ints = HeapAlloc<Int>(5)!!\nints[0] = 42")
         r.sourceContains("ints[0] = 42;")
     }
 
-    // ── Raw malloc ───────────────────────────────────────────────────
+    // ── Raw HeapAlloc ───────────────────────────────────────────────────
 
-    @Test fun rawMalloc() {
-        val r = transpileMain("val buf = malloc(1024)")
+    @Test fun rawHeapAlloc() {
+        val r = transpileMain("val buf = HeapAlloc(1024)")
         r.sourceContains("malloc((size_t)(1024))")
     }
 
-    @Test fun rawRealloc() {
-        val r = transpileMain("val buf = malloc(1024)\nval buf2 = realloc(buf, 2048)")
+    @Test fun rawHeapArrayResize() {
+        val r = transpileMain("val buf = HeapAlloc(1024)\nval buf2 = HeapArrayResize(buf, 2048)")
         r.sourceContains("realloc(buf, (size_t)(2048))")
     }
 
     // ── Heap<T>? — pointer nullable ──────────────────────────────────
 
-    @Test fun mallocReturnsNullable() {
-        // malloc without !! should be nullable — accessing .x should error
+    @Test fun heapAllocReturnsNullable() {
+        // HeapAlloc without !! should be nullable — accessing .x should error
         val ex = assertThrows<IllegalStateException> {
-            transpileMain("val p = malloc<Vec2>(10.0f, 20.0f)\nprintln(p.x)", decls = vec2Decl)
+            transpileMain("val p = HeapAlloc<Vec2>(10.0f, 20.0f)\nprintln(p.x)", decls = vec2Decl)
         }
         assert(ex.message!!.contains("safe"))
     }
 
-    @Test fun mallocNullCheckSmartCast() {
+    @Test fun heapAllocNullCheckSmartCast() {
         // After null check, smart cast should allow access
         val r = transpileMain("""
-            val p = malloc<Vec2>(10.0f, 20.0f)
+            val p = HeapAlloc<Vec2>(10.0f, 20.0f)
             if (p == null) return
             println(p.x)
         """, decls = vec2Decl)
@@ -139,8 +139,8 @@ class HeapTest : TranspilerTestBase() {
     }
 
     @Test fun notNullAssertionEmitsCrash() {
-        // !! on malloc should emit NullPointerException check
-        val r = transpileMain("val p = malloc<Vec2>(10.0f, 20.0f)!!", decls = vec2Decl)
+        // !! on HeapAlloc should emit NullPointerException check
+        val r = transpileMain("val p = HeapAlloc<Vec2>(10.0f, 20.0f)!!", decls = vec2Decl)
         r.sourceContains("NullPointerException")
         r.sourceContains("exit(1)")
     }
@@ -148,7 +148,7 @@ class HeapTest : TranspilerTestBase() {
     @Test fun notNullAssertionOnVariable() {
         // !! on nullable variable should emit check
         val r = transpileMain("""
-            var p: Heap<Vec2>? = malloc<Vec2>(1.0f, 2.0f)
+            var p: Heap<Vec2>? = HeapAlloc<Vec2>(1.0f, 2.0f)
             val q = p!!
         """, decls = vec2Decl)
         r.sourceContains("NullPointerException")
@@ -156,7 +156,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapPtrNullable() {
         val r = transpileMain(
-            "var q: Heap<Vec2>? = malloc<Vec2>(3.0f, 4.0f)\nq = null",
+            "var q: Heap<Vec2>? = HeapAlloc<Vec2>(3.0f, 4.0f)\nq = null",
             decls = vec2Decl
         )
         // Heap<T>? uses NULL for null
@@ -165,7 +165,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapPtrNullCheck() {
         val r = transpileMain("""
-            var q: Heap<Vec2>? = malloc<Vec2>(3.0f, 4.0f)
+            var q: Heap<Vec2>? = HeapAlloc<Vec2>(3.0f, 4.0f)
             if (q != null) {
                 println(q!!.x)
             }
@@ -177,7 +177,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapToPtr() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(1.0f, 2.0f)!!\nval p = h.toPtr()",
+            "val h = HeapAlloc<Vec2>(1.0f, 2.0f)!!\nval p = h.toPtr()",
             decls = vec2Decl
         )
         // toPtr() is identity — same pointer, just changes type
@@ -257,7 +257,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun valueFieldAccess() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nprintln(v.x)",
+            "val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nprintln(v.x)",
             decls = vec2Decl
         )
         r.sourceContains("v->x")
@@ -267,7 +267,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun valueFieldWrite() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nv.x = 99.0f",
+            "val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nv.x = 99.0f",
             decls = vec2Decl
         )
         r.sourceContains("v->x = 99.0f;")
@@ -277,7 +277,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun valueDeref() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nval copy = v.deref()",
+            "val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nval copy = v.deref()",
             decls = vec2Decl
         )
         r.sourceContains("(*v)")
@@ -292,7 +292,7 @@ class HeapTest : TranspilerTestBase() {
                 fun inc() { count = count + 1 }
             }
             fun main(args: Array<String>) {
-                val h = malloc<Counter>(0)!!
+                val h = HeapAlloc<Counter>(0)!!
                 val v = h.value()
                 v.inc()
             }
@@ -304,52 +304,52 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun explicitValueType() {
         val r = transpileMain(
-            "val h = malloc<Vec2>(1.0f, 2.0f)!!\nval v: Value<Vec2> = h.value()\nprintln(v.x)",
+            "val h = HeapAlloc<Vec2>(1.0f, 2.0f)!!\nval v: Value<Vec2> = h.value()\nprintln(v.x)",
             decls = vec2Decl
         )
         r.sourceContains("v->x")
     }
 
-    // ── malloc<Array<T>>(n) → typed array allocation ─────────────────
+    // ── HeapAlloc<Array<T>>(n) → typed array allocation ─────────────────
 
-    @Test fun mallocArrayInt() {
-        val r = transpileMain("val buf = malloc<Array<Int>>(10)")
+    @Test fun heapAllocArrayInt() {
+        val r = transpileMain("val buf = HeapAlloc<Array<Int>>(10)")
         r.sourceContains("(int32_t*)malloc(sizeof(int32_t) * (size_t)(10))")
     }
 
-    @Test fun mallocArrayFloat() {
-        val r = transpileMain("val buf = malloc<Array<Float>>(5)")
+    @Test fun heapAllocArrayFloat() {
+        val r = transpileMain("val buf = HeapAlloc<Array<Float>>(5)")
         r.sourceContains("(float*)malloc(sizeof(float) * (size_t)(5))")
     }
 
-    @Test fun mallocArrayLong() {
-        val r = transpileMain("val buf = malloc<Array<Long>>(3)")
+    @Test fun heapAllocArrayLong() {
+        val r = transpileMain("val buf = HeapAlloc<Array<Long>>(3)")
         r.sourceContains("(int64_t*)malloc(sizeof(int64_t) * (size_t)(3))")
     }
 
-    // ── malloc<T>() with no args → single element allocation ─────────
+    // ── HeapAlloc<T>() with no args → single element allocation ─────────
 
-    @Test fun mallocSingleInt() {
-        val r = transpileMain("val p = malloc<Int>()")
+    @Test fun heapAllocSingleInt() {
+        val r = transpileMain("val p = HeapAlloc<Int>()")
         r.sourceContains("(int32_t*)malloc(sizeof(int32_t))")
     }
 
-    @Test fun mallocSingleFloat() {
-        val r = transpileMain("val p = malloc<Float>()")
+    @Test fun heapAllocSingleFloat() {
+        val r = transpileMain("val p = HeapAlloc<Float>()")
         r.sourceContains("(float*)malloc(sizeof(float))")
     }
 
-    // ── realloc<Array<T>>(ptr, n) → typed array realloc ──────────────
+    // ── HeapArrayResize<Array<T>>(ptr, n) → typed array realloc ──────────────
 
-    @Test fun reallocArrayInt() {
-        val r = transpileMain("val buf = malloc<Array<Int>>(10)\nval buf2 = realloc<Array<Int>>(buf, 20)")
+    @Test fun heapArrayResizeInt() {
+        val r = transpileMain("val buf = HeapAlloc<Array<Int>>(10)\nval buf2 = HeapArrayResize<Array<Int>>(buf, 20)")
         r.sourceContains("(int32_t*)realloc(buf, sizeof(int32_t) * (size_t)(20))")
     }
 
-    // ── calloc<Array<T>>(n) → typed array calloc ─────────────────────
+    // ── HeapArrayZero<Array<T>>(n) → typed array calloc ─────────────────────
 
-    @Test fun callocArrayInt() {
-        val r = transpileMain("val buf = calloc<Array<Int>>(10)")
+    @Test fun heapZeroArrayInt() {
+        val r = transpileMain("val buf = HeapArrayZero<Array<Int>>(10)")
         r.sourceContains("(int32_t*)calloc((size_t)(10), sizeof(int32_t))")
     }
 
@@ -358,7 +358,7 @@ class HeapTest : TranspilerTestBase() {
     @Test fun bodyPropInitFromCtorParam() {
         val decl = """
             class Buf(var capacity: Int) {
-                var buf: Heap<Array<Int>> = malloc<Array<Int>>(capacity)
+                var buf: Heap<Array<Int>> = HeapAlloc<Array<Int>>(capacity)
             }
         """
         val r = transpileMain("val b = Buf(16)", decls = decl)

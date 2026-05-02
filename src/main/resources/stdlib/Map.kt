@@ -44,9 +44,9 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 
 	override var size: Int = 0
 	var cap: Int = capacity
-	var keys: Heap<Array<K>> = malloc<Array<K>>(capacity)!!
-	var vals: Heap<Array<V>> = malloc<Array<V>>(capacity)!!
-	var occ: Heap<Array<Boolean>> = calloc<Array<Boolean>>(capacity)!!
+	var keys: Heap<Array<K>> = HeapAlloc<Array<K>>(capacity)!!
+	var vals: Heap<Array<V>> = HeapAlloc<Array<V>>(capacity)!!
+	var occ: Heap<Array<Boolean>> = HeapArrayZero<Array<Boolean>>(capacity)!!
 
 	fun findSlot(key: K): Int {
 		var idx = key.hashCode() % cap
@@ -135,18 +135,18 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		val oldOcc = occ
 		val oldCap = cap
 		cap = cap * 2
-		keys = malloc<Array<K>>(cap)!!
-		vals = malloc<Array<V>>(cap)!!
-		occ = calloc<Array<Boolean>>(cap)!!
+		keys = HeapAlloc<Array<K>>(cap)!!
+		vals = HeapAlloc<Array<V>>(cap)!!
+		occ = HeapArrayZero<Array<Boolean>>(cap)!!
 		size = 0
 		for (i in 0 until oldCap) {
 			if (oldOcc[i]) {
 				this.put(oldKeys[i], oldVals[i])
 			}
 		}
-		free(oldKeys)
-		free(oldVals)
-		free(oldOcc)
+		HeapFree(oldKeys)
+		HeapFree(oldVals)
+		HeapFree(oldOcc)
 	}
 
 	override operator fun iterator(): MapIterator<K, V> {
@@ -154,9 +154,9 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 	}
 
 	override fun dispose() {
-		free(keys)
-		free(vals)
-		free(occ)
+		HeapFree(keys)
+		HeapFree(vals)
+		HeapFree(occ)
 	}
 
 }

@@ -55,9 +55,9 @@ cc -std=c11 -o game ktc.c math.c game.c
 | `Ptr<T>`    | `T*`             | Raw pointer (no ownership)           |
 | `Value<T>`  | `T` (auto-deref) | Zero-cost wrapper, auto-dereferences |
 
-- `malloc<T>(...)` / `calloc<T>(...)` / `realloc<T>(...)` return `Heap<T>?` (nullable)
-- `free(ptr)` releases heap memory
-- `Array<T>(size)` uses stack allocation; `malloc<Array<T>>(size)` for heap arrays
+- `HeapAlloc<T>(...)` / `HeapArrayZero<T>(...)` / `HeapArrayResize<T>(...)` return `Heap<T>?` (nullable)
+- `HeapFree(ptr)` releases heap memory
+- `Array<T>(size)` uses stack allocation; `HeapAlloc<Array<T>>(size)` for heap arrays
 
 ### Functions
 
@@ -162,7 +162,7 @@ All collection types implement `Disposable` and must be cleaned up via `dispose(
 
 ## Memory Tracking
 
-Pass `--mem-track` to enable allocation tracking. The generated C code will intercept `malloc`/`calloc`/`realloc`/`free` and print a report at program exit:
+Pass `--mem-track` to enable allocation tracking. The generated C code will intercept `HeapAlloc`/`HeapArrayZero`/`HeapArrayResize`/`HeapFree` calls (mapped to C `malloc`/`calloc`/`realloc`/`free`) and print a report at program exit:
 
 ```
 ══════ KTC Memory Report ══════
