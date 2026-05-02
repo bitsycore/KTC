@@ -13,6 +13,12 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <time.h>
+/* ═══════════════════════════ random ═══════════════════════════ */
+#define KTC_RAND_MAX UINT32_MAX  // 4294967295
+
+void ktc_srand(uint64_t seed);
+uint32_t ktc_rand(void);
+uint32_t ktc_rand_range(uint32_t bound);
 
 /* ═══════════════════════════ alloca compat ═══════════════════════════ */
 #ifdef _MSC_VER

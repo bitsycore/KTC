@@ -687,6 +687,17 @@ fun testArrayUsage() {
     }
 }
 
+fun vecByValue(vec: Vec2) {
+    vec.x = 99.9f
+}
+
+fun testPassByValue() {
+    val aVec = Vec2(5.0f, 2.0f)
+    println(aVec)
+    vecByValue(aVec)
+    println(aVec)
+}
+
 fun main(args: Array<String>) {
     println("--- testArgs ---")
     testArgs(args)
@@ -744,4 +755,6 @@ fun main(args: Array<String>) {
     testCRandom()
     println("--- testArrayResult ---")
     testArrayUsage()
+    println("--- testPassByValue ---")
+    testPassByValue()
 }

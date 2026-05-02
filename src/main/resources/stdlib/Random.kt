@@ -21,7 +21,7 @@ object Random {
 	All methods share this global PRNG state.
 	*/
 	init {
-		c.srand(c.time(c.NULL))
+		c.ktc_srand(c.time(c.NULL))
 	}
 
 	/**
@@ -30,8 +30,8 @@ object Random {
 	Matches Kotlin's Random.nextInt() and Random.nextInt(until: Int).
 	*/
 	fun nextInt(until: Int = 0): Int {
-		if (until <= 0) return c.rand()
-		return c.rand() % until
+		if (until <= 0) return c.ktc_rand()
+		return c.ktc_rand() % until
 	}
 
 	/**
@@ -39,20 +39,20 @@ object Random {
 	Matches Kotlin's Random.nextInt(from: Int, until: Int).
 	*/
 	fun nextIntBetween(from: Int, until: Int): Int {
-		return from + c.rand() % (until - from)
+		return from + c.ktc_rand() % (until - from)
 	}
 
 	/**
 	Returns a non-negative random Long when called with no argument (until <= 0L),
 	or a random Long in [0, until) when until > 0L.
 	Two rand() calls are combined so the result spans at least 30 bits even
-	on platforms where RAND_MAX is only 32767.
+	on platforms where KTC_RAND_MAX is only 32767.
 	Matches Kotlin's Random.nextLong() and Random.nextLong(until: Long).
 	*/
 	fun nextLong(until: Long = 0L): Long {
-		val vA: Long = c.rand().toLong()
-		val vB: Long = c.rand().toLong()
-		val vRaw: Long = vA * (c.RAND_MAX.toLong() + 1L) + vB
+		val vA: Long = c.ktc_rand().toLong()
+		val vB: Long = c.ktc_rand().toLong()
+		val vRaw: Long = vA * (c.KTC_RAND_MAX.toLong() + 1L) + vB
 		if (until <= 0L) return vRaw
 		return vRaw % until
 	}
@@ -62,9 +62,9 @@ object Random {
 	Matches Kotlin's Random.nextLong(from: Long, until: Long).
 	*/
 	fun nextLongBetween(from: Long, until: Long): Long {
-		val vA: Long = c.rand().toLong()
-		val vB: Long = c.rand().toLong()
-		val vRaw: Long = vA * (c.RAND_MAX.toLong() + 1L) + vB
+		val vA: Long = c.ktc_rand().toLong()
+		val vB: Long = c.ktc_rand().toLong()
+		val vRaw: Long = vA * (c.KTC_RAND_MAX.toLong() + 1L) + vB
 		return from + vRaw % (until - from)
 	}
 
@@ -73,7 +73,7 @@ object Random {
 	Matches Kotlin's Random.nextFloat().
 	*/
 	fun nextFloat(): Float {
-		return c.rand().toFloat() / (c.RAND_MAX.toFloat() + 1.0f)
+		return c.ktc_rand().toFloat() / (c.KTC_RAND_MAX.toFloat() + 1.0f)
 	}
 
 	/**
@@ -81,7 +81,7 @@ object Random {
 	Matches Kotlin's Random.nextDouble().
 	*/
 	fun nextDouble(): Double {
-		return c.rand().toDouble() / (c.RAND_MAX.toDouble() + 1.0)
+		return c.ktc_rand().toDouble() / (c.KTC_RAND_MAX.toDouble() + 1.0)
 	}
 
 	/**
@@ -89,7 +89,7 @@ object Random {
 	Matches Kotlin's Random.nextDouble(from: Double, until: Double).
 	*/
 	fun nextDoubleBetween(from: Double, until: Double): Double {
-		val vRaw: Double = c.rand().toDouble() / (c.RAND_MAX.toDouble() + 1.0)
+		val vRaw: Double = c.ktc_rand().toDouble() / (c.KTC_RAND_MAX.toDouble() + 1.0)
 		return from + vRaw * (until - from)
 	}
 
@@ -98,6 +98,6 @@ object Random {
 	Matches Kotlin's Random.nextBoolean().
 	*/
 	fun nextBoolean(): Boolean {
-		return c.rand() % 2 != 0
+		return c.ktc_rand() % 2 != 0
 	}
 }

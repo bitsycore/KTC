@@ -136,6 +136,15 @@ fun main(args: Array<String>) {
         System.err.println("Warning: ktc_intrinsic.h not found in resources, copy it manually.")
     }
 
+    // ── Copy intrinsic header (always overwrite to keep in sync) ────
+    val intrinsicDstC = File(outDir, "ktc_intrinsic.c")
+    val intrinsicSrcC = object {}.javaClass.getResourceAsStream("/ktc_intrinsic.c")
+    if (intrinsicSrcC != null) {
+        intrinsicDstC.writeText(intrinsicSrcC.bufferedReader().readText())
+    } else {
+        System.err.println("Warning: ktc_intrinsic.c not found in resources, copy it manually.")
+    }
+
     // Print compile command (ensure ktc.c is first if present)
     val sortedNames = allOutputNames.sortedBy { if (it == "ktc") 0 else 1 }
     val sourceNames = sortedNames.joinToString(" ") { "$it.c" }

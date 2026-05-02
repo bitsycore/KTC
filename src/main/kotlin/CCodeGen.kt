@@ -138,6 +138,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ── Current class context (when generating methods) ──────────────
     private var currentClass: String? = null
+    private var currentObject: String? = null
     private var selfIsPointer = true
     private var currentExtRecvType: String? = null
 
@@ -2022,7 +2023,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         hdr.appendLine("typedef struct {")
         if (props.isEmpty()) hdr.appendLine("    char _dummy;")
-        for (p in props) hdr.appendLine("    ${cType(p.type ?: TypeRef("Int"))} ${p.name};")
+        for (p in props) {
+            val pType = p.type ?: TypeRef("Int")
+            val resolved = resolveTypeName(pType)
+            val sizeAnn = getSizeAnnotation(pType)
+            if (isArrayType(resolved) && sizeAnn != null) {
+                val elemType = arrayElementCType(resolved)
+                hdr.appendLine("    $elemType ${p.name}[${sizeAnn}];")
+                hdr.appendLine("    int32_t ${p.name}\$len;")
+            } else if (isArrayType(resolved)) {
+                hdr.appendLine("    ${cTypeStr(resolved)} ${p.name};")
+                hdr.appendLine("    int32_t ${p.name}\$len;")
+            } else {
+                hdr.appendLine("    ${cType(pType)} ${p.name};")
+            }
+        }
         hdr.appendLine("} ${cName}_t;")
         hdr.appendLine("extern ${cName}_t $cName;")
         hdr.appendLine("extern bool ${cName}\$init;")
@@ -2038,12 +2053,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine("void ${cName}_\$ensure_init(void) {")
         impl.appendLine("    if (${cName}\$init) return;")
         impl.appendLine("    ${cName}\$init = true;")
+        val prevObject = currentObject
+        currentObject = d.name
         pushScope()
+        for (p in props) defineVar(p.name, resolveTypeName(p.type ?: TypeRef("Int")))
         for (p in props) {
             if (p.init != null) {
+                val pType = p.type ?: TypeRef("Int")
+                val resolved = resolveTypeName(pType)
+                val sizeAnn = getSizeAnnotation(pType)
                 val expr = genExpr(p.init)
                 flushPreStmts("    ")
-                impl.appendLine("    $cName.${p.name} = $expr;")
+                if (isArrayType(resolved) && sizeAnn != null) {
+                    val elemType = arrayElementCType(resolved)
+                    impl.appendLine("    memcpy($cName.${p.name}, $expr, ${sizeAnn} * sizeof($elemType));")
+                    impl.appendLine("    $cName.${p.name}\$len = ${sizeAnn};")
+                } else {
+                    impl.appendLine("    $cName.${p.name} = $expr;")
+                }
             }
         }
         // emit init { } block bodies
@@ -2051,6 +2078,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (ib.body != null) for (s in ib.body.stmts) emitStmt(s, "    ")
         }
         popScope()
+        currentObject = prevObject
         impl.appendLine("}")
         impl.appendLine()
 
@@ -2061,13 +2089,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             hdr.appendLine("$cRet ${cName}_${m.name}($params);")
             impl.appendLine("$cRet ${cName}_${m.name}($params) {")
             impl.appendLine("    ${cName}_\$ensure_init();")
+            val prevObjectM = currentObject
+            currentObject = d.name
             pushScope()
+            for (p in props) defineVar(p.name, resolveTypeName(p.type ?: TypeRef("Int")))
             for (p in m.params) defineVar(p.name, if (p.isVararg) "${resolveTypeName(p.type)}Array" else resolveTypeName(p.type))
             val savedDefers3 = deferStack.toList(); deferStack.clear()
             if (m.body != null) for (s in m.body.stmts) emitStmt(s, "    ")
             if (m.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ")
             deferStack.clear(); deferStack.addAll(savedDefers3)
             popScope()
+            currentObject = prevObjectM
             impl.appendLine("}")
             impl.appendLine()
         }
@@ -3488,6 +3520,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true) {
                 return "\$self->${e.name}"
             }
+            val vCurObj = currentObject
+            if (vCurObj != null && objects[vCurObj]?.props?.any { it.first == e.name } == true) {
+                return "${pfx(vCurObj)}.${e.name}"
+            }
             return e.name
         }
         // Top-level property: apply package prefix
@@ -4818,6 +4854,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is NameExpr -> {
                 if (method && currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true)
                     "\$self->${e.name}"
+                else if (currentObject.let { vCO -> vCO != null && objects[vCO]?.props?.any { it.first == e.name } == true })
+                    "${pfx(currentObject!!)}.${e.name}"
                 else e.name
             }
             is DotExpr -> {
