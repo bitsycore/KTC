@@ -2747,17 +2747,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return
             }
         }
-        // Safe method call as statement: a?.print() → if (a$has) { String_print(a); }
+        // Safe method call as statement: a?.method() → if (guard) { method(a); }
         if (e is CallExpr && e.callee is SafeDotExpr) {
             val safe = e.callee
             val recvName = (safe.obj as? NameExpr)?.name
             val recvType = if (recvName != null) lookupVar(recvName) else null
-            if (recvType != null && recvType.endsWith("?")) {
-                val dotExpr = DotExpr(safe.obj, safe.name)
-                val callExpr = genMethodCall(dotExpr, e.args)
-                flushPreStmts(ind)
-                impl.appendLine("${ind}if (${recvName}\$has) { $callExpr; }")
-                return
+            if (recvType != null) {
+                val guard = when {
+                    // Pointer-nullable (Heap<T>?, Ptr<T>?, Value<T>?, raw T*?) → NULL check
+                    isHeapPtrNullable(recvType) || isPtrPtrNullable(recvType) ||
+                            isValuePtrNullable(recvType) || (recvType.endsWith("*?") && !recvType.endsWith("*#")) ->
+                        "$recvName != NULL"
+                    // Value-nullable (Heap<T?>, Ptr<T?>, Value<T?>) or plain nullable (T?) → $has check
+                    recvType.endsWith("#") || recvType.endsWith("?") ->
+                        "${recvName}\$has"
+                    else -> null
+                }
+                if (guard != null) {
+                    val dotExpr = DotExpr(safe.obj, safe.name)
+                    val callExpr = genMethodCall(dotExpr, e.args)
+                    flushPreStmts(ind)
+                    impl.appendLine("${ind}if ($guard) { $callExpr; }")
+                    return
+                }
             }
         }
         val expr = genExpr(e)
@@ -3978,10 +3990,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): String {
         val recv = genExpr(dot.obj)
         val recvName = (dot.obj as? NameExpr)?.name
-        // x?.method(args) → x$has ? ClassName_method(x, args) : defaultVal
+        val recvType = if (recvName != null) lookupVar(recvName) else null
         val dotExpr = DotExpr(dot.obj, dot.name)
         val call = genMethodCall(dotExpr, args)
-        return "(${recvName}\$has ? $call : 0)"
+        // Determine the null guard expression
+        val guard = when {
+            recvType != null && (isHeapPtrNullable(recvType) || isPtrPtrNullable(recvType) ||
+                    isValuePtrNullable(recvType) || (recvType.endsWith("*?") && !recvType.endsWith("*#"))) ->
+                "$recvName != NULL"
+            else -> "${recvName}\$has"
+        }
+        // Determine the default value for the false branch
+        val retType = inferMethodReturnType(dotExpr, args)
+        val falseBranch = if (retType != null) defaultVal(retType) else "0"
+        // x?.method(args) → guard ? ClassName_method(x, args) : defaultVal
+        return "($guard ? $call : $falseBranch)"
     }
 
     // ── dot access (property, enum) ──────────────────────────────────
