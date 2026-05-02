@@ -41,6 +41,11 @@ uint32_t ktc_rand_range(uint32_t bound);
   #define ktc_alloca(size) alloca(size)
 #endif
 
+/* ═══════════════════════════ Array Trampoline ════════════════════════ */
+/* Pass-by-value semantics for variable-size arrays.
+ * Functions receive this struct, then copy data to a local stack buffer. */
+typedef struct { int32_t size; void* data; } Ktc_ArrayTrampoline;
+
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*
  * Enabled by #define KTC_MEM_TRACK before including this header.

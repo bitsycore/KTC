@@ -94,8 +94,9 @@ class JsonParserTest : TranspilerTestBase() {
 
     @Test fun mutableListLocalPassedByAddressToFunctions() {
         val r = transpileJsonParser()
-        // In main, local structs tokens/output are passed as &tokens, &output
-        r.sourceContains("&tokens, pos,")
+        // In main, local class structs are passed by address (&tokens, &output)
+        // IntArray params are wrapped in Ktc_ArrayTrampoline for pass-by-value semantics
+        r.sourceContains("&tokens, (Ktc_ArrayTrampoline)")
         r.sourceContains("&output)")
     }
 

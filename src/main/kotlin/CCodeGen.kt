@@ -140,6 +140,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private var currentClass: String? = null
     private var currentObject: String? = null
     private var selfIsPointer = true
+
+    // ── Trampolined array params (pass-by-value copy on stack) ────────
+    // Names of array parameters whose data has been copied via alloca+memcpy.
+    // genName redirects these to their local$name copy; .size uses the trampoline field.
+    private val trampolinedParams = mutableSetOf<String>()
     private var currentExtRecvType: String? = null
 
     /** Returns the class name if `type` is a heap pointer to a known class, else null.
@@ -1641,6 +1646,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // class props accessible via self->
         val ci = classes[className]
         if (ci != null) for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+        val savedTrampolined1 = trampolinedParams.toHashSet(); trampolinedParams.clear()
+        emitArrayParamCopies(f.params, "    ")
 
         val savedDefers = deferStack.toList(); deferStack.clear()
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = true)
@@ -1649,6 +1656,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (returnsNullable) impl.appendLine("    return false;")
         }
         deferStack.clear(); deferStack.addAll(savedDefers)
+        trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined1)
         popScope()
 
         currentFnReturnsNullable = prevReturnsNullable
@@ -1725,10 +1733,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val ci = classes[recvTypeName]!!
             for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
         }
+        val savedTrampolined2 = trampolinedParams.toHashSet(); trampolinedParams.clear()
+        emitArrayParamCopies(f.params, "    ")
         val savedDefers2 = deferStack.toList(); deferStack.clear()
         if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = isClassType)
         if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = isClassType)
         deferStack.clear(); deferStack.addAll(savedDefers2)
+        trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined2)
         popScope()
 
         currentClass = prevClass
@@ -1817,10 +1828,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     else -> resolved
                 })
             }
+            val savedTrampolined3 = trampolinedParams.toHashSet(); trampolinedParams.clear()
+            emitArrayParamCopies(f.params, "    ")
             val savedDefers = deferStack.toList(); deferStack.clear()
             if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = false)
             if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = false)
             deferStack.clear(); deferStack.addAll(savedDefers)
+            trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined3)
             popScope()
 
             currentFnReturnsArray = prevReturnsArray
@@ -1902,10 +1916,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val ci = classes[mangledRecvName]!!
                 for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
             }
+            val savedTrampolined4 = trampolinedParams.toHashSet(); trampolinedParams.clear()
+            emitArrayParamCopies(f.params, "    ")
             val savedDefers = deferStack.toList(); deferStack.clear()
             if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = isClassType)
             if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = isClassType)
             deferStack.clear(); deferStack.addAll(savedDefers)
+            trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined4)
             popScope()
 
             currentClass = prevClass
@@ -1975,10 +1992,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 })
             }
             for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+            val savedTrampolined5 = trampolinedParams.toHashSet(); trampolinedParams.clear()
+            emitArrayParamCopies(f.params, "    ")
             val savedDefers = deferStack.toList(); deferStack.clear()
             if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = true)
             if (f.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ", insideMethod = true)
             deferStack.clear(); deferStack.addAll(savedDefers)
+            trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined5)
             popScope()
 
             currentClass = prevClass
@@ -2094,10 +2114,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             pushScope()
             for (p in props) defineVar(p.name, resolveTypeName(p.type ?: TypeRef("Int")))
             for (p in m.params) defineVar(p.name, if (p.isVararg) "${resolveTypeName(p.type)}Array" else resolveTypeName(p.type))
+            val savedTrampolined6 = trampolinedParams.toHashSet(); trampolinedParams.clear()
+            emitArrayParamCopies(m.params, "    ")
             val savedDefers3 = deferStack.toList(); deferStack.clear()
             if (m.body != null) for (s in m.body.stmts) emitStmt(s, "    ")
             if (m.body?.stmts?.lastOrNull() !is ReturnStmt) emitDeferredBlocks("    ")
             deferStack.clear(); deferStack.addAll(savedDefers3)
+            trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined6)
             popScope()
             currentObject = prevObjectM
             impl.appendLine("}")
@@ -2394,6 +2417,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 })
             }
         }
+        val savedTrampolined7 = trampolinedParams.toHashSet(); trampolinedParams.clear()
+        if (!isMain) emitArrayParamCopies(f.params, "    ")
         val savedDefers = deferStack.toList()
         deferStack.clear()
 
@@ -2407,6 +2432,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         if (isMain) impl.appendLine("    return 0;")
         else if (returnsNullable && lastStmt !is ReturnStmt) impl.appendLine("    return false;")
+        trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined7)
         popScope()
 
         deferStack.clear()
@@ -3342,11 +3368,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     popScope()
                     impl.appendLine("$ind}")
                 } else {
-                    // Array: use $len and direct indexing
+                    // Array: use $len / trampoline size and direct indexing
                     val arrExpr = genExpr(rangeExpr)
                     val idx = tmp()
                     val elemType = arrayElementCType(arrType)
-                    impl.appendLine("${ind}for (int32_t $idx = 0; $idx < ${arrExpr}\$len; $idx++) {")
+                    val arrOrigName = (rangeExpr as? NameExpr)?.name
+                    val sizeExpr = if (arrOrigName != null && arrOrigName in trampolinedParams)
+                        "$arrOrigName.size" else "${arrExpr}\$len"
+                    impl.appendLine("${ind}for (int32_t $idx = 0; $idx < $sizeExpr; $idx++) {")
                     impl.appendLine("$ind    $elemType ${s.varName} = ${arrExpr}[$idx];")
                     pushScope(); defineVar(s.varName, arrayElementKtType(arrType))
                     emitBlock(s.body, ind, method)
@@ -3524,6 +3553,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (vCurObj != null && objects[vCurObj]?.props?.any { it.first == e.name } == true) {
                 return "${pfx(vCurObj)}.${e.name}"
             }
+            // Trampolined array param: redirect to local stack copy
+            if (e.name in trampolinedParams) return "local\$${e.name}"
             return e.name
         }
         // Top-level property: apply package prefix
@@ -3957,9 +3988,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val arg = args[argIdx]
                 val expr = genExpr(arg.expr)
                 if (isArrayType(paramType)) {
-                    parts += expr
                     if (!hasSizeAnnotation(param.type)) {
-                        parts += "${expr}\$len"
+                        val argName = (arg.expr as? NameExpr)?.name
+                        val sizeExpr = if (argName != null && argName in trampolinedParams) "$argName.size" else "${expr}\$len"
+                        if (isCtorCall) {
+                            // Constructors still receive (T* arr, int32_t arr$len)
+                            parts += expr
+                            parts += sizeExpr
+                        } else {
+                            parts += "(Ktc_ArrayTrampoline){.size = $sizeExpr, .data = $expr}"
+                        }
+                    } else {
+                        // @Size fixed array — passed as raw pointer
+                        parts += expr
                     }
                 } else if (param.type.nullable) {
                     if (arg.expr is NullLit) {
@@ -4115,8 +4156,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
 
-        // Array .size → name\$len
-        if (method == "size" && recvType != null && isArrayType(recvType)) return "${recv}\$len"
+        // Array .size → trampolined param uses trampoline size field; others use $len
+        if (method == "size" && recvType != null && isArrayType(recvType)) {
+            val dotName = (dot.obj as? NameExpr)?.name
+            return if (dotName != null && dotName in trampolinedParams) "$dotName.size" else "${recv}\$len"
+        }
 
         // Heap class pointer methods
         val heapBase = heapClassName(recvType)
@@ -4397,7 +4441,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             preStmts += "${pfx(vCompanionName)}_\$ensure_init();"
             return "${pfx(vCompanionName)}.${e.name}"
         }
-        // Array .size → name\$len
+        // Array .size → trampolined param uses trampoline struct field; others use $len
+        if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
         if (e.name == "size" && recvType != null && isArrayType(recvType)) return "${recv}\$len"
         if (e.name == "length" && recvType == "String") return "$recv.len"
 
@@ -5266,7 +5311,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return cTypeStr(resolved)
     }
 
-    /** Expand a parameter list: array params → (T* name, int32_t name$len), nullable params → (T name, bool name$has). */
+    // Emit alloca+memcpy copies for all variable array params and record them as trampolined.
+    private fun emitArrayParamCopies(params: List<Param>, ind: String) {
+        for (p in params) {
+            if (p.isVararg) continue
+            val resolved = resolveTypeName(p.type)
+            if (isArrayType(resolved) && !hasSizeAnnotation(p.type)) {
+                val elemCType = arrayElementCType(resolved)
+                impl.appendLine("${ind}$elemCType* local\$${p.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * ${p.name}.size);")
+                impl.appendLine("${ind}memcpy(local\$${p.name}, ${p.name}.data, sizeof($elemCType) * ${p.name}.size);")
+                trampolinedParams += p.name
+            }
+        }
+    }
+
+    /** Expand a parameter list: variable array params → Ktc_ArrayTrampoline, @Size arrays → T*, nullable params → (T name, bool name$has). */
     private fun expandParams(params: List<Param>): String {
         val parts = mutableListOf<String>()
         for (p in params) {
@@ -5281,10 +5340,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 parts += cFuncPtrDecl(resolved, p.name)
             } else if (isArrayType(resolved)) {
                 if (hasSizeAnnotation(p.type)) {
+                    // @Size(N) fixed array — passed as raw pointer (size known at compile time)
                     parts += "${cTypeStr(resolved)} ${p.name}"
                 } else {
-                    parts += "${cTypeStr(resolved)} ${p.name}"
-                    parts += "int32_t ${p.name}\$len"
+                    // Variable array — trampoline for pass-by-value semantics
+                    parts += "Ktc_ArrayTrampoline ${p.name}"
                 }
             } else if (p.type.nullable) {
                 parts += "${cTypeStr(resolved)} ${p.name}"
