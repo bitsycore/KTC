@@ -41,8 +41,9 @@ object Config {
 }
 
 object Random {
-    fun seed(s: Int) {
-        c.srand(s)
+
+    init {
+        c.srand(c.time(c.NULL))
     }
 
     fun nextInt(): Int {
@@ -662,14 +663,15 @@ fun testCInterop() {
 }
 
 fun testCRandom() {
-    // Seed with a known value for deterministic output
-    Random.seed(42)
-
     // Generate two random numbers
     val a = Random.nextInt()
+    println("nextInt: $a")
+
     val b = Random.nextInt()
-    println(a > 0 || a == 0)  // true — non-negative (rand() >= 0)
-    println(a != b)           // true — very unlikely to be equal
+    println("nextInt: $b")
+
+    val c = Random.nextRange(100)
+    println("nextRange(100): $c")
 
     // Range-limited random: all in [0, 100)
     var allInRange = true
@@ -679,17 +681,10 @@ fun testCRandom() {
             allInRange = false
         }
     }
-    println(allInRange)
+    println("All in range: $allInRange")
 
-    // Re-seed with same value → same first number (deterministic)
-    Random.seed(42)
     val a2 = Random.nextInt()
-    println(a == a2)
-
-    // Different seed → different sequence
-    Random.seed(999)
-    val c = Random.nextInt()
-    println(a != c || a == c) // always true, just prove it runs
+    println("nextInt: $a2")
 }
 
 fun main(args: Array<String>) {

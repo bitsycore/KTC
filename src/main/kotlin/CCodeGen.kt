@@ -1869,24 +1869,50 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitObject(d: ObjectDecl) {
         val cName = pfx(d.name)
         val props = d.members.filterIsInstance<PropDecl>()
+        val initBlocks = d.members.filterIsInstance<FunDecl>().filter { it.name == "init" }
+        val methods = d.members.filterIsInstance<FunDecl>().filter { it.name != "init" }
 
         hdr.appendLine("typedef struct {")
+        if (props.isEmpty()) hdr.appendLine("    char _dummy;")
         for (p in props) hdr.appendLine("    ${cType(p.type ?: TypeRef("Int"))} ${p.name};")
         hdr.appendLine("} ${cName}_t;")
         hdr.appendLine("extern ${cName}_t $cName;")
+        hdr.appendLine("extern bool ${cName}\$init;")
+        hdr.appendLine("void ${cName}_\$ensure_init(void);")
         hdr.appendLine()
 
-        // global instance with initial values
-        val inits = props.joinToString(", ") { p -> if (p.init != null) genExpr(p.init) else defaultVal(resolveTypeName(p.type ?: TypeRef("Int"))) }
-        impl.appendLine("${cName}_t $cName = {$inits};")
+        // global instance zero-initialized + init flag
+        impl.appendLine("${cName}_t $cName = {0};")
+        impl.appendLine("bool ${cName}\$init = false;")
         impl.appendLine()
 
-        // methods
-        for (m in d.members) if (m is FunDecl) {
+        // $ensure_init: lazy initialization function
+        impl.appendLine("void ${cName}_\$ensure_init(void) {")
+        impl.appendLine("    if (${cName}\$init) return;")
+        impl.appendLine("    ${cName}\$init = true;")
+        pushScope()
+        for (p in props) {
+            if (p.init != null) {
+                val expr = genExpr(p.init)
+                flushPreStmts("    ")
+                impl.appendLine("    $cName.${p.name} = $expr;")
+            }
+        }
+        // emit init { } block bodies
+        for (ib in initBlocks) {
+            if (ib.body != null) for (s in ib.body.stmts) emitStmt(s, "    ")
+        }
+        popScope()
+        impl.appendLine("}")
+        impl.appendLine()
+
+        // methods — inject $ensure_init() at the top of each
+        for (m in methods) {
             val cRet = if (m.returnType != null) cType(m.returnType) else "void"
             val params = expandParams(m.params)
             hdr.appendLine("$cRet ${cName}_${m.name}($params);")
             impl.appendLine("$cRet ${cName}_${m.name}($params) {")
+            impl.appendLine("    ${cName}_\$ensure_init();")
             pushScope()
             for (p in m.params) defineVar(p.name, if (p.isVararg) "${resolveTypeName(p.type)}Array" else resolveTypeName(p.type))
             val savedDefers3 = deferStack.toList(); deferStack.clear()
@@ -2594,6 +2620,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     return
                 }
             }
+        }
+
+        // Object property write: ensure lazy init before assignment
+        if (s.target is DotExpr && s.target.obj is NameExpr && objects.containsKey((s.target.obj as NameExpr).name)) {
+            val objName = (s.target.obj as NameExpr).name
+            impl.appendLine("$ind${pfx(objName)}_\$ensure_init();")
         }
 
         val target = genLValue(s.target, method)
@@ -4037,8 +4069,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.obj is NameExpr && enums.containsKey(e.obj.name)) {
             return "${pfx(e.obj.name)}_${e.name}"
         }
-        // Object field: Config.debug → game_Config.debug
+        // Object field: Config.debug → game_Config.debug (with lazy init guard)
         if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
+            preStmts += "${pfx(e.obj.name)}_\$ensure_init();"
             return "${pfx(e.obj.name)}.${e.name}"
         }
         // Array .size → name\$len

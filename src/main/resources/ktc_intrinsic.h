@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
+#include <time.h>
 
 /* ═══════════════════════════ alloca compat ═══════════════════════════ */
 #ifdef _MSC_VER
