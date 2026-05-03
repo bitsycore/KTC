@@ -1,4 +1,4 @@
-package ktc
+package ktc.std
 
 /**
 Kotlin Random singleton implementation.

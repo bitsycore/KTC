@@ -1,4 +1,4 @@
-package ktc
+package ktc.std
 
 interface Hashable {
 	fun hashCode(): Int

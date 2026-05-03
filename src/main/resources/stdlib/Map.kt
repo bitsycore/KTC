@@ -1,4 +1,4 @@
-package ktc
+package ktc.std
 
 class MapIterator<K, V>(keys: Heap<Array<K>>, vals: Heap<Array<V>>, occ: Heap<Array<Boolean>>, cap: Int) {
 	var idx: Int = 0

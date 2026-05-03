@@ -133,7 +133,7 @@ invoke_test() {
         [[ -e "$f" ]] || continue
         local cname
         cname="$(basename "$f")"
-        if [[ "$cname" == "ktc.c" ]]; then
+        if [[ "$cname" == "ktc_std.c" ]]; then
             ktc_first+=("$cname")
         else
             others+=("$cname")
@@ -155,7 +155,7 @@ invoke_test() {
     # Binary name: first non-ktc .c file without extension
     local bin_base=""
     for cf in "${c_files[@]}"; do
-        if [[ "$cf" != "ktc.c" ]]; then
+        if [[ "$cf" != "ktc_std.c" ]]; then
             bin_base="${cf%.c}"
             break
         fi

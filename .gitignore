@@ -52,8 +52,8 @@ bin/
 .idea/
 
 **/output/
-ktc.c
-ktc.h
+ktc_std.c
+ktc_std.h
 *.exe
 
 /.idea/

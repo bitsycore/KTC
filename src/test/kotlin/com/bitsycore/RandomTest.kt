@@ -14,32 +14,32 @@ class RandomTest : TranspilerTestBase() {
 
 	@Test fun randomStructDeclaredInHeader() {
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.headerContains("ktc_Random_t")
+		vResult.headerContains("ktc_std_Random_t")
 	}
 
 	@Test fun randomExternDeclaredInHeader() {
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.headerContains("extern ktc_Random_t ktc_Random;")
+		vResult.headerContains("extern ktc_std_Random_t ktc_std_Random;")
 	}
 
 	@Test fun randomNextIntDeclaredInHeader() {
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.headerContains("ktc_Random_nextInt(")
+		vResult.headerContains("ktc_std_Random_nextInt(")
 	}
 
 	@Test fun randomNextFloatDeclaredInHeader() {
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.headerContains("ktc_Random_nextFloat(")
+		vResult.headerContains("ktc_std_Random_nextFloat(")
 	}
 
 	@Test fun randomNextDoubleDeclaredInHeader() {
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.headerContains("ktc_Random_nextDouble(")
+		vResult.headerContains("ktc_std_Random_nextDouble(")
 	}
 
 	@Test fun randomNextBooleanDeclaredInHeader() {
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.headerContains("ktc_Random_nextBoolean(")
+		vResult.headerContains("ktc_std_Random_nextBoolean(")
 	}
 
 	// ── Init body (srand in ensure_init, in ktc package source) ──────
@@ -59,48 +59,48 @@ class RandomTest : TranspilerTestBase() {
 	@Test fun nextIntNoArgFillsDefaultZero() {
 		val vResult = transpileMainWithStdlib("val n = Random.nextInt()")
 		// Default param 0 must be filled in; ensures ensure_init is also called
-		vResult.sourceContains("ktc_Random_nextInt(0)")
+		vResult.sourceContains("ktc_std_Random_nextInt(0)")
 	}
 
 	@Test fun nextIntWithUntilPassesThrough() {
 		val vResult = transpileMainWithStdlib("val n = Random.nextInt(100)")
-		vResult.sourceContains("ktc_Random_nextInt(100)")
+		vResult.sourceContains("ktc_std_Random_nextInt(100)")
 	}
 
 	@Test fun nextIntBetweenGeneratesCorrectCall() {
 		val vResult = transpileMainWithStdlib("val n = Random.nextIntBetween(10, 50)")
-		vResult.sourceContains("ktc_Random_nextIntBetween(10, 50)")
+		vResult.sourceContains("ktc_std_Random_nextIntBetween(10, 50)")
 	}
 
 	@Test fun nextLongNoArgFillsDefaultZero() {
 		val vResult = transpileMainWithStdlib("val n = Random.nextLong()")
 		// Long literal 0L → 0LL in C
-		vResult.sourceContains("ktc_Random_nextLong(0LL)")
+		vResult.sourceContains("ktc_std_Random_nextLong(0LL)")
 	}
 
 	@Test fun nextLongWithUntilPassesThrough() {
 		val vResult = transpileMainWithStdlib("val n = Random.nextLong(1000L)")
-		vResult.sourceContains("ktc_Random_nextLong(1000LL)")
+		vResult.sourceContains("ktc_std_Random_nextLong(1000LL)")
 	}
 
 	@Test fun nextFloatGeneratesCall() {
 		val vResult = transpileMainWithStdlib("val f = Random.nextFloat()")
-		vResult.sourceContains("ktc_Random_nextFloat()")
+		vResult.sourceContains("ktc_std_Random_nextFloat()")
 	}
 
 	@Test fun nextDoubleGeneratesCall() {
 		val vResult = transpileMainWithStdlib("val d = Random.nextDouble()")
-		vResult.sourceContains("ktc_Random_nextDouble()")
+		vResult.sourceContains("ktc_std_Random_nextDouble()")
 	}
 
 	@Test fun nextBooleanGeneratesCall() {
 		val vResult = transpileMainWithStdlib("val b = Random.nextBoolean()")
-		vResult.sourceContains("ktc_Random_nextBoolean()")
+		vResult.sourceContains("ktc_std_Random_nextBoolean()")
 	}
 
 	@Test fun randomEnsureInitCalledInsideMethod() {
 		// $ensure_init is injected at the top of each method body in the ktc source
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.sourceContains("ktc_Random_\$ensure_init()")
+		vResult.sourceContains("ktc_std_Random_\$ensure_init()")
 	}
 }

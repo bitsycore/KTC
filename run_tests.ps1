@@ -105,12 +105,12 @@ function Invoke-Test {
         if ($Verbose) { Write-Fail "No .c files generated" } else { Write-Fail "$Name (no .c files generated)" }
         return $false
     }
-    # Sort: ktc.c first, then the rest alphabetically
-    $cFiles = $cFiles | Sort-Object { if ($_ -eq "ktc.c") { 0 } else { 1 } }, { $_ }
+    # Sort: ktc_std.c first, then the rest alphabetically
+    $cFiles = $cFiles | Sort-Object { if ($_ -eq "ktc_std.c") { 0 } else { 1 } }, { $_ }
     $cSources = $cFiles | ForEach-Object { "$TestOutDir\$_" }
 
     # Binary name: first non-ktc .c file without extension
-    $binBase = ($cFiles | Where-Object { $_ -ne "ktc.c" } | Select-Object -First 1) -replace '\.c$', ''
+    $binBase = ($cFiles | Where-Object { $_ -ne "ktc_std.c" } | Select-Object -First 1) -replace '\.c$', ''
     if (-not $binBase) { $binBase = $cFiles[0] -replace '\.c$', '' }
     $exePath = "$TestOutDir\$binBase.exe"
 

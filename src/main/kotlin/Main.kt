@@ -159,10 +159,10 @@ fun main(args: Array<String>) {
         System.err.println("Warning: ktc_intrinsic.c not found in resources, copy it manually.")
     }
 
-    // Print compile command (ensure ktc.c is first if present)
-    val sortedNames = allOutputNames.sortedBy { if (it == "ktc") 0 else 1 }
+    // Print compile command (ensure ktc_std.c is first if present)
+    val sortedNames = allOutputNames.sortedBy { if (it == "ktc_std") 0 else 1 }
     val sourceNames = sortedNames.joinToString(" ") { "$it.c" }
-    val mainBase = sortedNames.find { it != "ktc" } ?: sortedNames.first()
+    val mainBase = sortedNames.find { it != "ktc_std" } ?: sortedNames.first()
     println("Done. Compile with:  cc -std=c11 -o $mainBase $sourceNames")
 }
 

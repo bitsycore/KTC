@@ -91,7 +91,7 @@ open class TranspilerTestBase {
         return TranspileResult(
             header = vOutput.header,
             source = vOutput.source,
-            pkg = vAst.pkg ?: "ktc"
+            pkg = vAst.pkg ?: "ktc_std"
         )
     }
 

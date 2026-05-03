@@ -12,7 +12,7 @@ A transpiler that converts a subset of Kotlin to portable C11. Stack-first alloc
 java -jar build/libs/KotlinToC-1.0-SNAPSHOT.jar myfile.kt
 
 # Compile the generated C
-cc -std=c11 -o myfile ktc.c myfile.c
+cc -std=c11 -o myfile ktc_std.c myfile.c
 ```
 
 ## Usage
@@ -33,8 +33,8 @@ Multiple files sharing the same `package` are merged into a single C output unit
 
 ```bash
 java -jar build/libs/KotlinToC-1.0-SNAPSHOT.jar game_main.kt game_vec3.kt math.kt
-# Outputs: game.c game.h math.c math.h ktc.c ktc.h ktc_intrinsic.h
-cc -std=c11 -o game ktc.c math.c game.c
+# Outputs: game.c game.h math.c math.h ktc_std.c ktc_std.h ktc_intrinsic.h
+cc -std=c11 -o game ktc_std.c math.c game.c
 ```
 
 ## Supported Language Features
@@ -277,7 +277,7 @@ Kotlin source (.kt)
     │  └─ emit implementations, vtable instances, main() (.c)
     │
     ▼
-  Output: name.h + name.c + ktc.h + ktc.c + ktc_intrinsic.h
+  Output: name.h + name.c + ktc_std.h + ktc_std.c + ktc_intrinsic.h
     │
     ▼
   C compiler (cc -std=c11) → native executable

@@ -1,4 +1,4 @@
-package ktc
+package ktc.std
 
 object Time {
 

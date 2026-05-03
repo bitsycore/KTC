@@ -372,15 +372,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Imports → #include (skip ktc stdlib imports — handled below)
         for (imp in file.imports) {
-            if (imp.startsWith("ktc")) continue
+            if (imp.startsWith("ktc_std")) continue
             val parts = imp.removeSuffix(".*").split('.')
             val headerName = parts.joinToString("_")
             hdr.appendLine("#include \"$headerName.h\"")
         }
-        // Auto-include ktc.h for non-stdlib packages when stdlib is present
-        val hasStdlib = allFiles.any { it.pkg == "ktc" }
-        if (hasStdlib && file.pkg != "ktc") {
-            hdr.appendLine("#include \"ktc.h\"")
+        // Auto-include ktc_std.h for non-stdlib packages when stdlib is present
+        val hasStdlib = allFiles.any { it.pkg == "ktc.std" }
+        if (hasStdlib && file.pkg != "ktc_std") {
+            hdr.appendLine("#include \"ktc_std.h\"")
         }
         hdr.appendLine()
 
