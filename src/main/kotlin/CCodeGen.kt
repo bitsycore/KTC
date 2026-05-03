@@ -2729,12 +2729,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     }
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)
-                    impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
-                    // Array type: emit $len companion (copy from temp's $len)
-                    // Skip for pointer-wrapped arrays which are already pointers
-                    if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?")) {
-                        val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
-                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
+                    // Array type: deep copy from source (value semantics, not alias)
+                    if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?") && s.init !is NullLit) {
+                        val elemCType = arrayElementCType(t)
+                        val lenExpr = if (s.init is NameExpr) "${(s.init as NameExpr).name}\$len" else "${expr}\$len"
+                        impl.appendLine("${ind}$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
+                    } else if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?") && s.init is NullLit) {
+                        // Nullable array initialized with null
+                        impl.appendLine("${ind}${arrayElementCType(t)}* ${s.name} = NULL;")
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
+                    } else {
+                        impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
+                        if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?")) {
+                            val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
+                            impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
+                        }
                     }
                 }
             }
