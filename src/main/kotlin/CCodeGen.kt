@@ -1605,6 +1605,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitMethod(className: String, f: FunDecl) {
         val cClass = pfx(className)
         val methodName = if (f.isPrivate) "PRIV_${f.name}" else f.name
+
+        val paramSig = f.params.joinToString(", ") { p -> "${p.name}: ${typeRefToStr(p.type)}" }
+        val retSig = f.returnType?.let { ": ${typeRefToStr(it)}" } ?: ""
+        val priv = if (f.isPrivate) "private " else ""
+        impl.appendLine("// ══ ${priv}fun ${f.name}($paramSig)$retSig ══")
+        impl.appendLine()
+
         val returnsNullable = f.returnType != null && f.returnType.nullable
         val returnsSizedArray = !returnsNullable && f.returnType != null && isSizedArrayTypeRef(f.returnType)
         val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else ""
@@ -1691,11 +1698,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── extension function ───────────────────────────────────────────
 
     private fun emitExtensionFun(f: FunDecl) {
-        impl.appendLine("// ══ ext ${f.name} on ${f.receiver!!.name} ($currentSourceFile) ══")
-        impl.appendLine()
-
         val recvTypeName = f.receiver!!.name
         val recvIsNullable = f.receiver.nullable
+        val paramSig = f.params.joinToString(", ") { p -> "${p.name}: ${typeRefToStr(p.type)}" }
+        val retSig = f.returnType?.let { ": ${typeRefToStr(it)}" } ?: ""
+        impl.appendLine("// ══ ext fun ${recvTypeName}.${f.name}($paramSig)$retSig ($currentSourceFile) ══")
+        impl.appendLine()
         val returnsSizedArray = f.returnType != null && isSizedArrayTypeRef(f.returnType)
         val returnsNullable = f.returnType != null && f.returnType.nullable
         val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else ""
@@ -2398,7 +2406,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitFun(f: FunDecl) {
 
         if (f.name != "main") {
-            impl.appendLine("// ══ fun ${f.name} ($currentSourceFile) ══")
+            val paramSig = f.params.joinToString(", ") { p -> typeRefToStr(p.type) }
+            val retSig = f.returnType?.let { ": ${typeRefToStr(it)}" } ?: ""
+            impl.appendLine("// ══ fun ${f.name}($paramSig)$retSig ($currentSourceFile) ══")
             impl.appendLine()
         }
         val isMain = f.name == "main"
@@ -5761,6 +5771,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val base = resolveTypeNameInner(substituted)
         val isPtr = substituted.annotations.any { it.name == "Ptr" }
         return if (isPtr) "${base}*" else base
+    }
+
+    private fun typeRefToStr(t: TypeRef?): String {
+        if (t == null) return "Unit"
+        val ann = if (t.annotations.any { it.name == "Ptr" }) "@Ptr " else ""
+        val args = if (t.typeArgs.isNotEmpty()) "<${t.typeArgs.joinToString(", ") { typeRefToStr(it) }}>" else ""
+        val nullable = if (t.nullable) "?" else ""
+        return "$ann${t.name}$args$nullable"
     }
 
     /** Recursively substitute type parameters throughout a TypeRef tree. */
