@@ -2617,12 +2617,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val isValueNullable = !isPointer && !isFuncType(t) && !isArrayType(t) &&
                 (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init) || inferredNullable)
 
+        // Nullable array (Array<T>?): uses pointer + $len, null = NULL
+        val isNullableArray = isArrayType(t) && !isPointer &&
+                (s.type?.nullable == true || s.init is NullLit || inferredNullable)
+
         val isInferredPtr = inferredPtr
 
         // Register type in scope
         defineVar(s.name, when {
             isPtrNullable  -> "${t}?"
             isValueNullable -> "${t}?"
+            isNullableArray -> "${t}?"
             else -> t
         })
         if (s.mutable) markMutable(s.name)
@@ -2668,12 +2673,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         flushPreStmts(ind)
                         impl.appendLine("$ind$ct ${s.name} /* nullable */ = $expr;")
                     }
-                    // Emit $len companion for HeapAlloc<Array<T>>(n)
+                    // Emit $len companion for array pointer types
                     if (isAllocArrayCall(s.init)) {
                         val allocSize = extractAllocSize(s.init)
                         if (allocSize != null) {
                             impl.appendLine("${ind}int32_t ${s.name}\$len = ${genExpr(allocSize)};")
                         }
+                    } else if (isArrayType(t) && s.init is NameExpr) {
+                        val lenVar = (s.init as NameExpr).name + "\$len"
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenVar;")
                     }
                 }
                 // ── Value nullable — use Optional struct ──
@@ -2692,6 +2700,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         } else {
                             impl.appendLine("$ind$optType ${s.name} = ${optSome(optType, expr)};")
                         }
+                    }
+                }
+                // ── Nullable array (Array<T>?) ──
+                isNullableArray -> {
+                    val elemCType = arrayElementCType(t)
+                    if (s.init is NullLit) {
+                        impl.appendLine("$ind$elemCType* ${s.name} = NULL;")
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
+                    } else {
+                        val expr = genExpr(s.init!!)
+                        flushPreStmts(ind)
+                        val lenExpr = if (s.init is NameExpr) "${(s.init as NameExpr).name}\$len" else "${expr}\$len"
+                        impl.appendLine("$ind$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
                     }
                 }
                 // ── Non-nullable ──
@@ -2736,13 +2759,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         impl.appendLine("${ind}$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
-                    } else if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?") && s.init is NullLit) {
-                        // Nullable array initialized with null
-                        impl.appendLine("${ind}${arrayElementCType(t)}* ${s.name} = NULL;")
-                        impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
                     } else {
                         impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
-                        if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?")) {
+                        if (isArrayType(t) && !t.endsWith("*?") && (t.endsWith("*") || isArrayType(t))) {
                             val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
                             impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
                         }
@@ -2753,6 +2772,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             when {
                 isPtrNullable -> {
                     impl.appendLine("$ind$ct ${s.name} = NULL;")
+                }
+                isNullableArray -> {
+                    impl.appendLine("$ind${arrayElementCType(t)}* ${s.name} = NULL;")
+                    impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
                 }
                 else -> {
                     if (isValueNullable) {
