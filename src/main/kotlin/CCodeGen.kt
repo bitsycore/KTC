@@ -3794,9 +3794,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (varType.endsWith("?") && isValueNullableType(varType)) {
                     return if (e.op == "==") "$varName.tag == NONE" else "$varName.tag == SOME"
                 }
-                // Trampolined array param: null is data == NULL
+                // Trampolined array param: null is data == NULL — use local copy for consistency
                 if (varName in trampolinedParams) {
-                    return if (e.op == "==") "$varName.data == NULL" else "$varName.data != NULL"
+                    return if (e.op == "==") "local\$$varName == NULL" else "local\$$varName != NULL"
                 }
                 // Fallback for other nullable
                 if (varType.endsWith("?")) {
