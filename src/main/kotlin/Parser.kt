@@ -38,6 +38,13 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.OBJECT) -> parseObjectDecl()
             at(TokenType.VAL)    -> parsePropDecl(mutable = false)
             at(TokenType.VAR)    -> parsePropDecl(mutable = true)
+            at(TokenType.AT) -> {
+                // @Ptr val/var — parse annotations, then delegate
+                val anns = parseAnnotations()
+                if (at(TokenType.VAL)) parsePropDecl(mutable = false, anns)
+                else if (at(TokenType.VAR)) parsePropDecl(mutable = true, anns)
+                else error("Expected val/var after annotation at ${cur()}")
+            }
             at(TokenType.INIT)   -> { advance(); FunDecl("init", emptyList(), null, parseBlock()) }
             else -> error("Expected declaration at ${cur()}")
         }
@@ -161,14 +168,16 @@ class Parser(private val tokens: List<Token>) {
         val list = mutableListOf<CtorParam>()
         skipNL()
         while (!at(TokenType.RPAREN) && !at(TokenType.EOF)) {
+            val annotations = parseAnnotations()
             var isVal = false; var isVar = false
             if (at(TokenType.VAL)) { isVal = true; advance() }
             else if (at(TokenType.VAR)) { isVar = true; advance() }
             val name = expectIdent()
             expect(TokenType.COLON); skipNL()
             val type = parseTypeRef()
+            val finalType = if (annotations.isEmpty()) type else type.copy(annotations = type.annotations + annotations)
             val default = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
-            list += CtorParam(name, type, default, isVal, isVar)
+            list += CtorParam(name, finalType, default, isVal, isVar)
             if (at(TokenType.COMMA)) { advance(); skipNL() } else break
         }
         skipNL()
@@ -288,11 +297,16 @@ class Parser(private val tokens: List<Token>) {
 
     // ── val / var (top-level or class-level property) ────────────────
 
-    private fun parsePropDecl(mutable: Boolean): PropDecl {
+    private fun parsePropDecl(mutable: Boolean, preAnnotations: List<Annotation> = emptyList()): PropDecl {
         val line = cur().line
+        val annotations = if (preAnnotations.isNotEmpty()) preAnnotations else parseAnnotations()
         advance()   // skip val/var
         val name = expectIdent()
-        val type = if (at(TokenType.COLON)) { advance(); skipNL(); parseTypeRef() } else null
+        val type = if (at(TokenType.COLON)) {
+            advance(); skipNL()
+            val t = parseTypeRef()
+            if (annotations.isEmpty()) t else t.copy(annotations = t.annotations + annotations)
+        } else null
         val init = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
         skipTerminator()
         return PropDecl(name, type, init, mutable, line)

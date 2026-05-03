@@ -84,12 +84,12 @@ class ArrayTypeCheckTest : TranspilerTestBase() {
         """, "cannot have raw array type")
     }
 
-    // ── Allowed: Heap<Array<T>> and Ptr<Array<T>> ────────────────────
+    // ── Allowed: @Ptr Array<T> ────────────────────
 
-    @Test fun functionReturningHeapArrayIntSucceeds() {
+    @Test fun functionReturningPtrArrayIntSucceeds2() {
         val r = transpile("""
             package test.Main
-            fun good(): Heap<Array<Int>> { return HeapAlloc<Array<Int>>(4)!! }
+            fun good(): @Ptr Array<Int> { return HeapAlloc<Array<Int>>(4)!! }
             fun main(args: Array<String>) {}
         """)
         r.sourceContains("test_Main_good(")

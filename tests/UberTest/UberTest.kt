@@ -441,7 +441,7 @@ fun testHeap() {
 
 fun testHeapNullable() {
     // Heap<T>? — pointer nullable
-    var q : Ptr<Vec2>? = HeapAlloc<Vec2>(3.0, 4.0)
+    var q : @Ptr Vec2? = HeapAlloc<Vec2>(3.0, 4.0)
 
     val b = q
     defer HeapFree(b)
@@ -455,7 +455,7 @@ fun testHeapNullable() {
     }
 
     // Ptr<T>? — nullable pointer, $has concept removed. r==null now checks pointer.
-    var r: Ptr<Vec2>? = HeapAlloc<Vec2>(7.0, 8.0)
+    var r: @Ptr Vec2? = HeapAlloc<Vec2>(7.0, 8.0)
     if (r == null) {
         println("r is null")
     }
@@ -472,7 +472,7 @@ fun testHeapNullable() {
 
 fun testSafeDotExpr() {
     // ── safe dot property access assigned to nullable-inferred variable ──
-    var r: Ptr<Vec2>? = HeapAlloc<Vec2>(5.0, 6.0)
+    var r: @Ptr Vec2? = HeapAlloc<Vec2>(5.0, 6.0)
 
     // r is non-null: val fx = r?.x  → inferred as Float?, should be 5.0
     val fx = r?.x
@@ -636,7 +636,7 @@ fun testCInterop() {
     println(parsed)
 
     // ── c.NULL constant ──
-    val p: Ptr<Vec2>? = c.NULL
+    val p: @Ptr Vec2? = c.NULL
     if (p == null) {
         println("p is null")
     }

@@ -1,6 +1,6 @@
 package ktc.std
 
-class ListIterator<T>(val buf: Ptr<Array<T>>, val size: Int) {
+class ListIterator<T>(@Ptr val buf: Array<T>, val size: Int) {
 
 	var idx: Int = 0
 
@@ -33,7 +33,7 @@ interface MutableList<T> : List<T> {
 class ArrayList<T>(capacity: Int) : MutableList<T> {
 
 	override var size: Int = 0
-	var buf: Ptr<Array<T>> = HeapAlloc<Array<T>>(if (capacity > 0) capacity else 4)!!
+	var buf: @Ptr Array<T> = HeapAlloc<Array<T>>(if (capacity > 0) capacity else 4)!!
 
 	override fun add(value: T) {
 		if (size >= buf.size) {

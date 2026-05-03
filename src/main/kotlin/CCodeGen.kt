@@ -548,7 +548,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is ClassDecl -> {
                 for (p in d.ctorParams) {
                     if ((p.isVal || p.isVar) && isRawArrayTypeRef(p.type)) {
-                        codegenError("Class property '${p.name}' cannot have raw array type '${p.type.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
+                        codegenError("Class property '${p.name}' cannot have raw array type '${p.type.name}'. Use @Ptr Array<T> instead")
                     }
                 }
                 for (p in d.members.filterIsInstance<PropDecl>()) {
@@ -5782,10 +5782,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 else      -> { classArrayTypes.add(elem); "${elem}Array" }
             }
         }
-        // Ptr<T> (legacy type-constructor syntax) → "T*"
-        if (t.name == "Ptr" && t.typeArgs.isNotEmpty()) {
-            val inner = t.typeArgs[0]
-            return if (inner.name == "Array") resolveTypeName(inner) + "*" else resolveTypeName(inner) + "*"
+        // Reject unknown type constructors with args (e.g. Heap<T>, Value<T>)
+        if (t.typeArgs.isNotEmpty()
+            && !classes.containsKey(t.name)
+            && !interfaces.containsKey(t.name)
+            && !genericClassDecls.containsKey(t.name)
+            && !genericIfaceDecls.containsKey(t.name)
+            && t.name !in setOf("Array", "Pair")) {
+            codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
         }
         return t.name
     }
