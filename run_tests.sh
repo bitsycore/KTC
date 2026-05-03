@@ -19,6 +19,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 JAR="$ROOT/build/libs/KotlinToC-1.0-SNAPSHOT.jar"
+RELEASE_JAR="$ROOT/build/libs/KotlinToC-1.0-SNAPSHOT-release.jar"
 OUT_DIR="$ROOT/test_out"
 TESTS_DIR="$ROOT/tests"
 
@@ -27,7 +28,7 @@ RUN_TEST=""
 EXTRA_ARGS=""
 COMPILER=""
 CC_ARGS=""
-BUILD_JAR=false
+BUILD_JAR=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,7 +39,13 @@ while [[ $# -gt 0 ]]; do
         --args)       EXTRA_ARGS="$EXTRA_ARGS $2"; shift 2 ;;
         --compiler)   COMPILER="$2"; shift 2 ;;
         --cc-args)    CC_ARGS="$2"; shift 2 ;;
-        --build-jar)  BUILD_JAR=true; shift ;;
+        --build-jar)
+            if [[ "${2:-}" == "release" || "${2:-}" == "Release" ]]; then
+                BUILD_JAR="Release"; shift 2
+            else
+                BUILD_JAR="Classic"; shift
+            fi
+            ;;
         *)            echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -117,8 +124,10 @@ invoke_test() {
         for f in "${kt_files[@]}"; do kt_names+="$(basename "$f") "; done
         local extra_display=""
         [[ -n "$extra_args" ]] && extra_display=" $extra_args"
-        if [[ "$BUILD_JAR" == "true" ]]; then
-            showcmd "java -jar KotlinToC.jar $kt_names -o $test_out_dir$extra_display"
+        if [[ -n "$BUILD_JAR" ]]; then
+            local jar_label
+            jar_label=$(if [[ "$BUILD_JAR" == "Release" ]]; then echo "KotlinToC-release.jar"; else echo "KotlinToC.jar"; fi)
+            showcmd "java -jar $jar_label $kt_names -o $test_out_dir$extra_display"
         else
             showcmd "gradlew run --args=\"$kt_names -o $test_out_dir$extra_display\""
         fi
@@ -126,8 +135,10 @@ invoke_test() {
     fi
     set +e
     local output
-    if [[ "$BUILD_JAR" == "true" ]]; then
-        output=$(java -jar "$JAR" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
+    if [[ -n "$BUILD_JAR" ]]; then
+        local active_jar
+        active_jar=$(if [[ "$BUILD_JAR" == "Release" ]]; then echo "$RELEASE_JAR"; else echo "$JAR"; fi)
+        output=$(java -jar "$active_jar" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
     else
         local app_args="${kt_files[*]} -o $test_out_dir $extra_args"
         output=$("$ROOT/gradlew" run --quiet --args="$app_args" 2>&1)
@@ -268,15 +279,25 @@ if [[ -n "$RUN_TEST" ]]; then
     info "Using C compiler: $CC"
 
     # ── Build only if --build-jar ──────────────────────────────────
-    if [[ "$BUILD_JAR" == "true" ]]; then
+    if [[ -n "$BUILD_JAR" ]]; then
         section "Build"
-        showcmd "gradlew jar"
-        "$ROOT/gradlew" jar --quiet 2>&1
-        if [[ ! -f "$JAR" ]]; then
-            echo "ERROR: JAR build failed"
-            exit 1
+        if [[ "$BUILD_JAR" == "Release" ]]; then
+            showcmd "gradlew proguard"
+            "$ROOT/gradlew" proguard --quiet 2>&1
+            if [[ ! -f "$RELEASE_JAR" ]]; then
+                echo "ERROR: ProGuard build failed"
+                exit 1
+            fi
+            pass "Built $RELEASE_JAR"
+        else
+            showcmd "gradlew jar"
+            "$ROOT/gradlew" jar --quiet 2>&1
+            if [[ ! -f "$JAR" ]]; then
+                echo "ERROR: JAR build failed"
+                exit 1
+            fi
+            pass "Built $JAR"
         fi
-        pass "Built $JAR"
     fi
 
     test_src_dir="$TESTS_DIR/$RUN_TEST"
@@ -320,14 +341,24 @@ if [[ "$SKIP_UNIT" == false ]]; then
 fi
 
 # ── 2. Build JAR only if --build-jar ──────────────────────────
-if [[ "$BUILD_JAR" == "true" ]]; then
-    section "Building transpiler JAR"
-    "$ROOT/gradlew" jar --quiet 2>&1
-    if [[ ! -f "$JAR" ]]; then
-        echo "ERROR: JAR not found at $JAR"
-        exit 1
+if [[ -n "$BUILD_JAR" ]]; then
+    if [[ "$BUILD_JAR" == "Release" ]]; then
+        section "Building ProGuard release JAR"
+        "$ROOT/gradlew" proguard --quiet 2>&1
+        if [[ ! -f "$RELEASE_JAR" ]]; then
+            echo "ERROR: ProGuard build failed"
+            exit 1
+        fi
+        pass "Built $RELEASE_JAR"
+    else
+        section "Building transpiler JAR"
+        "$ROOT/gradlew" jar --quiet 2>&1
+        if [[ ! -f "$JAR" ]]; then
+            echo "ERROR: JAR not found at $JAR"
+            exit 1
+        fi
+        pass "Built $JAR"
     fi
-    pass "Built $JAR"
 fi
 
 # ── Prepare output directory ────────────────────────────────────

@@ -31,8 +31,11 @@ repositories {
     mavenCentral()
 }
 
+val proguardClasspath: Configuration by configurations.creating
+
 dependencies {
     testImplementation(kotlin("test"))
+    proguardClasspath("com.guardsquare:proguard-base:7.9.1")
 }
 
 kotlin {
@@ -41,4 +44,35 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.register<JavaExec>("proguard") {
+    dependsOn(tasks.jar)
+    description = "Produces an optimized release jar via ProGuard"
+    group = "build"
+
+    val inputJar = tasks.jar.get().archiveFile.get().asFile
+    val outputJar = layout.buildDirectory.file("libs/${project.name}-${version}-release.jar").get().asFile
+    val proguardConf = layout.projectDirectory.file("proguard.pro")
+    val launcher = javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+
+    inputs.file(inputJar)
+    inputs.file(proguardConf)
+    outputs.file(outputJar)
+
+    classpath = proguardClasspath
+    mainClass.set("proguard.ProGuard")
+
+    argumentProviders.add(CommandLineArgumentProvider {
+        val javaHome = launcher.get().executablePath.asFile.parentFile.parentFile
+        listOf(
+            "-injars", inputJar.absolutePath,
+            "-outjars", outputJar.absolutePath,
+            "-libraryjars", "${javaHome}/jmods/java.base.jmod(!**.jar;!module-info.class)",
+            "-libraryjars", "${javaHome}/jmods/java.logging.jmod(!**.jar;!module-info.class)",
+            "@${proguardConf.asFile.absolutePath}"
+        )
+    })
 }

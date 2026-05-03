@@ -14,7 +14,8 @@
 #   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
 #   .\run_tests.ps1 -Compiler clang              # Use clang instead of auto-detected gcc
 #   .\run_tests.ps1 -CCArgs "-j14 -O2"           # Pass flags to the C compiler
-#   .\run_tests.ps1 -BuildJar                    # Force rebuild the fat JAR (default: run directly from classes)
+#   .\run_tests.ps1 -BuildJar Classic             # Force rebuild the fat JAR (default: run directly from classes)
+#   .\run_tests.ps1 -BuildJar Release             # Build and use the ProGuard-optimized JAR
 #
 param(
     [string]$Skip = "",
@@ -24,12 +25,13 @@ param(
     [string]$CCArgs = "",
     [switch]$MemTrack,
     [switch]$Ast,
-    [switch]$BuildJar
+    [string]$BuildJar = ""
 )
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
-$jar  = "$root\build\libs\KotlinToC-1.0-SNAPSHOT.jar"
+$jar        = "$root\build\libs\KotlinToC-1.0-SNAPSHOT.jar"
+$releaseJar = "$root\build\libs\KotlinToC-1.0-SNAPSHOT-release.jar"
 $outDir = "$root\test_out"
 $testsDir = "$root\tests"
 
@@ -84,21 +86,23 @@ function Invoke-Test {
 
     # ── Transpile ───────────────────────────────────────────────
     if ($Verbose) { Write-Section "Transpile" }
-    if ($BuildJar) {
-        $transpileArgs = @("-jar", $jar) + $ktFiles + @("-o", $TestOutDir)
+    if ($BuildJar -ne "") {
+        $activeJar = if ($BuildJar -eq "Release") { $releaseJar } else { $jar }
+        $transpileArgs = @("-jar", $activeJar) + $ktFiles + @("-o", $TestOutDir)
     } else {
         # gradle run handles classpath, kotlin stdlib, and resources automatically
         $ktArgs = ($ktFiles -join " ") + " -o $TestOutDir"
         if ($ExtraArgs -ne "") { $ktArgs += " $ExtraArgs" }
         $transpileArgs = @("run", "--quiet", "--args=$ktArgs")
     }
-    if ($ExtraArgs -ne "" -and $BuildJar) {
+    if ($ExtraArgs -ne "" -and $BuildJar -ne "") {
         $transpileArgs += ($ExtraArgs -split '\s+')
     }
     if ($Verbose) {
         $ktNames = ($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
-        if ($BuildJar) {
-            $cmdLine = "java -jar KotlinToC.jar $ktNames -o $TestOutDir"
+        if ($BuildJar -ne "") {
+            $jarLabel = if ($BuildJar -eq "Release") { "KotlinToC-release.jar" } else { "KotlinToC.jar" }
+            $cmdLine = "java -jar $jarLabel $ktNames -o $TestOutDir"
         } else {
             $cmdLine = "gradlew run --args=`"$ktNames -o $TestOutDir`""
         }
@@ -106,7 +110,7 @@ function Invoke-Test {
         Write-Cmd $cmdLine
         Write-Host ""
     }
-    if ($BuildJar) {
+    if ($BuildJar -ne "") {
         $transpileOutput = & java @transpileArgs 2>&1
     } else {
         $transpileOutput = & "$root\gradlew.bat" @transpileArgs 2>&1
@@ -207,15 +211,25 @@ if ($Run -ne "") {
     Write-Info "Using C compiler: $CC"
 
     # ── Build only if -BuildJar ───────────────────────────────────
-    if ($BuildJar) {
+    if ($BuildJar -ne "") {
         Write-Section "Build"
-        Write-Cmd "gradlew jar"
-        & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
-            Write-Host "ERROR: JAR build failed" -ForegroundColor Red
-            exit 1
+        if ($BuildJar -eq "Release") {
+            Write-Cmd "gradlew proguard"
+            & "$root\gradlew.bat" proguard --quiet 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
+                Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
+                exit 1
+            }
+            Write-Pass "Built $releaseJar"
+        } else {
+            Write-Cmd "gradlew jar"
+            & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
+                Write-Host "ERROR: JAR build failed" -ForegroundColor Red
+                exit 1
+            }
+            Write-Pass "Built $jar"
         }
-        Write-Pass "Built $jar"
     }
 
     $testSrcDir = "$testsDir\$Run"
@@ -269,18 +283,24 @@ if ($Skip -ne "unit") {
 }
 
 # ── 2. Build JAR only if -BuildJar ──────────────────────────────
-if ($BuildJar) {
-    Write-Section "Building transpiler JAR"
-    & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: JAR build failed" -ForegroundColor Red
-        exit 1
+if ($BuildJar -ne "") {
+    if ($BuildJar -eq "Release") {
+        Write-Section "Building ProGuard release JAR"
+        & "$root\gradlew.bat" proguard --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
+            Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
+            exit 1
+        }
+        Write-Pass "Built $releaseJar"
+    } else {
+        Write-Section "Building transpiler JAR"
+        & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
+            Write-Host "ERROR: JAR build failed" -ForegroundColor Red
+            exit 1
+        }
+        Write-Pass "Built $jar"
     }
-    if (-not (Test-Path $jar)) {
-        Write-Host "ERROR: JAR not found at $jar" -ForegroundColor Red
-        exit 1
-    }
-    Write-Pass "Built $jar"
 }
 
 # ── Prepare output directory ────────────────────────────────────
