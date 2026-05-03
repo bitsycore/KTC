@@ -12,6 +12,8 @@
 #   ./run_tests.sh --run game --mem-track # Run single test with --mem-track
 #   ./run_tests.sh --run game --ast       # Run single test with --ast
 #   ./run_tests.sh --args "--other"       # Pass extra args the script doesn't know yet
+#   ./run_tests.sh --compiler clang       # Use clang instead of auto-detected cc
+#   ./run_tests.sh --cc-args "-j14 -O2"   # Pass flags to the C compiler
 #
 set -euo pipefail
 
@@ -23,6 +25,9 @@ TESTS_DIR="$ROOT/tests"
 SKIP_UNIT=false
 RUN_TEST=""
 EXTRA_ARGS=""
+COMPILER=""
+CC_ARGS=""
+BUILD_JAR=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -31,6 +36,9 @@ while [[ $# -gt 0 ]]; do
         --mem-track)  EXTRA_ARGS="$EXTRA_ARGS --mem-track"; shift ;;
         --ast)        EXTRA_ARGS="$EXTRA_ARGS --ast"; shift ;;
         --args)       EXTRA_ARGS="$EXTRA_ARGS $2"; shift 2 ;;
+        --compiler)   COMPILER="$2"; shift 2 ;;
+        --cc-args)    CC_ARGS="$2"; shift 2 ;;
+        --build-jar)  BUILD_JAR=true; shift ;;
         *)            echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -52,13 +60,17 @@ section() { printf "\n${YELLOW}=== %s ===${NC}\n" "$1"; }
 showcmd() { printf "  ${DYELLOW}\$ ${WHITE}%s${NC}\n" "$1"; }
 
 # ── Detect C compiler ───────────────────────────────────────────
-CC=""
-for candidate in gcc clang cc; do
-    if command -v "$candidate" &>/dev/null; then
-        CC="$candidate"
-        break
-    fi
-done
+if [[ -n "$COMPILER" ]]; then
+    CC="$COMPILER"
+else
+    CC=""
+    for candidate in gcc clang cc; do
+        if command -v "$candidate" &>/dev/null; then
+            CC="$candidate"
+            break
+        fi
+    done
+fi
 if [[ -z "$CC" ]]; then
     echo "ERROR: No C compiler found (tried gcc, clang, cc). Install one and add to PATH."
     exit 1
@@ -105,13 +117,22 @@ invoke_test() {
         for f in "${kt_files[@]}"; do kt_names+="$(basename "$f") "; done
         local extra_display=""
         [[ -n "$extra_args" ]] && extra_display=" $extra_args"
-        showcmd "java -jar KotlinToC.jar $kt_names -o $test_out_dir$extra_display"
+        if [[ "$BUILD_JAR" == "true" ]]; then
+            showcmd "java -jar KotlinToC.jar $kt_names -o $test_out_dir$extra_display"
+        else
+            showcmd "gradlew run --args=\"$kt_names -o $test_out_dir$extra_display\""
+        fi
         echo ""
     fi
     set +e
     local output
-    # shellcheck disable=SC2086
-    output=$(java -jar "$JAR" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
+    if [[ "$BUILD_JAR" == "true" ]]; then
+        output=$(java -jar "$JAR" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
+    else
+        local app_args="${kt_files[*]} -o $test_out_dir $extra_args"
+        output=$("$ROOT/gradlew" run --quiet --args="$app_args" 2>&1)
+    fi
+    local transpile_exit=$?
     local transpile_exit=$?
     set -e
     if [[ "$verbose" == "true" ]]; then
@@ -167,11 +188,11 @@ invoke_test() {
     # ── Compile ─────────────────────────────────────────────────
     if [[ "$verbose" == "true" ]]; then
         section "Compile"
-        showcmd "$CC -std=c11 -o $exe_path ${c_sources[*]}"
+        showcmd "$CC -std=c11 $CC_ARGS -o $exe_path ${c_sources[*]}"
         echo ""
     fi
     set +e
-    output=$("$CC" -std=c11 -o "$exe_path" "${c_sources[@]}" 2>&1)
+    output=$("$CC" -std=c11 $CC_ARGS -o "$exe_path" "${c_sources[@]}" 2>&1)
     local compile_exit=$?
     set -e
     if [[ "$verbose" == "true" && -n "$output" ]]; then
@@ -246,16 +267,17 @@ invoke_test() {
 if [[ -n "$RUN_TEST" ]]; then
     info "Using C compiler: $CC"
 
-    # ── Build JAR if needed ─────────────────────────────────────
-    section "Build"
-
-    showcmd "gradlew jar"
-    "$ROOT/gradlew" jar --quiet 2>&1
-    if [[ ! -f "$JAR" ]]; then
-        echo "ERROR: JAR build failed"
-        exit 1
+    # ── Build only if --build-jar ──────────────────────────────────
+    if [[ "$BUILD_JAR" == "true" ]]; then
+        section "Build"
+        showcmd "gradlew jar"
+        "$ROOT/gradlew" jar --quiet 2>&1
+        if [[ ! -f "$JAR" ]]; then
+            echo "ERROR: JAR build failed"
+            exit 1
+        fi
+        pass "Built $JAR"
     fi
-    pass "Built $JAR"
 
     test_src_dir="$TESTS_DIR/$RUN_TEST"
     if [[ ! -d "$test_src_dir" ]]; then
@@ -288,7 +310,7 @@ FAILED_NAMES=()
 # ── 1. Unit Tests ───────────────────────────────────────────────
 if [[ "$SKIP_UNIT" == false ]]; then
     section "Unit Tests (gradlew test)"
-    if "$ROOT/gradlew" test --quiet 2>&1; then
+    if "$ROOT/gradlew" test --quiet $BUILD_ARGS 2>&1; then
         pass "All unit tests passed"
     else
         fail "Unit tests had failures"
@@ -297,14 +319,16 @@ if [[ "$SKIP_UNIT" == false ]]; then
     fi
 fi
 
-# ── 2. Build JAR ───────────────────────────────────────────────
-section "Building transpiler JAR"
-"$ROOT/gradlew" jar --quiet 2>&1
-if [[ ! -f "$JAR" ]]; then
-    echo "ERROR: JAR not found at $JAR"
-    exit 1
+# ── 2. Build JAR only if --build-jar ──────────────────────────
+if [[ "$BUILD_JAR" == "true" ]]; then
+    section "Building transpiler JAR"
+    "$ROOT/gradlew" jar --quiet 2>&1
+    if [[ ! -f "$JAR" ]]; then
+        echo "ERROR: JAR not found at $JAR"
+        exit 1
+    fi
+    pass "Built $JAR"
 fi
-pass "Built $JAR"
 
 # ── Prepare output directory ────────────────────────────────────
 rm -rf "$OUT_DIR"

@@ -12,13 +12,19 @@
 #   .\run_tests.ps1 -Run game -MemTrack          # Run single test with --mem-track
 #   .\run_tests.ps1 -Run game -Ast               # Run single test with --ast
 #   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
+#   .\run_tests.ps1 -Compiler clang              # Use clang instead of auto-detected gcc
+#   .\run_tests.ps1 -CCArgs "-j14 -O2"           # Pass flags to the C compiler
+#   .\run_tests.ps1 -BuildJar                    # Force rebuild the fat JAR (default: run directly from classes)
 #
 param(
     [string]$Skip = "",
     [string]$Run  = "",
     [string]$TranspilerArgs = "",
+    [string]$Compiler = "",
+    [string]$CCArgs = "",
     [switch]$MemTrack,
-    [switch]$Ast
+    [switch]$Ast,
+    [switch]$BuildJar
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,11 +41,13 @@ function Write-Section($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Yell
 function Write-Cmd($msg) { Write-Host "  `$ " -ForegroundColor DarkYellow -NoNewline; Write-Host $msg -ForegroundColor White }
 
 # ── Detect C compiler ───────────────────────────────────────────
-$CC = $null
-foreach ($candidate in @("gcc", "clang", "cl")) {
-    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
-        $CC = $candidate
-        break
+$CC = if ($Compiler -ne "") { $Compiler } else { $null }
+if (-not $CC) {
+    foreach ($candidate in @("gcc", "clang", "cl")) {
+        if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+            $CC = $candidate
+            break
+        }
     }
 }
 if (-not $CC) {
@@ -76,18 +84,33 @@ function Invoke-Test {
 
     # ── Transpile ───────────────────────────────────────────────
     if ($Verbose) { Write-Section "Transpile" }
-    $transpileArgs = @("-jar", $jar) + $ktFiles + @("-o", $TestOutDir)
-    if ($ExtraArgs -ne "") {
+    if ($BuildJar) {
+        $transpileArgs = @("-jar", $jar) + $ktFiles + @("-o", $TestOutDir)
+    } else {
+        # gradle run handles classpath, kotlin stdlib, and resources automatically
+        $ktArgs = ($ktFiles -join " ") + " -o $TestOutDir"
+        if ($ExtraArgs -ne "") { $ktArgs += " $ExtraArgs" }
+        $transpileArgs = @("run", "--quiet", "--args=$ktArgs")
+    }
+    if ($ExtraArgs -ne "" -and $BuildJar) {
         $transpileArgs += ($ExtraArgs -split '\s+')
     }
     if ($Verbose) {
         $ktNames = ($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
-        $cmdLine = "java -jar KotlinToC.jar $ktNames -o $TestOutDir"
+        if ($BuildJar) {
+            $cmdLine = "java -jar KotlinToC.jar $ktNames -o $TestOutDir"
+        } else {
+            $cmdLine = "gradlew run --args=`"$ktNames -o $TestOutDir`""
+        }
         if ($ExtraArgs -ne "") { $cmdLine += " $ExtraArgs" }
         Write-Cmd $cmdLine
         Write-Host ""
     }
-    $transpileOutput = & java @transpileArgs 2>&1
+    if ($BuildJar) {
+        $transpileOutput = & java @transpileArgs 2>&1
+    } else {
+        $transpileOutput = & "$root\gradlew.bat" @transpileArgs 2>&1
+    }
     $transpileExit = $LASTEXITCODE
     if ($Verbose) {
         foreach ($line in $transpileOutput) { Write-Host "  $line" }
@@ -118,9 +141,12 @@ function Invoke-Test {
 
     # ── Compile ─────────────────────────────────────────────────
     if ($Verbose) { Write-Section "Compile" }
-    $compileArgs = @("-std=c11", "-o", $exePath) + $cSources
+    $compileArgs = @("-std=c11", "-o", $exePath)
+    if ($CCArgs -ne "") { $compileArgs += ($CCArgs -split '\s+') }
+    $compileArgs += $cSources
     if ($Verbose) {
-        Write-Cmd "$CC -std=c11 -o $exePath $($cSources -join ' ')"
+        $extraFlags = if ($CCArgs -ne "") { " $CCArgs" } else { "" }
+        Write-Cmd "$CC -std=c11$extraFlags -o $exePath $($cSources -join ' ')"
         Write-Host ""
     }
     $compileOutput = & $CC @compileArgs 2>&1
@@ -180,15 +206,17 @@ function Invoke-Test {
 if ($Run -ne "") {
     Write-Info "Using C compiler: $CC"
 
-    # ── Build JAR if needed ─────────────────────────────────────
-    Write-Section "Build"
-    Write-Cmd "gradlew jar"
-    & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
-        Write-Host "ERROR: JAR build failed" -ForegroundColor Red
-        exit 1
+    # ── Build only if -BuildJar ───────────────────────────────────
+    if ($BuildJar) {
+        Write-Section "Build"
+        Write-Cmd "gradlew jar"
+        & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
+            Write-Host "ERROR: JAR build failed" -ForegroundColor Red
+            exit 1
+        }
+        Write-Pass "Built $jar"
     }
-    Write-Pass "Built $jar"
 
     $testSrcDir = "$testsDir\$Run"
     if (-not (Test-Path $testSrcDir -PathType Container)) {
@@ -240,18 +268,20 @@ if ($Skip -ne "unit") {
     }
 }
 
-# ── 2. Build JAR ───────────────────────────────────────────────
-Write-Section "Building transpiler JAR"
-& "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: JAR build failed" -ForegroundColor Red
-    exit 1
+# ── 2. Build JAR only if -BuildJar ──────────────────────────────
+if ($BuildJar) {
+    Write-Section "Building transpiler JAR"
+    & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: JAR build failed" -ForegroundColor Red
+        exit 1
+    }
+    if (-not (Test-Path $jar)) {
+        Write-Host "ERROR: JAR not found at $jar" -ForegroundColor Red
+        exit 1
+    }
+    Write-Pass "Built $jar"
 }
-if (-not (Test-Path $jar)) {
-    Write-Host "ERROR: JAR not found at $jar" -ForegroundColor Red
-    exit 1
-}
-Write-Pass "Built $jar"
 
 # ── Prepare output directory ────────────────────────────────────
 if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
