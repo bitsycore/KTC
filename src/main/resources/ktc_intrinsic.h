@@ -71,7 +71,7 @@ uint32_t ktc_rand_range(uint32_t bound);
 typedef struct { int32_t size; void* data; } ktc_ArrayTrampoline;
 
 /* ═══════════════════════════ Optional ════════════════════════════════ */
-typedef enum { NONE = 0, SOME = 1 } ktc_OptionalTag;
+typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 
 typedef struct { ktc_OptionalTag tag; ktc_Byte   value; } ktc_Byte_Optional;
 typedef struct { ktc_OptionalTag tag; ktc_Short  value; } ktc_Short_Optional;

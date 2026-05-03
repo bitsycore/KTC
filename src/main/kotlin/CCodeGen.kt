@@ -246,10 +246,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     /* Returns a C literal for "no value" for the given Optional C type. */
-    private fun optNone(optCType: String): String = "($optCType){NONE}"
+    private fun optNone(optCType: String): String = "($optCType){ktc_NONE}"
 
     /* Returns a C literal for "has value" for the given Optional C type. */
-    private fun optSome(optCType: String, expr: String): String = "($optCType){SOME, $expr}"
+    private fun optSome(optCType: String, expr: String): String = "($optCType){ktc_SOME, $expr}"
 
     // ── Nullable return tracking ─────────────────────────────────────
     private var currentFnReturnsNullable = false
@@ -1571,7 +1571,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val t = resolveTypeName(type)
             when {
-                type.nullable -> "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == NONE || a.$fieldName.value == b.$fieldName.value))"
+                type.nullable -> "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == ktc_NONE || a.$fieldName.value == b.$fieldName.value))"
                 t == "String" -> "ktc_string_eq(a.$fieldName, b.$fieldName)"
                 classes[t]?.isData == true -> "${pfx(t)}_equals(a.$fieldName, b.$fieldName)"
                 else -> "a.$fieldName == b.$fieldName"
@@ -2802,8 +2802,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val vOptCType = if (t.endsWith("OptArray")) arrayElementCType(t)
                                 else optCTypeName("${typeSubst[vTypeArg!!.name] ?: vTypeArg.name}?")
                 val vArgs = init.args.joinToString(", ") { vArg ->
-                    if (vArg.expr is NullLit) "($vOptCType){NONE}"
-                    else "($vOptCType){SOME, ${genExpr(vArg.expr)}}"
+                    if (vArg.expr is NullLit) "($vOptCType){ktc_NONE}"
+                    else "($vOptCType){ktc_SOME, ${genExpr(vArg.expr)}}"
                 }
                 return "${ind}$vOptCType ${varName}[] = {$vArgs};\n${ind}const int32_t ${varName}\$len = ${init.args.size};"
             }
@@ -2975,9 +2975,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val isThis = s.target.obj is ThisExpr
             val isValueNullRecv = recvType != null && recvType.endsWith("?") && isValueNullableType(recvType)
             val guard = if (isThis) {
-                if (isValueNullRecv) "\$self.tag == SOME" else "\$self\$has"
+                if (isValueNullRecv) "\$self.tag == ktc_SOME" else "\$self\$has"
             } else if (recvName != null && recvType != null && recvType.endsWith("?")) {
-                if (isValueNullRecv) "$recvName.tag == SOME" else "${recvName}\$has"
+                if (isValueNullRecv) "$recvName.tag == ktc_SOME" else "${recvName}\$has"
             } else if (recvName != null) "${recvName}\$has"
             else "${recv}\$has"
             val recvVal = if (isValueNullRecv) "$recv.value" else recv
@@ -3236,7 +3236,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val recvName = (recvObj as? NameExpr)?.name
                     val recvType = if (recvName != null) lookupVar(recvName) else null
                     val guard = if (recvType != null && recvType.removeSuffix("?").let { isValueNullableType(it) })
-                        "$recvExpr.tag == SOME"
+                        "$recvExpr.tag == ktc_SOME"
                     else
                         "$recvExpr != NULL"
                     impl.appendLine("${ind}if ($guard) {")
@@ -3282,7 +3282,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         "$recvName != NULL"
                     // Value-nullable Optional
                     recvType.endsWith("?") && isValueNullableType(recvType) ->
-                        "$recvName.tag == SOME"
+                        "$recvName.tag == ktc_SOME"
                     // Heap<T?>/Ptr<T?>/Value<T?> or other nullable
                     recvType.endsWith("?") ->
                         "${recvName}\$has"
@@ -3441,13 +3441,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val expr = genExpr(arg)
         flushPreStmts(ind)
 
-        // Nullable → if (tag == SOME) print(value) else print("null")
+        // Nullable → if (tag == ktc_SOME) print(value) else print("null")
         if (t.endsWith("?")) {
             val baseT = t.removeSuffix("?")
             val isValNull = isValueNullableType(t)
             val isPtrNull = !isValNull && t.endsWith("*?")
             val hasExpr = when {
-                isValNull  -> "$expr.tag == SOME"
+                isValNull  -> "$expr.tag == ktc_SOME"
                 isPtrNull  -> "$expr != NULL"
                 else       -> "${expr}\$has"
             }
@@ -3901,7 +3901,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val l = genExpr(e.left)
             val r = genExpr(e.right)
             if (lt != null && isValueNullableType(lt)) {
-                "($l.tag == SOME ? $l.value : $r)"
+                "($l.tag == ktc_SOME ? $l.value : $r)"
             } else if (lt != null && lt.endsWith("*?")) {
                 "($l != NULL ? $l : $r)"
             } else {
@@ -3973,7 +3973,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val thisType = inferExprType(nonNull)
                 if (thisType != null && thisType.endsWith("?")) {
                     if (isValueNullableType(thisType)) {
-                        return if (e.op == "==") "\$self.tag == NONE" else "\$self.tag == SOME"
+                        return if (e.op == "==") "\$self.tag == ktc_NONE" else "\$self.tag == ktc_SOME"
                     }
                     return if (e.op == "==") "!\$self\$has" else "\$self\$has"
                 }
@@ -3987,7 +3987,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 // Value nullable → use Optional tag
                 if (varType.endsWith("?") && isValueNullableType(varType)) {
-                    return if (e.op == "==") "$varName.tag == NONE" else "$varName.tag == SOME"
+                    return if (e.op == "==") "$varName.tag == ktc_NONE" else "$varName.tag == ktc_SOME"
                 }
                 // Trampolined array param: null is data == NULL — use local copy for consistency
                 if (varName in trampolinedParams) {
@@ -4548,7 +4548,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val t = tmp()
                 preStmts += "ktc_Int ${t}_val;"
                 preStmts += "ktc_Int_Optional $t;"
-                preStmts += "$t.tag = ktc_str_toIntOrNull($recv, &${t}_val) ? SOME : NONE;"
+                preStmts += "$t.tag = ktc_str_toIntOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
                 preStmts += "$t.value = ${t}_val;"
                 markOptional(t)
                 t
@@ -4557,7 +4557,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val t = tmp()
                 preStmts += "ktc_Long ${t}_val;"
                 preStmts += "ktc_Long_Optional $t;"
-                preStmts += "$t.tag = ktc_str_toLongOrNull($recv, &${t}_val) ? SOME : NONE;"
+                preStmts += "$t.tag = ktc_str_toLongOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
                 preStmts += "$t.value = ${t}_val;"
                 markOptional(t)
                 t
@@ -4566,7 +4566,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val t = tmp()
                 preStmts += "ktc_Double ${t}_val;"
                 preStmts += "ktc_Double_Optional $t;"
-                preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_val) ? SOME : NONE;"
+                preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
                 preStmts += "$t.value = ${t}_val;"
                 markOptional(t)
                 t
@@ -4575,7 +4575,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val t = tmp()
                 preStmts += "ktc_Double ${t}_d;"
                 preStmts += "ktc_Float_Optional $t;"
-                preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_d) ? SOME : NONE;"
+                preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_d) ? ktc_SOME : ktc_NONE;"
                 preStmts += "$t.value = (ktc_Float)${t}_d;"
                 markOptional(t)
                 t
@@ -4832,7 +4832,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val baseClass = recvType.removeSuffix("?")
             val cName = pfx(baseClass)
             val t = tmp()
-            preStmts += "$cName* $t = ($recvName.tag == SOME ? &${recvName}.value : NULL);"
+            preStmts += "$cName* $t = ($recvName.tag == ktc_SOME ? &${recvName}.value : NULL);"
             defineVar(t, "${baseClass}*?")
             return t
         }
@@ -4854,7 +4854,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val guard = when {
             recvType != null && recvType.endsWith("*?") ->
                 "$recvName != NULL"
-            isValueNullRecv -> "$recvName.tag == SOME"
+            isValueNullRecv -> "$recvName.tag == ktc_SOME"
             else -> "${recvName}\$has"
         }
         // Determine the return type
@@ -4872,7 +4872,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit temp as Optional
         val optType = optCTypeName("${retType}?")
         val t = tmp()
-        preStmts += "$optType $t = $guard ? ($optType){SOME, $call} : ${optNone(optType)};"
+        preStmts += "$optType $t = $guard ? ($optType){ktc_SOME, $call} : ${optNone(optType)};"
         markOptional(t)
         defineVar(t, "${retType}?")
         return t
@@ -4955,12 +4955,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Determine the null guard expression
         val guard = if (isThis) {
-            if (isValueNullRecv) "\$self.tag == SOME" else "\$self\$has"
+            if (isValueNullRecv) "\$self.tag == ktc_SOME" else "\$self\$has"
         } else if (recvName != null && recvType != null) {
             when {
                 recvType.endsWith("*?") ->
                     "$recvName != NULL"
-                isValueNullRecv -> "$recvName.tag == SOME"
+                isValueNullRecv -> "$recvName.tag == ktc_SOME"
                 recvType.endsWith("?") ->
                     "${recvName}\$has"
                 else -> "${recv}\$has"
@@ -4994,7 +4994,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         } else {
             val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int32_Optional"
             val fieldCType = if (fieldType != null) cTypeStr(fieldType) else "int32_t"
-            preStmts += "$optType $t = $guard ? ($optType){SOME, $fieldAccess} : ${optNone(optType)};"
+            preStmts += "$optType $t = $guard ? ($optType){ktc_SOME, $fieldAccess} : ${optNone(optType)};"
             markOptional(t)
             defineVar(t, "${fieldType ?: "Int"}?")
         }
@@ -5031,7 +5031,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Value-nullable variable: check Optional tag
         if (innerType != null && innerType.endsWith("?") && isValueNullableType(innerType) && e.expr is NameExpr) {
             val name = (e.expr as NameExpr).name
-            preStmts += "if ($name.tag == NONE) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
+            preStmts += "if ($name.tag == ktc_NONE) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
             // Return the unwrapped value
             return "$name.value"
         }
@@ -5356,7 +5356,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val baseT = type.removeSuffix("?")
             if (isValueNullableType(type)) {
                 val inner = genSbAppend(sbRef, "($expr).value", baseT).removeSuffix(";")
-                return "if (($expr).tag == SOME) { $inner; } else { ktc_sb_append_cstr($sbRef, \"null\"); }"
+                return "if (($expr).tag == ktc_SOME) { $inner; } else { ktc_sb_append_cstr($sbRef, \"null\"); }"
             } else {
                 val inner = genSbAppend(sbRef, expr, baseT).removeSuffix(";")
                 return "if (${expr}\$has) { $inner; } else { ktc_sb_append_cstr($sbRef, \"null\"); }"
@@ -5397,8 +5397,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val vElemName = typeSubst[inTypeArg.name] ?: inTypeArg.name
             val vOptCType = optCTypeName("${vElemName}?")
             val vVals = args.joinToString(", ") { vArg ->
-                if (vArg.expr is NullLit) "($vOptCType){NONE}"
-                else "($vOptCType){SOME, ${genExpr(vArg.expr)}}"
+                if (vArg.expr is NullLit) "($vOptCType){ktc_NONE}"
+                else "($vOptCType){ktc_SOME, ${genExpr(vArg.expr)}}"
             }
             val vTmp = tmp()
             preStmts += "$vOptCType ${vTmp}[] = {$vVals};"
