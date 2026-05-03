@@ -150,7 +150,7 @@ class HeapTest : TranspilerTestBase() {
     @Test fun notNullAssertionOnVariable() {
         // !! on nullable variable should emit check
         val r = transpileMain("""
-            var p: Heap<Vec2>? = HeapAlloc<Vec2>(1.0f, 2.0f)
+            var p: @Ptr Vec2? = HeapAlloc<Vec2>(1.0f, 2.0f)
             val q = p!!
         """, decls = vec2Decl)
         r.sourceContains("NullPointerException")
