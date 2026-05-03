@@ -1636,10 +1636,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         pushScope()
         for (p in f.params) {
             val resolved = resolveTypeName(p.type)
-            val wasTypeParam = typeSubst.containsKey(p.type.name)
             defineVar(p.name, when {
                 p.type.nullable -> "${resolved}?"
-                !wasTypeParam && classes.containsKey(resolved) -> "${resolved}*"
                 else -> resolved
             })
         }
@@ -1683,7 +1681,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         val isClassType = classes.containsKey(recvTypeName)
         val cRecvType = cTypeStr(recvTypeName)
-        val selfParam = if (isClassType) "$cRecvType* \$self" else "$cRecvType \$self"
+        val selfParam = "$cRecvType \$self"
         val nullableExtra = if (recvIsNullable) ", bool \$self\$has" else ""
         val extraParams = expandParams(f.params)
         val outParam = if (returnsSizedArray) {
@@ -1713,7 +1711,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         currentExtRecvType = if (recvIsNullable) "$recvTypeName?" else recvTypeName
         if (isClassType) {
             currentClass = recvTypeName
-            selfIsPointer = true
+            selfIsPointer = false
         } else {
             currentClass = null
             selfIsPointer = false
@@ -1725,7 +1723,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             defineVar(p.name, when {
                 p.isVararg -> "${resolved}Array"
                 p.type.nullable -> "${resolved}?"
-                classes.containsKey(resolved) -> "${resolved}*"
                 else -> resolved
             })
         }
@@ -2412,7 +2409,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 defineVar(p.name, when {
                     p.isVararg -> "${resolved}Array"  // vararg params are arrays (ptr + $len)
                     p.type.nullable -> "${resolved}?"
-                    classes.containsKey(resolved) -> "${resolved}*"  // class params are pointers (reference semantics)
                     else -> resolved
                 })
             }
@@ -2840,6 +2836,25 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── assignment ───────────────────────────────────────────────────
 
     private fun emitAssign(s: AssignStmt, ind: String, method: Boolean) {
+
+        // safe dot assignment: this?.x = value → if ($self$has) { (*$self).x = value; }
+        if (s.target is SafeDotExpr) {
+            val recvType = inferExprType(s.target.obj)
+            val recv = genExpr(s.target.obj)
+            val recvName = (s.target.obj as? NameExpr)?.name
+            val isThis = s.target.obj is ThisExpr
+            val guard = if (isThis) "\$self\$has"
+                        else if (recvName != null && recvType != null && recvType.endsWith("?"))
+                            "${recvName}\$has"
+                        else if (recvName != null) "${recvName}\$has"
+                        else "${recv}\$has"
+            val fieldExpr = if (anyIndirectClassName(recvType) != null) "$recv->${s.target.name}"
+                            else "$recv.${s.target.name}"
+            val value = genExpr(s.value)
+            flushPreStmts(ind)
+            impl.appendLine("${ind}if ($guard) { $fieldExpr ${s.op} $value; }")
+            return
+        }
 
         // operator set: a[i] = v → ClassName_set(&a, i, v)
         if (s.target is IndexExpr && s.op == "=") {
@@ -3547,7 +3562,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Check if it's a known variable in scope
         if (lookupVar(e.name) != null) {
             if (currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true) {
-                return "\$self->${e.name}"
+                return if (selfIsPointer) "\$self->${e.name}" else "\$self.${e.name}"
             }
             val vCurObj = currentObject
             if (vCurObj != null && objects[vCurObj]?.props?.any { it.first == e.name } == true) {
@@ -4031,16 +4046,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         parts += expr
                     }
                 } else {
-                    val argType = inferExprType(arg.expr)
-                    if (!isCtorCall && classes.containsKey(paramType)) {
-                        if (argType != null && (argType == "${paramType}*" || argType == "${paramType}&" || argType == "${paramType}^")) {
-                            parts += expr
-                        } else {
-                            parts += "&$expr"
-                        }
-                    } else {
-                        parts += expr
-                    }
+                    parts += expr
                 }
                 argIdx++
             }
@@ -4168,8 +4174,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // If class defines the method, delegate to it (e.g. class has its own set/get)
             val classHasMethod = classes[heapBase]?.methods?.any { it.name == method } == true
             if (classHasMethod) {
-                val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
                 val methodDecl = classes[heapBase]?.methods?.find { it.name == method }
+                val isExt = methodDecl?.receiver != null
+                val recvArg = if (isExt) "(*$recv)" else recv
+                val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
                 if (methodDecl?.returnType?.nullable == true) {
                     return genNullableMethodCall(heapBase, "${pfx(heapBase)}_$method", allArgs, methodDecl)
                 }
@@ -4201,8 +4209,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (ptrBase != null) {
             val classHasMethod = classes[ptrBase]?.methods?.any { it.name == method } == true
             if (classHasMethod) {
-                val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
                 val methodDecl = classes[ptrBase]?.methods?.find { it.name == method }
+                val isExt = methodDecl?.receiver != null
+                val recvArg = if (isExt) "(*$recv)" else recv
+                val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
                 if (methodDecl?.returnType?.nullable == true) {
                     return genNullableMethodCall(ptrBase, "${pfx(ptrBase)}_$method", allArgs, methodDecl)
                 }
@@ -4238,9 +4248,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // .toPtr() → same pointer, just changes type
                 "toPtr" -> return recv
             }
-            // All other method calls → class method, pointer passed directly
-            val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+            // All other method calls → class method, deref for extension functions
             val methodDecl = classes[valBase]?.methods?.find { it.name == method }
+            val isExt = methodDecl?.receiver != null
+            val recvArg = if (isExt) "(*$recv)" else recv
+            val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
             if (methodDecl?.returnType?.nullable == true) {
                 return genNullableMethodCall(valBase, "${pfx(valBase)}_$method", allArgs, methodDecl)
             }
@@ -4287,17 +4299,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 preStmts += "${pfx(recvType)}* $t = &$recv;"
                 return t
             }
+            val methodDecl = classes[recvType]?.methods?.find { it.name == method }
+            val isExtFun = methodDecl?.receiver != null
             val nullableRecv = hasNullableReceiverExt(recvType, method)
             val selfArg = if (nullableRecv) {
                 val recvName = (dot.obj as? NameExpr)?.name
                 val hasFlag = if (dot.obj is ThisExpr) "\$self\$has"
-                              else if (recvName != null) "${recvName}\$has"
+                              else if (recvName != null) {
+                                  val recvVarType2 = lookupVar(recvName)
+                                  if (recvVarType2 != null && recvVarType2.endsWith("?")) "${recvName}\$has"
+                                  else "true"
+                              }
                               else "true"
-                "&$recv, $hasFlag"
-            } else "&$recv"
+                if (isExtFun) "$recv, $hasFlag" else "&$recv, $hasFlag"
+            } else if (isExtFun) "$recv"
+            else "&$recv"
             val allArgs = if (argStr.isEmpty()) selfArg else "$selfArg, $argStr"
             // Nullable return: use out-pointer pattern
-            val methodDecl = classes[recvType]?.methods?.find { it.name == method }
             if (methodDecl?.returnType?.nullable == true) {
                 return genNullableMethodCall(recvType, "${pfx(recvType)}_$method", allArgs, methodDecl)
             }
@@ -4337,7 +4355,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     // Pass receiver value + $has flag for nullable-receiver extensions
                     val recvName = (dot.obj as? NameExpr)?.name
                     val hasFlag = if (dot.obj is ThisExpr) "\$self\$has"
-                                  else if (recvName != null) "${recvName}\$has"
+                                  else if (recvName != null) {
+                                      val recvVarType = lookupVar(recvName)
+                                      if (recvVarType != null && recvVarType.endsWith("?")) "${recvName}\$has"
+                                      else "true"
+                                  }
                                   else "true"
                     "$recv, $hasFlag"
                 } else recv
@@ -4467,9 +4489,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val recvType = inferExprType(e.obj)
         val recv = genExpr(e.obj)
         val recvName = (e.obj as? NameExpr)?.name
+        val isThis = e.obj is ThisExpr
 
         // Determine the null guard expression
-        val guard = if (recvName != null && recvType != null) {
+        val guard = if (isThis) {
+            "\$self\$has"
+        } else if (recvName != null && recvType != null) {
             when {
                 isHeapPtrNullable(recvType) || isPtrPtrNullable(recvType) ||
                         isValuePtrNullable(recvType) || (recvType.endsWith("*?") && !recvType.endsWith("*#")) ->
@@ -4897,8 +4922,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun genLValue(e: Expr, method: Boolean): String {
         return when (e) {
             is NameExpr -> {
-                if (method && currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true)
-                    "\$self->${e.name}"
+                if (method && currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true) {
+                    if (selfIsPointer) "\$self->${e.name}" else "\$self.${e.name}"
+                }
                 else if (currentObject.let { vCO -> vCO != null && objects[vCO]?.props?.any { it.first == e.name } == true })
                     "${pfx(currentObject!!)}.${e.name}"
                 else e.name
@@ -5330,9 +5356,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val parts = mutableListOf<String>()
         for (p in params) {
             val resolved = resolveTypeName(p.type)
-            // Check if the original param type was a generic type parameter (e.g., T → Vec2).
-            // If so, don't apply class-by-pointer — the interface vtable and callers expect by-value.
-            val wasTypeParam = typeSubst.containsKey(p.type.name)
             if (p.isVararg) {
                 parts += "${cTypeStr(resolved)}* ${p.name}"
                 parts += "int32_t ${p.name}\$len"
@@ -5349,10 +5372,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (p.type.nullable) {
                 parts += "${cTypeStr(resolved)} ${p.name}"
                 parts += "bool ${p.name}\$has"
-            } else if (!wasTypeParam && classes.containsKey(resolved)) {
-                // Kotlin classes are reference types — pass by pointer for correct mutation semantics
-                // But NOT for generic type params (T→Vec2): interface vtable expects by-value
-                parts += "${cTypeStr(resolved)}* ${p.name}"
             } else {
                 parts += "${cType(p.type)} ${p.name}"
             }

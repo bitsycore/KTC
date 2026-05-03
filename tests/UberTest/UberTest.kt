@@ -687,15 +687,43 @@ fun testArrayUsage() {
     }
 }
 
+fun vecByValueNullable(vec: Vec2?) {
+    vec?.x = 99.9f
+}
+
 fun vecByValue(vec: Vec2) {
     vec.x = 99.9f
 }
 
+fun Vec2?.ByValueNullable() {
+    this?.x = 99.9f
+}
+
+fun Vec2.ByValue() {
+    x = 99.9f
+}
+
 fun testPassByValue() {
     val aVec = Vec2(5.0f, 2.0f)
-    println(aVec)
-    vecByValue(aVec)
-    println(aVec)
+    println("Before Nullable: $aVec")
+    vecByValueNullable(aVec)
+    println("After Nullable: $aVec")
+
+    val bVec = Vec2(10.0f, 2.0f)
+    println("Before: $bVec")
+    vecByValue(bVec)
+    println("After: $bVec")
+
+    val cVec = Vec2(15.0f, 2.0f)
+    println("Ext Before Nullable: $cVec")
+    cVec.ByValue()
+    println("Ext After Nullable: $cVec")
+
+    val dVec = Vec2(20.0f, 20.0f)
+    println("Ext Before: $dVec")
+    // Non nullable should be callable on nullable function
+    dVec.ByValueNullable()
+    println("Ext After: $dVec")
 }
 
 fun testTime() {

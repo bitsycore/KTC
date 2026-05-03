@@ -51,8 +51,8 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 println(v.lengthSquared())
             }
         """)
-        r.sourceContains("float test_Main_Vec2_lengthSquared(test_Main_Vec2* ${'$'}self)")
-        r.sourceContains("test_Main_Vec2_lengthSquared(&v)")
+        r.sourceContains("float test_Main_Vec2_lengthSquared(test_Main_Vec2 ${'$'}self)")
+        r.sourceContains("test_Main_Vec2_lengthSquared(v)")
     }
 
     // ── Extension with parameters ────────────────────────────────────
@@ -71,7 +71,7 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 p.heal(10)
             }
         """)
-        r.sourceContains("void test_Main_Player_heal(test_Main_Player* ${'$'}self, int32_t amount)")
+        r.sourceContains("void test_Main_Player_heal(test_Main_Player ${'$'}self, int32_t amount)")
     }
 
     // ── Nullable receiver extension ──────────────────────────────────
@@ -139,9 +139,9 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 v.printSafe()
             }
         """)
-        // Class type: $self is pointer + $self$has
-        r.sourceContains("test_Main_Vec2* ${'$'}self, bool ${'$'}self${'$'}has")
-        r.sourceContains("test_Main_Vec2_printSafe(&v, v\$has)")
+        // Class type: $self is by-value + $self$has
+        r.sourceContains("test_Main_Vec2 ${'$'}self, bool ${'$'}self${'$'}has")
+        r.sourceContains("test_Main_Vec2_printSafe(v, v\$has)")
     }
 
     @Test fun nullableReceiverNoErrorOnDotCall() {

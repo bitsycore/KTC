@@ -9,7 +9,7 @@ import kotlin.test.Test
  * previously caused gcc compilation failures:
  *   - Top-level val constants must be prefixed (json_Main_TOK_LBRACE, not TOK_LBRACE)
  *   - IntArray(n) must produce non-const pointers (mutable array contents)
- *   - MutableList<Int> params must be passed by pointer (reference semantics)
+ *   - MutableList<Int> params are passed by value (struct copy)
  *   - Array $len companions must be emitted for val assignments from array constructors
  */
 class JsonParserTest : TranspilerTestBase() {
@@ -67,23 +67,23 @@ class JsonParserTest : TranspilerTestBase() {
 
     @Test fun mutableListParamsByPointer() {
         val r = transpileJsonParser()
-        // Function signatures must take MutableList_Int* (pointer), not by value
-        r.sourceContains("json_Main_MutableList_Int* toks")
-        r.sourceContains("json_Main_MutableList_Int* out)")
+        // Function signatures now pass class types by value (struct copy)
+        r.sourceContains("json_Main_MutableList_Int toks")
+        r.sourceContains("json_Main_MutableList_Int out)")
     }
 
     @Test fun mutableListParamsByPointerInHeader() {
         val r = transpileJsonParser()
-        r.headerContains("json_Main_MutableList_Int* toks")
-        r.headerContains("json_Main_MutableList_Int* out)")
+        r.headerContains("json_Main_MutableList_Int toks")
+        r.headerContains("json_Main_MutableList_Int out)")
     }
 
     @Test fun mutableListMethodCallsUsePointerDirectly() {
         val r = transpileJsonParser()
-        // Inside parseValue/parseArray, method calls on pointer params use recv directly (no &)
-        r.sourceContains("json_Main_MutableList_Int_add(out, json_Main_JSON_STRING)")
-        r.sourceContains("json_Main_MutableList_Int_get(out,")
-        r.sourceContains("json_Main_MutableList_Int_get(toks,")
+        // Params are by-value, so method calls use & to get pointer for $self
+        r.sourceContains("json_Main_MutableList_Int_add(&out, json_Main_JSON_STRING)")
+        r.sourceContains("json_Main_MutableList_Int_get(&out,")
+        r.sourceContains("json_Main_MutableList_Int_get(&toks,")
     }
 
     @Test fun mutableListLocalStructUsesAddressOf() {
@@ -94,18 +94,18 @@ class JsonParserTest : TranspilerTestBase() {
 
     @Test fun mutableListLocalPassedByAddressToFunctions() {
         val r = transpileJsonParser()
-        // In main, local class structs are passed by address (&tokens, &output)
+        // In main, local class structs are passed by value (struct copy)
         // IntArray params are wrapped in Ktc_ArrayTrampoline for pass-by-value semantics
-        r.sourceContains("&tokens, (Ktc_ArrayTrampoline)")
-        r.sourceContains("&output)")
+        r.sourceContains("tokens, (Ktc_ArrayTrampoline)")
+        r.sourceContains("output)")
     }
 
     // ── Heap pointer field access uses -> ────────────────────────────
 
     @Test fun pointerParamFieldAccessUsesArrow() {
         val r = transpileJsonParser()
-        // out->size (pointer param), not out.size
-        r.sourceContains("out->size")
+        // out.size (by-value struct), not out->size
+        r.sourceContains("out.size")
     }
 
     // ── Generic class monomorphization ───────────────────────────────
