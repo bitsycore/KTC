@@ -5,9 +5,10 @@ import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
-        System.err.println("Usage: ktc <file.kt...> [-o <output_dir>] [--mem-track]")
+        System.err.println("Usage: ktc <file.kt...> [-o <output_dir>] [--mem-track] [--ast]")
         System.err.println("  Transpiles Kotlin subset files to C11.")
         System.err.println("  --mem-track  Enable allocation tracking (alloc/free counts + leak report)")
+        System.err.println("  --ast        Dump parsed AST and exit (no C output)")
         exitProcess(1)
     }
 
@@ -15,6 +16,7 @@ fun main(args: Array<String>) {
     val inputPaths = mutableListOf<String>()
     var outputDir = "."
     var memTrack = false
+    var dumpAst = false
     var i = 0
     while (i < args.size) {
         if (args[i] == "-o" && i + 1 < args.size) {
@@ -22,6 +24,9 @@ fun main(args: Array<String>) {
             i += 2
         } else if (args[i] == "--mem-track") {
             memTrack = true
+            i++
+        } else if (args[i] == "--ast") {
+            dumpAst = true
             i++
         } else {
             inputPaths += args[i]
@@ -90,6 +95,15 @@ fun main(args: Array<String>) {
         parsedFiles += ParsedSource(inputFile, ast, source.lines())
     }
 
+    // ── Dump AST if --ast flag is set ─────────────────────────────────
+    if (dumpAst) {
+        for (ps in parsedFiles) {
+            println("=== AST: ${ps.ast.sourceFile.ifEmpty { ps.file.name }} ===")
+            println(dumpAst(ps.ast, 0))
+        }
+        return
+    }
+
     // ── Group files by package ───────────────────────────────────────
     // Files with the same package are merged into a single output unit.
     // Files with different packages produce separate .c/.h outputs.
@@ -150,4 +164,192 @@ fun main(args: Array<String>) {
     val sourceNames = sortedNames.joinToString(" ") { "$it.c" }
     val mainBase = sortedNames.find { it != "ktc" } ?: sortedNames.first()
     println("Done. Compile with:  cc -std=c11 -o $mainBase $sourceNames")
+}
+
+// ═══════════════════════════ AST Dump ═══════════════════════════
+
+private fun indent(n: Int) = "  ".repeat(n)
+
+private fun dumpAst(file: KtFile, depth: Int): String {
+    val sb = StringBuilder()
+    val d = depth
+    if (file.pkg != null) sb.appendLine("${indent(d)}package ${file.pkg}")
+    for (imp in file.imports) sb.appendLine("${indent(d)}import $imp")
+    for (decl in file.decls) sb.append(dumpDecl(decl, d))
+    return sb.toString()
+}
+
+private fun dumpDecl(d: Decl, depth: Int): String {
+    val sb = StringBuilder()
+    val id = indent(depth)
+    when (d) {
+        is FunDecl -> {
+            val p = d.params.joinToString(", ") { dumpParam(it) }
+            val r = if (d.returnType != null) ": ${dumpTypeRef(d.returnType)}" else ""
+            val tps = if (d.typeParams.isNotEmpty()) "<${d.typeParams.joinToString(", ")}>" else ""
+            val recv = if (d.receiver != null) "${dumpTypeRef(d.receiver)}." else ""
+            val op = if (d.isOperator) "operator " else ""
+            sb.appendLine("${id}${op}fun $recv${d.name}$tps($p)$r")
+            if (d.body != null) sb.append(dumpBlock(d.body, depth + 1))
+        }
+        is ClassDecl -> {
+            val tps = if (d.typeParams.isNotEmpty()) "<${d.typeParams.joinToString(", ")}>" else ""
+            val ds = if (d.isData) "data " else ""
+            val ifs = if (d.superInterfaces.isNotEmpty()) " : ${d.superInterfaces.joinToString(", ") { dumpTypeRef(it) }}" else ""
+            sb.appendLine("${id}${ds}class ${d.name}$tps$ifs")
+            for (cp in d.ctorParams) sb.appendLine("${indent(depth + 1)}ctor ${dumpCtorParam(cp)}")
+            for (m in d.members) sb.append(dumpDecl(m, depth + 1))
+            for (init in d.initBlocks) sb.append(dumpBlock(init, depth + 1, "init"))
+        }
+        is EnumDecl -> {
+            sb.appendLine("${id}enum ${d.name} { ${d.entries.joinToString(", ")} }")
+        }
+        is InterfaceDecl -> {
+            val tps = if (d.typeParams.isNotEmpty()) "<${d.typeParams.joinToString(", ")}>" else ""
+            val ifs = if (d.superInterfaces.isNotEmpty()) " : ${d.superInterfaces.joinToString(", ") { dumpTypeRef(it) }}" else ""
+            sb.appendLine("${id}interface ${d.name}$tps$ifs")
+            for (p in d.properties) sb.append(dumpDecl(p, depth + 1))
+            for (m in d.methods) sb.append(dumpDecl(m, depth + 1))
+        }
+        is ObjectDecl -> {
+            sb.appendLine("${id}object ${d.name}")
+            for (m in d.members) sb.append(dumpDecl(m, depth + 1))
+        }
+        is PropDecl -> {
+            val mut = if (d.mutable) "var" else "val"
+            val tp = if (d.type != null) ": ${dumpTypeRef(d.type)}" else ""
+            val init = if (d.init != null) " = ${dumpExpr(d.init)}" else ""
+            sb.appendLine("${id}$mut ${d.name}$tp$init")
+        }
+    }
+    return sb.toString()
+}
+
+private fun dumpCtorParam(cp: CtorParam): String {
+    val kw = if (cp.isVar) "var " else if (cp.isVal) "val " else ""
+    val def = if (cp.default != null) " = ${dumpExpr(cp.default)}" else ""
+    return "$kw${cp.name}: ${dumpTypeRef(cp.type)}$def"
+}
+
+private fun dumpParam(p: Param): String {
+    val va = if (p.isVararg) "vararg " else ""
+    val def = if (p.default != null) " = ${dumpExpr(p.default)}" else ""
+    return "$va${p.name}: ${dumpTypeRef(p.type)}$def"
+}
+
+private fun dumpTypeRef(t: TypeRef): String {
+    val tps = if (t.typeArgs.isNotEmpty()) "<${t.typeArgs.joinToString(", ") { dumpTypeRef(it) }}>" else ""
+    val nll = if (t.nullable) "?" else ""
+    val fn = if (t.funcParams != null) {
+        val ps = t.funcParams.joinToString(", ") { dumpTypeRef(it) }
+        "($ps) -> ${dumpTypeRef(t.funcReturn!!)}"
+    } else ""
+    val ann = if (t.annotations.isNotEmpty()) {
+        t.annotations.joinToString(" ") { "@${it.name}${if (it.args.isNotEmpty()) "(${it.args.joinToString(", ") { dumpExpr(it) }})" else ""}" } + " "
+    } else ""
+    return "$ann${t.name}$tps$fn$nll"
+}
+
+private fun dumpBlock(b: Block, depth: Int, label: String = ""): String {
+    val sb = StringBuilder()
+    val id = indent(depth)
+    val pre = if (label.isNotEmpty()) "$label " else ""
+    sb.appendLine("${id}${pre}{")
+    for (s in b.stmts) sb.append(dumpStmt(s, depth))
+    sb.appendLine("${id}}")
+    return sb.toString()
+}
+
+private fun dumpStmt(s: Stmt, depth: Int): String {
+    val sb = StringBuilder()
+    val id = indent(depth)
+    when (s) {
+        is ExprStmt -> sb.appendLine("${id}${dumpExpr(s.expr)}")
+        is VarDeclStmt -> {
+            val mut = if (s.mutable) "var" else "val"
+            val tp = if (s.type != null) ": ${dumpTypeRef(s.type)}" else ""
+            val init = if (s.init != null) " = ${dumpExpr(s.init)}" else ""
+            sb.appendLine("${id}$mut ${s.name}$tp$init")
+        }
+        is AssignStmt -> sb.appendLine("${id}${dumpExpr(s.target)} ${s.op} ${dumpExpr(s.value)}")
+        is ReturnStmt -> sb.appendLine("${id}return${if (s.value != null) " ${dumpExpr(s.value)}" else ""}")
+        is ForStmt -> {
+            sb.appendLine("${id}for (${s.varName} in ${dumpExpr(s.iter)})")
+            sb.append(dumpBlock(s.body, depth))
+        }
+        is WhileStmt -> {
+            sb.appendLine("${id}while (${dumpExpr(s.cond)})")
+            sb.append(dumpBlock(s.body, depth))
+        }
+        is DoWhileStmt -> {
+            sb.appendLine("${id}do")
+            sb.append(dumpBlock(s.body, depth))
+            sb.appendLine("${id}while (${dumpExpr(s.cond)})")
+        }
+        is BreakStmt -> sb.appendLine("${id}break")
+        is ContinueStmt -> sb.appendLine("${id}continue")
+        is DeferStmt -> {
+            sb.appendLine("${id}defer")
+            sb.append(dumpBlock(s.body, depth))
+        }
+    }
+    return sb.toString()
+}
+
+private fun dumpExpr(e: Expr): String = when (e) {
+    is IntLit -> "${e.value}"
+    is LongLit -> "${e.value}L"
+    is DoubleLit -> "${e.value}"
+    is FloatLit -> "${e.value}f"
+    is BoolLit -> "${e.value}"
+    is CharLit -> "'${e.value}'"
+    is StrLit -> "\"${e.value}\""
+    is StrTemplateExpr -> "\"${e.parts.joinToString("") { when (it) { is LitPart -> it.text; is ExprPart -> "\${${dumpExpr(it.expr)}}" } }}\""
+    is NullLit -> "null"
+    is NameExpr -> e.name
+    is ThisExpr -> "this"
+    is BinExpr -> "(${dumpExpr(e.left)} ${e.op} ${dumpExpr(e.right)})"
+    is PrefixExpr -> "(${e.op}${dumpExpr(e.expr)})"
+    is PostfixExpr -> "(${dumpExpr(e.expr)}${e.op})"
+    is CallExpr -> {
+        val tas = if (e.typeArgs.isNotEmpty()) {
+            "<${e.typeArgs.joinToString(", ") { dumpTypeRef(it) }}>"
+        } else ""
+        val args = e.args.joinToString(", ") { if (it.isSpread) "*${dumpExpr(it.expr)}" else dumpExpr(it.expr) }
+        "${dumpExpr(e.callee)}$tas($args)"
+    }
+    is DotExpr -> "${dumpExpr(e.obj)}.${e.name}"
+    is SafeDotExpr -> "${dumpExpr(e.obj)}?.${e.name}"
+    is IndexExpr -> "${dumpExpr(e.obj)}[${dumpExpr(e.index)}]"
+    is IfExpr -> {
+        val els = if (e.els != null) {
+            val es = StringBuilder()
+            for (s in e.els.stmts) es.append(dumpStmt(s, 0))
+            " else { ${es.toString().trim()} }"
+        } else ""
+        val ts = StringBuilder()
+        for (s in e.then.stmts) ts.append(dumpStmt(s, 0))
+        "if (${dumpExpr(e.cond)}) { ${ts.toString().trim()} }$els"
+    }
+    is WhenExpr -> {
+        val brs = e.branches.joinToString(" ") { b ->
+            val conds = if (b.conds == null) "else" else b.conds.joinToString(", ") { dumpWhenCond(it) }
+            val body = StringBuilder()
+            for (s in b.body.stmts) body.append(dumpStmt(s, 0))
+            "$conds -> { ${body.toString().trim()} }"
+        }
+        val sub = if (e.subject != null) "(${dumpExpr(e.subject)})" else ""
+        "when$sub { $brs }"
+    }
+    is NotNullExpr -> "${dumpExpr(e.expr)}!!"
+    is ElvisExpr -> "(${dumpExpr(e.left)} ?: ${dumpExpr(e.right)})"
+    is IsCheckExpr -> "${dumpExpr(e.expr)} ${if (e.negated) "!is" else "is"} ${dumpTypeRef(e.type)}"
+    is CastExpr -> "${dumpExpr(e.expr)} as ${dumpTypeRef(e.type)}"
+    is FunRefExpr -> "::${e.name}"
+}
+
+private fun dumpWhenCond(c: WhenCond): String = when (c) {
+    is ExprCond -> dumpExpr(c.expr)
+    is IsCond -> "${if (c.negated) "!is " else "is "}${dumpTypeRef(c.type)}"
+    is InCond -> "${if (c.negated) "!in " else "in "}${dumpExpr(c.expr)}"
 }
