@@ -85,8 +85,6 @@ typedef struct { ktc_OptionalTag tag; ktc_UByte  value; } ktc_UByte_Optional;
 typedef struct { ktc_OptionalTag tag; ktc_UShort value; } ktc_UShort_Optional;
 typedef struct { ktc_OptionalTag tag; ktc_UInt   value; } ktc_UInt_Optional;
 typedef struct { ktc_OptionalTag tag; ktc_ULong  value; } ktc_ULong_Optional;
-typedef struct { ktc_OptionalTag tag; void*      value; } ktc_Ptr_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Int    size; void* data; } ktc_Array_Optional;
 
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*

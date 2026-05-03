@@ -235,9 +235,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "ULong"   -> "ktc_ULong_Optional"
             "String"  -> "ktc_String_Optional"
             else -> {
-                if (isArrayType(base)) return "ktc_Array_Optional"
-                if (base.endsWith("*")) return "ktc_Ptr_Optional"
-                // Use the _Optional suffix to match the typedef emitted after each class struct
                 val sp = symbolPrefix[base]
                 val cName = if (sp != null) "${sp}${base}" else "${prefix}${base}"
                 "${cName}_Optional"
