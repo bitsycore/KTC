@@ -6,16 +6,24 @@
 # are transpiled together. Adding a new directory = adding a new test.
 #
 # Usage:
-#   ./run_tests.sh                        # Run all tests
-#   ./run_tests.sh --skip-unit            # Skip unit tests, only run integration
-#   ./run_tests.sh --run HashMapTest      # Transpile, compile & run a single test
-#   ./run_tests.sh --run game --mem-track # Run single test with --mem-track
-#   ./run_tests.sh --run game --ast       # Run single test with --ast
-#   ./run_tests.sh --args "--other"       # Pass extra args the script doesn't know yet
-#   ./run_tests.sh --compiler clang       # Use clang instead of auto-detected cc
-#   ./run_tests.sh --cc-args "-j14 -O2"   # Pass flags to the C compiler
+#   ./run_tests.sh                            # Run all tests
+#   ./run_tests.sh --help                     # Show this help
+#   ./run_tests.sh --skip-unit                # Skip unit tests
+#   ./run_tests.sh --run HashMapTest          # Single test
+#   ./run_tests.sh --run game --mem-track     # With --mem-track flag
+#   ./run_tests.sh --run game --ast           # With --ast flag
+#   ./run_tests.sh --compiler clang           # Override C compiler
+#   ./run_tests.sh --cc-args "-j14 -O2"       # Pass flags to C compiler
+#   ./run_tests.sh --build jar                # Build fat JAR (default for suite)
+#   ./run_tests.sh --build gradle             # Use gradle run (no JAR)
+#   ./run_tests.sh --build proguard           # Use ProGuard-optimized JAR
 #
 set -euo pipefail
+
+usage() {
+    sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# //'
+    exit 0
+}
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 JAR="$ROOT/build/libs/KotlinToC-1.0-SNAPSHOT.jar"
@@ -28,25 +36,20 @@ RUN_TEST=""
 EXTRA_ARGS=""
 COMPILER=""
 CC_ARGS=""
-BUILD_JAR=""
+BUILD="jar"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --skip-unit)  SKIP_UNIT=true; shift ;;
-        --run)        RUN_TEST="$2"; shift 2 ;;
-        --mem-track)  EXTRA_ARGS="$EXTRA_ARGS --mem-track"; shift ;;
-        --ast)        EXTRA_ARGS="$EXTRA_ARGS --ast"; shift ;;
-        --args)       EXTRA_ARGS="$EXTRA_ARGS $2"; shift 2 ;;
-        --compiler)   COMPILER="$2"; shift 2 ;;
-        --cc-args)    CC_ARGS="$2"; shift 2 ;;
-        --build-jar)
-            if [[ "${2:-}" == "release" || "${2:-}" == "Release" ]]; then
-                BUILD_JAR="Release"; shift 2
-            else
-                BUILD_JAR="Classic"; shift
-            fi
-            ;;
-        *)            echo "Unknown option: $1"; exit 1 ;;
+        --help)        usage ;;
+        --skip-unit)   SKIP_UNIT=true; shift ;;
+        --run)         RUN_TEST="$2"; shift 2 ;;
+        --mem-track)   EXTRA_ARGS="$EXTRA_ARGS --mem-track"; shift ;;
+        --ast)         EXTRA_ARGS="$EXTRA_ARGS --ast"; shift ;;
+        --args)        EXTRA_ARGS="$EXTRA_ARGS $2"; shift 2 ;;
+        --compiler)    COMPILER="$2"; shift 2 ;;
+        --cc-args)     CC_ARGS="$2"; shift 2 ;;
+        --build)       BUILD="$2"; shift 2 ;;
+        *)             echo "Unknown option: $1 (use --help)"; exit 1 ;;
     esac
 done
 
@@ -84,8 +87,6 @@ if [[ -z "$CC" ]]; then
 fi
 
 # ── Helper: transpile, compile, run one test directory ──────────
-# Usage: invoke_test <name> <test_src_dir> <test_out_dir> [verbose] [extra_args]
-# Returns 0 on success, 1 on failure.
 invoke_test() {
     local name="$1"
     local test_src_dir="$2"
@@ -124,9 +125,12 @@ invoke_test() {
         for f in "${kt_files[@]}"; do kt_names+="$(basename "$f") "; done
         local extra_display=""
         [[ -n "$extra_args" ]] && extra_display=" $extra_args"
-        if [[ -n "$BUILD_JAR" ]]; then
+        if [[ "$BUILD" != "gradle" ]]; then
             local jar_label
-            jar_label=$(if [[ "$BUILD_JAR" == "Release" ]]; then echo "KotlinToC-release.jar"; else echo "KotlinToC.jar"; fi)
+            case "$BUILD" in
+                proguard) jar_label="KotlinToC-release.jar" ;;
+                *)        jar_label="KotlinToC.jar" ;;
+            esac
             showcmd "java -jar $jar_label $kt_names -o $test_out_dir$extra_display"
         else
             showcmd "gradlew run --args=\"$kt_names -o $test_out_dir$extra_display\""
@@ -135,15 +139,17 @@ invoke_test() {
     fi
     set +e
     local output
-    if [[ -n "$BUILD_JAR" ]]; then
+    if [[ "$BUILD" != "gradle" ]]; then
         local active_jar
-        active_jar=$(if [[ "$BUILD_JAR" == "Release" ]]; then echo "$RELEASE_JAR"; else echo "$JAR"; fi)
+        case "$BUILD" in
+            proguard) active_jar="$RELEASE_JAR" ;;
+            *)        active_jar="$JAR" ;;
+        esac
         output=$(java -jar "$active_jar" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
     else
         local app_args="${kt_files[*]} -o $test_out_dir $extra_args"
         output=$("$ROOT/gradlew" run --quiet --args="$app_args" 2>&1)
     fi
-    local transpile_exit=$?
     local transpile_exit=$?
     set -e
     if [[ "$verbose" == "true" ]]; then
@@ -175,7 +181,6 @@ invoke_test() {
             others+=("$cname")
         fi
     done
-    # Sort others alphabetically
     IFS=$'\n' others=($(sort <<< "${others[*]}")); unset IFS
     c_files=("${ktc_first[@]}" "${others[@]}")
 
@@ -278,26 +283,29 @@ invoke_test() {
 if [[ -n "$RUN_TEST" ]]; then
     info "Using C compiler: $CC"
 
-    # ── Build only if --build-jar ──────────────────────────────────
-    if [[ -n "$BUILD_JAR" ]]; then
+    # ── Build ──────────────────────────────────────────────────
+    if [[ "$BUILD" != "gradle" ]]; then
         section "Build"
-        if [[ "$BUILD_JAR" == "Release" ]]; then
-            showcmd "gradlew proguard"
-            "$ROOT/gradlew" proguard --quiet 2>&1
-            if [[ ! -f "$RELEASE_JAR" ]]; then
-                echo "ERROR: ProGuard build failed"
-                exit 1
-            fi
-            pass "Built $RELEASE_JAR"
-        else
-            showcmd "gradlew jar"
-            "$ROOT/gradlew" jar --quiet 2>&1
-            if [[ ! -f "$JAR" ]]; then
-                echo "ERROR: JAR build failed"
-                exit 1
-            fi
-            pass "Built $JAR"
-        fi
+        case "$BUILD" in
+            proguard)
+                showcmd "gradlew proguard"
+                "$ROOT/gradlew" proguard --quiet 2>&1
+                if [[ ! -f "$RELEASE_JAR" ]]; then
+                    echo "ERROR: ProGuard build failed"
+                    exit 1
+                fi
+                pass "Built $RELEASE_JAR"
+                ;;
+            *)
+                showcmd "gradlew jar"
+                "$ROOT/gradlew" jar --quiet 2>&1
+                if [[ ! -f "$JAR" ]]; then
+                    echo "ERROR: JAR build failed"
+                    exit 1
+                fi
+                pass "Built $JAR"
+                ;;
+        esac
     fi
 
     test_src_dir="$TESTS_DIR/$RUN_TEST"
@@ -331,7 +339,7 @@ FAILED_NAMES=()
 # ── 1. Unit Tests ───────────────────────────────────────────────
 if [[ "$SKIP_UNIT" == false ]]; then
     section "Unit Tests (gradlew test)"
-    if "$ROOT/gradlew" test --quiet $BUILD_ARGS 2>&1; then
+    if "$ROOT/gradlew" test --quiet 2>&1; then
         pass "All unit tests passed"
     else
         fail "Unit tests had failures"
@@ -340,25 +348,28 @@ if [[ "$SKIP_UNIT" == false ]]; then
     fi
 fi
 
-# ── 2. Build JAR only if --build-jar ──────────────────────────
-if [[ -n "$BUILD_JAR" ]]; then
-    if [[ "$BUILD_JAR" == "Release" ]]; then
-        section "Building ProGuard release JAR"
-        "$ROOT/gradlew" proguard --quiet 2>&1
-        if [[ ! -f "$RELEASE_JAR" ]]; then
-            echo "ERROR: ProGuard build failed"
-            exit 1
-        fi
-        pass "Built $RELEASE_JAR"
-    else
-        section "Building transpiler JAR"
-        "$ROOT/gradlew" jar --quiet 2>&1
-        if [[ ! -f "$JAR" ]]; then
-            echo "ERROR: JAR not found at $JAR"
-            exit 1
-        fi
-        pass "Built $JAR"
-    fi
+# ── 2. Build ──────────────────────────────────────────────────
+if [[ "$BUILD" != "gradle" ]]; then
+    case "$BUILD" in
+        proguard)
+            section "Building ProGuard release JAR"
+            "$ROOT/gradlew" proguard --quiet 2>&1
+            if [[ ! -f "$RELEASE_JAR" ]]; then
+                echo "ERROR: ProGuard build failed"
+                exit 1
+            fi
+            pass "Built $RELEASE_JAR"
+            ;;
+        *)
+            section "Building transpiler JAR"
+            "$ROOT/gradlew" jar --quiet 2>&1
+            if [[ ! -f "$JAR" ]]; then
+                echo "ERROR: JAR build failed"
+                exit 1
+            fi
+            pass "Built $JAR"
+            ;;
+    esac
 fi
 
 # ── Prepare output directory ────────────────────────────────────
@@ -376,7 +387,6 @@ done
 if [[ ${#test_dirs[@]} -eq 0 ]]; then
     info "No test directories found in $TESTS_DIR"
 else
-    # Sort directories by name
     IFS=$'\n' test_dirs=($(printf '%s\n' "${test_dirs[@]}" | sort)); unset IFS
 
     for dir in "${test_dirs[@]}"; do

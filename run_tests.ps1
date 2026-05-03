@@ -9,13 +9,14 @@
 #   .\run_tests.ps1                        # Run all tests
 #   .\run_tests.ps1 -Skip unit             # Skip unit tests, only run integration
 #   .\run_tests.ps1 -Run HashMapTest       # Transpile, compile & run a single test
-#   .\run_tests.ps1 -Run game -MemTrack          # Run single test with --mem-track
-#   .\run_tests.ps1 -Run game -Ast               # Run single test with --ast
+#   .\run_tests.ps1 -Run game -MemTrack    # Run single test with --mem-track
+#   .\run_tests.ps1 -Run game -Ast         # Run single test with --ast
 #   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
-#   .\run_tests.ps1 -Compiler clang              # Use clang instead of auto-detected gcc
-#   .\run_tests.ps1 -CCArgs "-j14 -O2"           # Pass flags to the C compiler
-#   .\run_tests.ps1 -BuildJar Classic             # Force rebuild the fat JAR (default: run directly from classes)
-#   .\run_tests.ps1 -BuildJar Release             # Build and use the ProGuard-optimized JAR
+#   .\run_tests.ps1 -Compiler clang        # Use clang instead of auto-detected gcc
+#   .\run_tests.ps1 -CCArgs "-j14 -O2"     # Pass flags to the C compiler
+#   .\run_tests.ps1 -Build Jar             # Build fat JAR (default)
+#   .\run_tests.ps1 -Build Gradle          # Build using gradle "run"
+#   .\run_tests.ps1 -Build Proguard        # Build and use the ProGuard-optimized JAR
 #
 param(
     [string]$Skip = "",
@@ -23,10 +24,22 @@ param(
     [string]$TranspilerArgs = "",
     [string]$Compiler = "",
     [string]$CCArgs = "",
+    [switch]$Help,
     [switch]$MemTrack,
     [switch]$Ast,
-    [string]$BuildJar = ""
+    [string]$Build = "Jar"
 )
+
+if ($Help) {
+    $inUsage = $false
+    Get-Content $PSCommandPath | ForEach-Object {
+        $line = $_.TrimStart()
+        if ($line -match '^# Usage:') { $inUsage = $true }
+        elseif ($inUsage -and $line -notmatch '^#') { $inUsage = $false; return }
+        if ($inUsage) { Write-Host ($line -replace '^# ?', '') }
+    }
+    exit 0
+}
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
@@ -86,8 +99,8 @@ function Invoke-Test {
 
     # ── Transpile ───────────────────────────────────────────────
     if ($Verbose) { Write-Section "Transpile" }
-    if ($BuildJar -ne "") {
-        $activeJar = if ($BuildJar -eq "Release") { $releaseJar } else { $jar }
+    if ($Build -ne "Gradle") {
+        $activeJar = if ($Build -eq "Proguard") { $releaseJar } else { $jar }
         $transpileArgs = @("-jar", $activeJar) + $ktFiles + @("-o", $TestOutDir)
     } else {
         # gradle run handles classpath, kotlin stdlib, and resources automatically
@@ -95,13 +108,13 @@ function Invoke-Test {
         if ($ExtraArgs -ne "") { $ktArgs += " $ExtraArgs" }
         $transpileArgs = @("run", "--quiet", "--args=$ktArgs")
     }
-    if ($ExtraArgs -ne "" -and $BuildJar -ne "") {
+    if ($ExtraArgs -ne "" -and $Build -ne "Gradle") {
         $transpileArgs += ($ExtraArgs -split '\s+')
     }
     if ($Verbose) {
         $ktNames = ($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
-        if ($BuildJar -ne "") {
-            $jarLabel = if ($BuildJar -eq "Release") { "KotlinToC-release.jar" } else { "KotlinToC.jar" }
+        if ($Build -ne "Gradle") {
+            $jarLabel = if ($Build -eq "Proguard") { "KotlinToC-release.jar" } else { "KotlinToC.jar" }
             $cmdLine = "java -jar $jarLabel $ktNames -o $TestOutDir"
         } else {
             $cmdLine = "gradlew run --args=`"$ktNames -o $TestOutDir`""
@@ -110,7 +123,7 @@ function Invoke-Test {
         Write-Cmd $cmdLine
         Write-Host ""
     }
-    if ($BuildJar -ne "") {
+    if ($Build -ne "Gradle") {
         $transpileOutput = & java @transpileArgs 2>&1
     } else {
         $transpileOutput = & "$root\gradlew.bat" @transpileArgs 2>&1
@@ -210,10 +223,10 @@ function Invoke-Test {
 if ($Run -ne "") {
     Write-Info "Using C compiler: $CC"
 
-    # ── Build only if -BuildJar ───────────────────────────────────
-    if ($BuildJar -ne "") {
+    # ── Build only if -Build ───────────────────────────────────
+    if ($Build -ne "") {
         Write-Section "Build"
-        if ($BuildJar -eq "Release") {
+        if ($Build -eq "Proguard") {
             Write-Cmd "gradlew proguard"
             & "$root\gradlew.bat" proguard --quiet 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
@@ -282,9 +295,9 @@ if ($Skip -ne "unit") {
     }
 }
 
-# ── 2. Build JAR only if -BuildJar ──────────────────────────────
-if ($BuildJar -ne "") {
-    if ($BuildJar -eq "Release") {
+# ── 2. Build JAR only if -Build ──────────────────────────────
+if ($Build -ne "Gradle") {
+    if ($Build -eq "Proguard") {
         Write-Section "Building ProGuard release JAR"
         & "$root\gradlew.bat" proguard --quiet 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
