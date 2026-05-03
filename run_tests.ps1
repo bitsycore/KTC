@@ -9,12 +9,16 @@
 #   .\run_tests.ps1                        # Run all tests
 #   .\run_tests.ps1 -Skip unit             # Skip unit tests, only run integration
 #   .\run_tests.ps1 -Run HashMapTest       # Transpile, compile & run a single test
-#   .\run_tests.ps1 -Run game -TranspilerArgs "--mem-track"  # Pass extra args to transpiler
+#   .\run_tests.ps1 -Run game -MemTrack          # Run single test with --mem-track
+#   .\run_tests.ps1 -Run game -Ast               # Run single test with --ast
+#   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
 #
 param(
     [string]$Skip = "",
     [string]$Run  = "",
-    [string]$TranspilerArgs = ""
+    [string]$TranspilerArgs = "",
+    [switch]$MemTrack,
+    [switch]$Ast
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,10 +113,8 @@ function Invoke-Test {
     $cFiles = $cFiles | Sort-Object { if ($_ -eq "ktc_std.c") { 0 } else { 1 } }, { $_ }
     $cSources = $cFiles | ForEach-Object { "$TestOutDir\$_" }
 
-    # Binary name: first non-ktc .c file without extension
-    $binBase = ($cFiles | Where-Object { $_ -ne "ktc_std.c" } | Select-Object -First 1) -replace '\.c$', ''
-    if (-not $binBase) { $binBase = $cFiles[0] -replace '\.c$', '' }
-    $exePath = "$TestOutDir\$binBase.exe"
+    # Binary name: use test name (e.g., PointerTest.exe)
+    $exePath = "$TestOutDir\$Name.exe"
 
     # ── Compile ─────────────────────────────────────────────────
     if ($Verbose) { Write-Section "Compile" }
@@ -137,6 +139,15 @@ function Invoke-Test {
     }
     if ($Verbose) { Write-Pass "Compilation succeeded -> $exePath" }
 
+    # ── Generated files (verbose only) ──────────────────────────
+    if ($Verbose) {
+        Write-Section "Generated Files"
+        Get-ChildItem "$TestOutDir\*" | ForEach-Object {
+            $size = if ($_.Length -ge 1024) { "{0:N1} KB" -f ($_.Length / 1024) } else { "$($_.Length) B" }
+            Write-Info ("{0,-30} {1,10}" -f $_.Name, $size)
+        }
+    }
+
     # ── Run ─────────────────────────────────────────────────────
     if ($Verbose) { Write-Section "Run" }
     if ($Verbose) {
@@ -158,15 +169,6 @@ function Invoke-Test {
         return $false
     }
     if ($Verbose) { Write-Pass "Program exited successfully (code 0)" }
-
-    # ── Generated files (verbose only) ──────────────────────────
-    if ($Verbose) {
-        Write-Section "Generated Files"
-        Get-ChildItem "$TestOutDir\*" | ForEach-Object {
-            $size = if ($_.Length -ge 1024) { "{0:N1} KB" -f ($_.Length / 1024) } else { "$($_.Length) B" }
-            Write-Info ("{0,-30} {1,10}" -f $_.Name, $size)
-        }
-    }
 
     if (-not $Verbose) { Write-Pass $Name }
     return $true
@@ -196,7 +198,14 @@ if ($Run -ne "") {
         exit 1
     }
 
-    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$outDir\$Run" -Verbose $true -ExtraArgs $TranspilerArgs
+    # ── Build transpile args from flags ───────────────────────────
+    $allArgs = ""
+    if ($MemTrack) { $allArgs += " --mem-track" }
+    if ($Ast) { $allArgs += " --ast" }
+    if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
+    $allArgs = $allArgs.Trim()
+
+    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$outDir\$Run" -Verbose $true -ExtraArgs $allArgs
     if ($result) { exit 0 } else { exit 1 }
 }
 
@@ -255,9 +264,16 @@ $testDirs = Get-ChildItem $testsDir -Directory | Sort-Object Name
 if ($testDirs.Count -eq 0) {
     Write-Info "No test directories found in $testsDir"
 } else {
+    # Build combined transpile args from flags
+    $allArgs = ""
+    if ($MemTrack) { $allArgs += " --mem-track" }
+    if ($Ast) { $allArgs += " --ast" }
+    if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
+    $allArgs = $allArgs.Trim()
+
     foreach ($dir in $testDirs) {
         $totalTests++
-        $result = Invoke-Test -Name $dir.Name -TestSrcDir $dir.FullName -TestOutDir "$outDir\$($dir.Name)" -ExtraArgs $TranspilerArgs
+        $result = Invoke-Test -Name $dir.Name -TestSrcDir $dir.FullName -TestOutDir "$outDir\$($dir.Name)" -ExtraArgs $allArgs
         if ($result) {
             $passedTests++
         } else {

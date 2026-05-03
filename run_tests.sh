@@ -9,7 +9,9 @@
 #   ./run_tests.sh                        # Run all tests
 #   ./run_tests.sh --skip-unit            # Skip unit tests, only run integration
 #   ./run_tests.sh --run HashMapTest      # Transpile, compile & run a single test
-#   ./run_tests.sh --run game --args "--mem-track"  # Pass extra args to transpiler
+#   ./run_tests.sh --run game --mem-track # Run single test with --mem-track
+#   ./run_tests.sh --run game --ast       # Run single test with --ast
+#   ./run_tests.sh --args "--other"       # Pass extra args the script doesn't know yet
 #
 set -euo pipefail
 
@@ -24,10 +26,12 @@ EXTRA_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --skip-unit) SKIP_UNIT=true; shift ;;
-        --run)       RUN_TEST="$2"; shift 2 ;;
-        --args)      EXTRA_ARGS="$2"; shift 2 ;;
-        *)           echo "Unknown option: $1"; exit 1 ;;
+        --skip-unit)  SKIP_UNIT=true; shift ;;
+        --run)        RUN_TEST="$2"; shift 2 ;;
+        --mem-track)  EXTRA_ARGS="$EXTRA_ARGS --mem-track"; shift ;;
+        --ast)        EXTRA_ARGS="$EXTRA_ARGS --ast"; shift ;;
+        --args)       EXTRA_ARGS="$EXTRA_ARGS $2"; shift 2 ;;
+        *)            echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
@@ -152,21 +156,13 @@ invoke_test() {
         return 1
     fi
 
-    # Binary name: first non-ktc .c file without extension
-    local bin_base=""
-    for cf in "${c_files[@]}"; do
-        if [[ "$cf" != "ktc_std.c" ]]; then
-            bin_base="${cf%.c}"
-            break
-        fi
-    done
-    [[ -z "$bin_base" ]] && bin_base="${c_files[0]%.c}"
+    # Binary name: use test name
+    local exe_path="$test_out_dir/$name"
 
     local c_sources=()
     for cf in "${c_files[@]}"; do
         c_sources+=("$test_out_dir/$cf")
     done
-    local exe_path="$test_out_dir/$bin_base"
 
     # ── Compile ─────────────────────────────────────────────────
     if [[ "$verbose" == "true" ]]; then
@@ -192,6 +188,24 @@ invoke_test() {
         return 1
     fi
     if [[ "$verbose" == "true" ]]; then pass "Compilation succeeded -> $exe_path"; fi
+
+    # ── Generated files (verbose only) ──────────────────────────
+    if [[ "$verbose" == "true" ]]; then
+        section "Generated Files"
+        for f in "$test_out_dir"/*; do
+            local fname
+            fname="$(basename "$f")"
+            local size
+            size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "?")
+            local human
+            if [[ "$size" =~ ^[0-9]+$ ]] && [[ $size -ge 1024 ]]; then
+                human="$(echo "scale=1; $size / 1024" | bc) KB"
+            else
+                human="$size B"
+            fi
+            printf "  ${CYAN}----${NC} %-30s %10s\n" "$fname" "$human"
+        done
+    fi
 
     # ── Run ─────────────────────────────────────────────────────
     if [[ "$verbose" == "true" ]]; then
@@ -220,24 +234,6 @@ invoke_test() {
     fi
     if [[ "$verbose" == "true" ]]; then
         pass "Program exited successfully (code 0)"
-    fi
-
-    # ── Generated files (verbose only) ──────────────────────────
-    if [[ "$verbose" == "true" ]]; then
-        section "Generated Files"
-        for f in "$test_out_dir"/*; do
-            local fname
-            fname="$(basename "$f")"
-            local size
-            size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "?")
-            local human
-            if [[ "$size" =~ ^[0-9]+$ ]] && [[ $size -ge 1024 ]]; then
-                human="$(echo "scale=1; $size / 1024" | bc) KB"
-            else
-                human="$size B"
-            fi
-            printf "  ${CYAN}----${NC} %-30s %10s\n" "$fname" "$human"
-        done
     fi
 
     if [[ "$verbose" != "true" ]]; then pass "$name"; fi
