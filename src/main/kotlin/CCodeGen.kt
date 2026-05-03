@@ -155,9 +155,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val trampolinedParams = mutableSetOf<String>()
     private var currentExtRecvType: String? = null
 
-    /** Returns the class name if `type` is a heap pointer to a known class, else null.
-     *  Works for all Heap variants: "T*", "T*?", "T*#" */
-    private fun heapClassName(type: String?): String? {
+    /** Returns the class name if `type` is a pointer to a known class, else null.
+     *  Pointer types have the "*" suffix from @Ptr/@Heap/@Value annotations.
+     *  Legacy # marker (Heap<T?>) is also stripped. */
+    private fun pointerClassName(type: String?): String? {
         if (type == null) return null
         val t = type.removeSuffix("?").removeSuffix("#")
         if (!t.endsWith("*")) return null
@@ -165,64 +166,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return if (classes.containsKey(base)) base else null
     }
 
-    /** True if the internal type is a heap class pointer (any variant). */
-    private fun isHeapPointerType(type: String?): Boolean = heapClassName(type) != null
+    /** True if the internal type is a class pointer (any variant). */
+    private fun isPointerType(type: String?): Boolean = pointerClassName(type) != null
 
-    /** True if type is Heap<T?> — value-nullable, pointer always allocated, uses $has. */
-    private fun isHeapValueNullable(type: String?): Boolean =
-        type != null && type.endsWith("*#") && heapClassName(type) != null
-
-    /** True if type is Heap<T>? — pointer-nullable, uses NULL. */
-    private fun isHeapPtrNullable(type: String?): Boolean =
-        type != null && type.endsWith("*?") && heapClassName(type) != null
-
-    // ── Ptr<T> helpers (internal marker: "T^", "T^?", "T^#") ────────
-
-    /** Returns the class name if `type` is a Ptr<T>, else null. */
-    private fun ptrClassName(type: String?): String? {
-        if (type == null) return null
-        val t = type.removeSuffix("?").removeSuffix("#")
-        if (!t.endsWith("^")) return null
-        val base = t.dropLast(1)
-        return if (classes.containsKey(base)) base else null
-    }
-
-    /** True if the internal type is a Ptr<T> (any variant). */
-    private fun isPtrType(type: String?): Boolean = ptrClassName(type) != null
-
-    /** True if type is Ptr<T>? — pointer-nullable via NULL. */
-    private fun isPtrPtrNullable(type: String?): Boolean =
-        type != null && type.endsWith("^?") && ptrClassName(type) != null
-
-    /** True if type is Ptr<T?> — value-nullable via $has. */
-    private fun isPtrValueNullable(type: String?): Boolean =
-        type != null && type.endsWith("^#") && ptrClassName(type) != null
-
-    // ── Value<T> helpers (internal marker: "T&", "T&?", "T&#") ──────
-
-    /** Returns the class name if `type` is a Value<T>, else null. */
-    private fun valueClassName(type: String?): String? {
-        if (type == null) return null
-        val t = type.removeSuffix("?").removeSuffix("#")
-        if (!t.endsWith("&")) return null
-        val base = t.dropLast(1)
-        return if (classes.containsKey(base)) base else null
-    }
-
-    /** True if the internal type is a Value<T> (any variant). */
-    private fun isValueType(type: String?): Boolean = valueClassName(type) != null
-
-    /** True if type is Value<T>? — pointer-nullable via NULL. */
-    private fun isValuePtrNullable(type: String?): Boolean =
-        type != null && type.endsWith("&?") && valueClassName(type) != null
-
-    /** True if type is Value<T?> — value-nullable via $has. */
-    private fun isValueValueNullable(type: String?): Boolean =
-        type != null && type.endsWith("&#") && valueClassName(type) != null
-
-    /** Returns the class name for any indirect type: Heap<T>, Ptr<T>, or Value<T>. */
-    private fun anyIndirectClassName(type: String?): String? =
-        heapClassName(type) ?: ptrClassName(type) ?: valueClassName(type)
+    /** Returns the class name for any indirect (pointer) type. */
+    private fun anyIndirectClassName(type: String?): String? = pointerClassName(type)
 
     /** True if type is a function pointer type: "Fun(P1,P2)->R" */
     private fun isFuncType(t: String): Boolean = t.startsWith("Fun(")
@@ -249,15 +197,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── Optional type helpers ────────────────────────────────────────
 
     /* Returns true if type is value-nullable (T?) where T is a struct/primitive — uses Optional struct.
-    Arrays and pointer types (Heap<T>?, Ptr<T>?) use NULL instead. */
+    Pointer types (@Ptr T?) use NULL instead. Arrays use ktc_ArrayTrampoline.
+    Legacy # marker (Heap<T?>) uses $has. */
     private fun isValueNullableType(internalType: String?): Boolean {
         if (internalType == null) return false
         if (!internalType.endsWith("?")) return false
         val base = internalType.removeSuffix("?")
-        // Pointer-nullable types use NULL, not Optional
-        if (isHeapPtrNullable(internalType) || isPtrPtrNullable(internalType) || isValuePtrNullable(internalType)) return false
-        if (base.endsWith("*") || base.endsWith("^") || base.endsWith("&")) return false
-        // Array-nullable uses NULL pointer (not Optional struct)
+        // Pointer types use NULL, not Optional
+        if (base.endsWith("*") && !base.endsWith("#")) return false
+        // Arrays use ktc_ArrayTrampoline, not Optional
         if (isArrayType(base)) return false
         return true
     }
@@ -280,7 +228,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "String"  -> "ktc_String_Optional"
             else -> {
                 if (isArrayType(base)) return "ktc_Array_Optional"
-                if (base.endsWith("*") || base.endsWith("^") || base.endsWith("&")) return "ktc_Ptr_Optional"
+                if (base.endsWith("*")) return "ktc_Ptr_Optional"
                 // Use the _Optional suffix to match the typedef emitted after each class struct
                 val sp = symbolPrefix[base]
                 val cName = if (sp != null) "${sp}${base}" else "${prefix}${base}"
@@ -2582,41 +2530,33 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) {
         val tRaw = if (s.type != null) resolveTypeName(s.type) else (inferExprType(s.init) ?: "Int")
         val inferredNullable = s.type == null && tRaw.endsWith("?")
-        val inferredPtr = s.type == null && (tRaw.endsWith("^") || tRaw.endsWith("^?") || tRaw.endsWith("^#"))
+        val inferredPtr = s.type == null && (tRaw.endsWith("*") || tRaw.endsWith("*?"))
         val t = if (inferredNullable) tRaw.removeSuffix("?") else tRaw
         // malloc/calloc/realloc return nullable pointers (may return NULL)
         val isAlloc = s.type == null && isAllocCall(s.init)
 
-        // Indirect type flags — covers Heap<T>, Ptr<T>, Value<T>
-        val isHeapValNull = t.endsWith("*#")
-        val isPtrValNull  = t.endsWith("^#")
-        val isValValNull  = t.endsWith("&#")
-        val isAnyValNull  = isHeapValNull || isPtrValNull || isValValNull   // value-nullable, $has
+        // Is this a pointer type? (@Ptr annotation adds * suffix)
+        val isPointer = t.endsWith("*")
 
-        val isHeapPtrNull = !isAnyValNull && isHeapPointerType(t) &&
+        // Legacy Heap<T?>/Ptr<T?>/Value<T?> — value-nullable through pointer, uses $has
+        val isPtrValueNullable = t.endsWith("*#")
+
+        // Nullable pointer (@Ptr T?): can be NULL
+        val isPtrNullable = !isPtrValueNullable && isPointer &&
                 (s.type?.nullable == true || s.init is NullLit || inferredNullable || isAlloc)
-        val isPtrPtrNull  = !isAnyValNull && isPtrType(t) &&
-                (s.type?.nullable == true || s.init is NullLit || inferredNullable)
-        val isValPtrNull  = !isAnyValNull && isValueType(t) &&
-                (s.type?.nullable == true || s.init is NullLit || inferredNullable)
-        // Raw pointer nullable: "Int*" etc. — not class-based, uses NULL
-        val isRawPtrNull  = !isAnyValNull && !isHeapPointerType(t) && !isPtrType(t) && !isValueType(t) &&
-                t.endsWith("*") && (inferredNullable || isAlloc)
-        val isAnyPtrNull  = isHeapPtrNull || isPtrPtrNull || isValPtrNull || isRawPtrNull  // pointer-nullable, NULL
 
-        val isNullable = !isAnyValNull && !isAnyPtrNull &&
-                (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init)
-                        || inferredNullable)
+        // Value nullable (T? without pointer): uses Optional struct
+        val isValueNullable = !isPtrValueNullable && !isPointer && !isFuncType(t) && !isArrayType(t) &&
+                (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init) || inferredNullable)
 
-        val isPtr  = isPtrType(t) || isPtrValNull || isPtrPtrNull
-        val isInferredPtr = inferredPtr                                     // init expr returned a Ptr type
+        val isInferredPtr = inferredPtr
 
         // Register type in scope
         defineVar(s.name, when {
-            isAnyValNull   -> t                        // "T*#" / "T^#" / "T&#" as-is
-            isAnyPtrNull   -> "${t}?"                  // "T*?" / "T^?" / "T&?"
-            isNullable     -> "${t}?"                  // "Int?" etc.
-            else           -> t
+            isPtrValueNullable -> t                     // "T*#" as-is
+            isPtrNullable  -> "${t}?"
+            isValueNullable -> "${t}?"
+            else -> t
         })
         if (s.mutable) markMutable(s.name)
 
@@ -2635,25 +2575,32 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val ct = cTypeStr(t)
         // Don't const class types, typed pointers, nullable, arrays, or interface types
         val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t)
-            && !t.endsWith("*") && !t.endsWith("*#") && !t.endsWith("^") && !t.endsWith("^#")
-            && !t.endsWith("&") && !t.endsWith("&#")
+            && !t.endsWith("*") && !t.endsWith("*#")
             && !isArrayType(t)
-            && !isNullable && !isAnyPtrNull && !isAnyValNull) "const " else ""
+            && !isPointer && !isValueNullable && !isPtrNullable && !isPtrValueNullable) "const " else ""
 
         if (s.init != null) {
             val arrayInit = tryArrayOfInit(s.name, s.init, ct, t, ind)
-            if (arrayInit != null) { impl.appendLine(arrayInit); return }
+            if (arrayInit != null) {
+                impl.appendLine(arrayInit)
+                // Emit $has for nullable array variables so safe-calls work
+                val isNullableArray = (s.type?.nullable == true || inferredNullable) && isArrayType(t) && !isPtrValueNullable && !isPtrNullable
+                if (isNullableArray) {
+                    impl.appendLine("${ind}bool ${s.name}\$has = true;")
+                }
+                return
+            }
 
             when {
-                // ── Heap<T?> / Ptr<T?> / Value<T?> : always allocated, $has tracks value ──
-                isAnyValNull -> {
+                // ── Legacy Heap<T?>/Ptr<T?>/Value<T?> : always allocated, $has tracks value ──
+                isPtrValueNullable -> {
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)
                     impl.appendLine("$ind$ct ${s.name} /* notnull */ = $expr;")
                     impl.appendLine("${ind}bool ${s.name}\$has = true;")
                 }
-                // ── Heap<T>? / Ptr<T>? / Value<T>? : pointer nullable via NULL ──
-                isAnyPtrNull -> {
+                // ── Nullable pointer (@Ptr T?): can be NULL ──
+                isPtrNullable -> {
                     if (s.init is NullLit) {
                         impl.appendLine("$ind$ct ${s.name} /* nullable */ = NULL;")
                     } else {
@@ -2661,7 +2608,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         flushPreStmts(ind)
                         impl.appendLine("$ind$ct ${s.name} /* nullable */ = $expr;")
                     }
-                    // Emit $len companion for malloc<Array<T>>(n) / calloc<Array<T>>(n)
+                    // Emit $len companion for HeapAlloc<Array<T>>(n)
                     if (isAllocArrayCall(s.init)) {
                         val allocSize = extractAllocSize(s.init)
                         if (allocSize != null) {
@@ -2670,7 +2617,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     }
                 }
                 // ── Value nullable — use Optional struct ──
-                isNullable -> {
+                isValueNullable -> {
                     val optType = optCTypeName("${t}?")
                     markOptional(s.name)
                     if (s.init is NullLit) {
@@ -2724,25 +2671,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     flushPreStmts(ind)
                     impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
                     // Array type: emit $len companion (copy from temp's $len)
-                    // Skip for Heap/Ptr/Value-wrapped arrays which are already pointers
-                    if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("^") && !t.endsWith("&")
-                        && !t.endsWith("*?") && !t.endsWith("^?") && !t.endsWith("&?")
-                        && !t.endsWith("*#") && !t.endsWith("^#") && !t.endsWith("&#")) {
+                    // Skip for pointer-wrapped arrays which are already pointers
+                    if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?")) {
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = ${expr}\$len;")
                     }
                 }
             }
         } else {
             when {
-                isAnyValNull -> {
+                isPtrValueNullable -> {
                     impl.appendLine("$ind$ct ${s.name} = NULL; /* warning: must be initialized */")
                     impl.appendLine("${ind}bool ${s.name}\$has = false;")
                 }
-                isAnyPtrNull -> {
+                isPtrNullable -> {
                     impl.appendLine("$ind$ct ${s.name} = NULL;")
                 }
                 else -> {
-                    if (isNullable) {
+                    if (isValueNullable) {
                         val optType = optCTypeName("${t}?")
                         markOptional(s.name)
                         impl.appendLine("$ind$optType ${s.name} = ${optNone(optType)};")
@@ -3009,8 +2954,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val target = genLValue(s.target, method)
         val varName = (s.target as? NameExpr)?.name
         val varType = if (varName != null) lookupVar(varName) else null
-        val isAnyValNullVar = isHeapValueNullable(varType) || isPtrValueNullable(varType) || isValueValueNullable(varType)
-        val isAnyPtrNullVar = isHeapPtrNullable(varType) || isPtrPtrNullable(varType) || isValuePtrNullable(varType)
+        val isAnyValNullVar = varType != null && varType.endsWith("*#")
+        val isAnyPtrNullVar = varType != null && varType.endsWith("*?")
 
         when {
             // value-nullable (*<T?> / ^<T?> / &<T?>) = null → clear value, keep pointer
@@ -3176,9 +3121,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // If receiver is value-nullable (*<T?>), also set $has = true
                 val recvVarName = (e.callee.obj as? NameExpr)?.name
                 val recvVarType = if (recvVarName != null) lookupVar(recvVarName) else null
-                if (isHeapValueNullable(recvVarType) || isPtrValueNullable(recvVarType) || isValueValueNullable(recvVarType)) {
-                    impl.appendLine("$ind${recvVarName}\$has = true;")
-                }
+
                 return
             }
         }
@@ -3190,8 +3133,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (recvType != null) {
                 val guard = when {
                     // Pointer-nullable (Heap<T>?, Ptr<T>?, Value<T>?, raw T*?) → NULL check
-                    isHeapPtrNullable(recvType) || isPtrPtrNullable(recvType) ||
-                            isValuePtrNullable(recvType) || (recvType.endsWith("*?") && !recvType.endsWith("*#")) ->
+                    recvType.endsWith("*?") ->
                         "$recvName != NULL"
                     // Value-nullable Optional
                     recvType.endsWith("?") && isValueNullableType(recvType) ->
@@ -3248,7 +3190,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (t.endsWith("?")) {
             val baseT = t.removeSuffix("?")
             val isValNull = isValueNullableType(t)
-            val isPtrNull = !isValNull && (isHeapPtrNullable(t) || isPtrPtrNullable(t) || isValuePtrNullable(t) || t.endsWith("*?"))
+            val isPtrNull = !isValNull && t.endsWith("*?")
             val hasExpr = when {
                 isValNull  -> "$expr.tag == SOME"
                 isPtrNull  -> "$expr != NULL"
@@ -3703,7 +3645,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val r = genExpr(e.right)
             if (lt != null && isValueNullableType(lt)) {
                 "($l.tag == SOME ? $l.value : $r)"
-            } else if (lt != null && (isHeapPtrNullable(lt) || isPtrPtrNullable(lt) || isValuePtrNullable(lt) || lt.endsWith("*?"))) {
+            } else if (lt != null && lt.endsWith("*?")) {
                 "($l != NULL ? $l : $r)"
             } else {
                 "($l != NULL ? $l : $r)"
@@ -3777,18 +3719,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val varName = (nonNull as? NameExpr)?.name
             val varType = if (varName != null) lookupVar(varName) else null
             if (varType != null) {
-                // Heap<T>? / Ptr<T>? / Value<T>? → compare pointer to NULL
-                if (isHeapPtrNullable(varType) || isPtrPtrNullable(varType) || isValuePtrNullable(varType)) {
-                    return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
-                }
-                // Heap<T?> / Ptr<T?> / Value<T?> → use $has (still old pattern for these)
-                if (isHeapValueNullable(varType) || isPtrValueNullable(varType) || isValueValueNullable(varType)) {
-                    val has = "${varName}\$has"
-                    return if (e.op == "==") "!$has" else has
-                }
-                // Raw pointer nullable (e.g. Int*? from malloc<Array<T>>) → compare to NULL
+                // @Ptr T? → compare pointer to NULL
                 if (varType.endsWith("*?")) {
                     return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
+                }
+                // Legacy Heap<T?>/Ptr<T?>/Value<T?> → use $has (value-nullable behind pointer)
+                if (varType.endsWith("*#")) {
+                    val has = "${varName}\$has"
+                    return if (e.op == "==") "!$has" else has
                 }
                 // Value nullable → use Optional tag
                 if (varType.endsWith("?") && isValueNullableType(varType)) {
@@ -3891,9 +3829,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val recvType = inferExprType(e.callee.obj)
             if (recvType != null && recvType.endsWith("?")) {
                 val baseType = recvType.removeSuffix("?")
-                val isIndirectArray = baseType.endsWith("^") && isArrayType(baseType) ||
-                                      baseType.endsWith("*") && isArrayType(baseType) ||
-                                      baseType.endsWith("&") && isArrayType(baseType)
+                val isIndirectArray = baseType.endsWith("*") && isArrayType(baseType)
                 if (!hasNullableReceiverExt(baseType, e.callee.name) && !isIndirectArray && !isArrayType(baseType)) {
                     val recvSrc = (e.callee.obj as? NameExpr)?.name ?: e.callee.obj.toString()
                     codegenError("Only safe (?.) calls are allowed on a nullable receiver of type '$recvType': $recvSrc.${e.callee.name}()")
@@ -4183,10 +4119,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (argIdx < args.size) {
                 val arg = args[argIdx]
                 val expr = genExpr(arg.expr)
-                if (paramType.endsWith("^") || paramType.endsWith("^?") || paramType.endsWith("^#") ||
-                           paramType.endsWith("*") || paramType.endsWith("*?") || paramType.endsWith("*#") ||
-                           paramType.endsWith("&") || paramType.endsWith("&?") || paramType.endsWith("&#")) {
-                    // Heap/Ptr/Value-wrapped type — pass raw pointer (NULL for null)
+                if (paramType.endsWith("*") || paramType.endsWith("*?")) {
+                    // @Ptr-annotated type — pass raw pointer (NULL for null)
                     if (arg.expr is NullLit) {
                         parts += "NULL"
                         if (isArrayType(paramType)) parts += "0"
@@ -4231,9 +4165,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     }
                 } else if (interfaces.containsKey(paramType)) {
                     val argType = inferExprType(arg.expr)
-                    val baseArgType = argType?.trimEnd('*', '&', '^', '?', '#')
+                    val baseArgType = argType?.trimEnd('*', '?')
                     if (baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true) {
-                        if (argType != null && (argType.endsWith("&") || argType.endsWith("^"))) {
+                        if (argType != null && argType.endsWith("*")) {
                             parts += "${pfx(baseArgType)}_as_$paramType($expr)"
                         } else if (argType != null && argType.endsWith("*")) {
                             parts += "${pfx(baseArgType)}_as_$paramType($expr)"
@@ -4402,95 +4336,33 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return recv
         }
 
-        // Heap class pointer methods
-        val heapBase = heapClassName(recvType)
-        if (heapBase != null) {
-            // If class defines the method, delegate to it (e.g. class has its own set/get)
-            val classHasMethod = classes[heapBase]?.methods?.any { it.name == method } == true
+        // @Ptr/@Heap/@Value-annotated class pointer methods
+        val pointerBase = pointerClassName(recvType)
+        if (pointerBase != null) {
+            // If class defines the method, delegate to it
+            val classHasMethod = classes[pointerBase]?.methods?.any { it.name == method } == true
             if (classHasMethod) {
-                val methodDecl = classes[heapBase]?.methods?.find { it.name == method }
+                val methodDecl = classes[pointerBase]?.methods?.find { it.name == method }
                 val isExt = methodDecl?.receiver != null
                 val recvArg = if (isExt) "(*$recv)" else recv
                 val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
                 if (methodDecl?.returnType?.nullable == true) {
-                    return genNullableMethodCall(heapBase, "${pfx(heapBase)}_$method", allArgs, methodDecl)
+                    return genNullableMethodCall(pointerBase, "${pfx(pointerBase)}_$method", allArgs, methodDecl)
                 }
-                return "${pfx(heapBase)}_$method($allArgs)"
+                return "${pfx(pointerBase)}_$method($allArgs)"
             }
             when (method) {
-                // .value() → same pointer, typed as Value<T> (no copy)
                 "value" -> return recv
-                // .deref() → stack copy: *p
                 "deref" -> return "(*$recv)"
-                // .set(val) — mostly handled at statement level (emitExprStmt), fallback:
                 "set" -> return "(*$recv = $argStr)"
-                // .copy() on data class
-                "copy" -> if (classes[heapBase]?.isData == true) {
-                    return genDataClassCopy(recv, heapBase, args, heap = true)
+                "copy" -> if (classes[pointerBase]?.isData == true) {
+                    return genDataClassCopy(recv, pointerBase, args, heap = true)
                 }
-                // .toHeap() on heap pointer — identity, already on heap
-                "toHeap" -> return recv
-                // .toPtr() → same pointer, just changes type
-                "toPtr" -> return recv
+                "toHeap", "toPtr" -> return recv
             }
             // general class method — pointer passed directly
             val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
-            return "${pfx(heapBase)}_$method($allArgs)"
-        }
-
-        // Ptr<T> methods
-        val ptrBase = ptrClassName(recvType)
-        if (ptrBase != null) {
-            val classHasMethod = classes[ptrBase]?.methods?.any { it.name == method } == true
-            if (classHasMethod) {
-                val methodDecl = classes[ptrBase]?.methods?.find { it.name == method }
-                val isExt = methodDecl?.receiver != null
-                val recvArg = if (isExt) "(*$recv)" else recv
-                val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
-                if (methodDecl?.returnType?.nullable == true) {
-                    return genNullableMethodCall(ptrBase, "${pfx(ptrBase)}_$method", allArgs, methodDecl)
-                }
-                return "${pfx(ptrBase)}_$method($allArgs)"
-            }
-            when (method) {
-                // .value() → same pointer, typed as Value<T> (no copy)
-                "value" -> return recv
-                // .deref() → stack copy: *p
-                "deref" -> return "(*$recv)"
-                // .set(val) → *p = val
-                "set" -> return "(*$recv = $argStr)"
-                // .copy() on data class
-                "copy" -> if (classes[ptrBase]?.isData == true) {
-                    return genDataClassCopy(recv, ptrBase, args, heap = true)
-                }
-                // .toPtr() → identity
-                "toPtr" -> return recv
-                // .toHeap() → identity (same pointer)
-                "toHeap" -> return recv
-            }
-            // general class method — pointer passed directly
-            val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
-            return "${pfx(ptrBase)}_$method($allArgs)"
-        }
-
-        // Value<T> — transparent delegation: all method calls go to the class
-        val valBase = valueClassName(recvType)
-        if (valBase != null) {
-            when (method) {
-                // .deref() → stack copy: *p
-                "deref" -> return "(*$recv)"
-                // .toPtr() → same pointer, just changes type
-                "toPtr" -> return recv
-            }
-            // All other method calls → class method, deref for extension functions
-            val methodDecl = classes[valBase]?.methods?.find { it.name == method }
-            val isExt = methodDecl?.receiver != null
-            val recvArg = if (isExt) "(*$recv)" else recv
-            val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
-            if (methodDecl?.returnType?.nullable == true) {
-                return genNullableMethodCall(valBase, "${pfx(valBase)}_$method", allArgs, methodDecl)
-            }
-            return "${pfx(valBase)}_$method($allArgs)"
+            return "${pfx(pointerBase)}_$method($allArgs)"
         }
 
         // Interface method dispatch → d.vt->method(d.obj, args)
@@ -4640,19 +4512,50 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val recvType = if (recvName != null) lookupVar(recvName) else null
         val isValueNullRecv = recvType != null && recvType.endsWith("?") && isValueNullableType(recvType)
         val dotExpr = DotExpr(dot.obj, dot.name)
+
+        // Handle .toPtr() safe-call: guard first, then take address
+        if (dot.name == "toPtr" && isValueNullRecv && recvName != null) {
+            val baseClass = recvType!!.removeSuffix("?")
+            val cName = pfx(baseClass)
+            val t = tmp()
+            preStmts += "$cName* $t = ($recvName.tag == SOME ? &${recvName}.value : NULL);"
+            defineVar(t, "${baseClass}*?")
+            return t
+        }
+        if (dot.name == "toPtr" && recvType != null && recvName != null) {
+            val cleanType = recvType.removeSuffix("?")
+            if (isArrayType(cleanType)) {
+                val t = tmp()
+                val guard = if (recvType.endsWith("?")) "${recvName}\$has" else "true"
+                val arrCType = cTypeStr(cleanType)
+                preStmts += "$arrCType $t = $guard ? $recvName : NULL;"
+                preStmts += "int32_t ${t}\$len = $guard ? ${recvName}\$len : 0;"
+                defineVar(t, "${cleanType}*?")
+                return t
+            }
+        }
+
         val call = genMethodCall(dotExpr, args)
         // Determine the null guard expression
         val guard = when {
-            recvType != null && (isHeapPtrNullable(recvType) || isPtrPtrNullable(recvType) ||
-                    isValuePtrNullable(recvType) || (recvType.endsWith("*?") && !recvType.endsWith("*#"))) ->
+            recvType != null && recvType.endsWith("*?") ->
                 "$recvName != NULL"
             isValueNullRecv -> "$recvName.tag == SOME"
+            recvType != null && recvType.endsWith("#") ->
+                "${recvName}\$has"
             else -> "${recvName}\$has"
         }
         // Determine the return type
         val retType = inferMethodReturnType(dotExpr, args)
         if (retType == null || retType == "Unit") {
             return "($guard ? ($call, 0) : 0)"
+        }
+        // Pointer return (@Ptr): use NULL for null, no Optional wrapping
+        if (retType.endsWith("*")) {
+            val t = tmp()
+            preStmts += "${cTypeStr(retType)} $t = $guard ? $call : NULL;"
+            defineVar(t, "${retType}?")
+            return t
         }
         // Emit temp as Optional
         val optType = optCTypeName("${retType}?")
@@ -4679,9 +4582,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val isEnumOrObj = e.obj is NameExpr && (enums.containsKey(e.obj.name) || objects.containsKey(e.obj.name) || classCompanions.containsKey(e.obj.name))
         if (recvType != null && recvType.endsWith("?") && !isEnumOrObj) {
             val baseType = recvType.removeSuffix("?")
-            val isIndirectArray = baseType.endsWith("^") && isArrayType(baseType) ||
-                                  baseType.endsWith("*") && isArrayType(baseType) ||
-                                  baseType.endsWith("&") && isArrayType(baseType)
+            val isIndirectArray = baseType.endsWith("*") && isArrayType(baseType)
             if (!isIndirectArray && !isArrayType(baseType)) {
                 val recvSrc = (e.obj as? NameExpr)?.name ?: e.obj.toString()
                 codegenError("Only safe (?.) access is allowed on a nullable receiver of type '$recvType': $recvSrc.${e.name}")
@@ -4709,7 +4610,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.name == "length" && recvType == "String") return "$recv.len"
 
         // Heap<T> / Ptr<T> / Value<T>: p->field (auto-deref through pointer)
-        if (heapClassName(recvType) != null || ptrClassName(recvType) != null || valueClassName(recvType) != null) {
+        if (pointerClassName(recvType) != null) {
             return "$recv->${e.name}"
         }
 
@@ -4737,8 +4638,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (isValueNullRecv) "\$self.tag == SOME" else "\$self\$has"
         } else if (recvName != null && recvType != null) {
             when {
-                isHeapPtrNullable(recvType) || isPtrPtrNullable(recvType) ||
-                        isValuePtrNullable(recvType) || (recvType.endsWith("*?") && !recvType.endsWith("*#")) ->
+                recvType.endsWith("*?") ->
                     "$recvName != NULL"
                 isValueNullRecv -> "$recvName.tag == SOME"
                 recvType.endsWith("#") || recvType.endsWith("?") ->
@@ -4815,12 +4715,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             preStmts += "if ($name.tag == NONE) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
             // Return the unwrapped value
             return "$name.value"
-        }
-        // Heap<T?>/Ptr<T?>/Value<T?> — still uses $has
-        if (innerType != null && innerType.endsWith("#") && e.expr is NameExpr) {
-            val name = (e.expr as NameExpr).name
-            preStmts += "if (!${name}\$has) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
-            return inner
         }
 
         // Fallback: no check (non-nullable expression)
@@ -5468,7 +5362,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.callee is SafeDotExpr) {
             val retType = inferMethodReturnType(DotExpr(e.callee.obj, e.callee.name), e.args) ?: return null
             if (retType == "Unit") return retType
-            return if (retType.endsWith("?") || retType.endsWith("#")) retType else "${retType}?"
+            return if (retType.endsWith("?")) retType else "${retType}?"
         }
         return null
     }
@@ -5524,66 +5418,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 else -> null
             }
         }
-        // Heap pointer methods
-        val heapBase = heapClassName(recvType)
-        if (heapBase != null) {
-            // Class method takes priority over built-in pointer methods
-            val classMethod = classes[heapBase]?.methods?.find { it.name == method }
+        // @Ptr/@Heap/@Value pointer methods (type return inference)
+        val pointerBase = pointerClassName(recvType)
+        if (pointerBase != null) {
+            val classMethod = classes[pointerBase]?.methods?.find { it.name == method }
             if (classMethod != null) {
-                return resolveMethodReturnType(heapBase, classMethod.returnType)
+                return resolveMethodReturnType(pointerBase, classMethod.returnType)
             }
-            // Extension function on the base class
-            val extFun = extensionFuns[heapBase]?.find { it.name == method }
+            val extFun = extensionFuns[pointerBase]?.find { it.name == method }
             if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
             return when (method) {
-                "value" -> "${heapBase}&"               // .value() → Value<T> (no copy)
-                "deref" -> heapBase                     // .deref() → T (stack copy)
+                "value" -> "${pointerBase}*"
+                "deref" -> pointerBase
                 "set" -> "Unit"
-                "copy" -> heapBase                      // .copy() → T (stack copy)
-                "toHeap" -> "${heapBase}*"              // identity, already heap
-                "toPtr" -> "${heapBase}^"               // .toPtr() → Ptr<T>
+                "copy" -> pointerBase
+                "toHeap", "toPtr" -> "${pointerBase}*"
                 else -> null
-            }
-        }
-        // Ptr<T> methods
-        val ptrBase = ptrClassName(recvType)
-        if (ptrBase != null) {
-            val classMethod = classes[ptrBase]?.methods?.find { it.name == method }
-            if (classMethod != null) {
-                return resolveMethodReturnType(ptrBase, classMethod.returnType)
-            }
-            val extFun = extensionFuns[ptrBase]?.find { it.name == method }
-            if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
-            return when (method) {
-                "value" -> "${ptrBase}&"                // .value() → Value<T> (no copy)
-                "deref" -> ptrBase                      // .deref() → T (stack copy)
-                "set" -> "Unit"
-                "copy" -> ptrBase
-                "toPtr" -> "${ptrBase}^"                // identity
-                "toHeap" -> "${ptrBase}*"
-                else -> null
-            }
-        }
-        // Value<T> methods — transparent delegation
-        val valBase = valueClassName(recvType)
-        if (valBase != null) {
-            return when (method) {
-                "deref" -> valBase                      // .deref() → T (stack copy)
-                "toPtr" -> "${valBase}^"                // .toPtr() → Ptr<T>
-                else -> {
-                    val m = classes[valBase]?.methods?.find { it.name == method }
-                    if (m != null) return resolveMethodReturnType(valBase, m.returnType)
-                    val extFun = extensionFuns[valBase]?.find { it.name == method }
-                    if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
-                    null
-                }
             }
         }
         // Stack class methods
-        if (classes.containsKey(recvType)) {
-            if (method == "copy") return recvType        // .copy() → T (stack copy)
-            if (method == "toHeap") return "${recvType}*" // .toHeap() → Heap<T>
-            if (method == "toPtr") return "${recvType}^"  // .toPtr() → Ptr<T>
+        val baseClass = recvType.removeSuffix("?")
+        if (classes.containsKey(baseClass)) {
+            if (method == "copy") return baseClass
+            if (method == "toHeap" || method == "toPtr") return "${baseClass}*"
         }
         // Interface method
         val iface = interfaces[recvType]
@@ -5731,9 +5588,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for (p in params) {
             if (p.isVararg) continue
             val resolved = resolveTypeName(p.type)
-            val isIndirect = resolved.endsWith("^") || resolved.endsWith("^?") || resolved.endsWith("^#") ||
-                             resolved.endsWith("*") || resolved.endsWith("*?") || resolved.endsWith("*#") ||
-                             resolved.endsWith("&") || resolved.endsWith("&?") || resolved.endsWith("&#")
+            val isIndirect = resolved.endsWith("*") || resolved.endsWith("*?")
             // Both nullable and non-nullable array params use ktc_ArrayTrampoline.
             // Non-nullable: copy unconditionally. Nullable: copy only when data != NULL.
             if (isArrayType(resolved) && !hasSizeAnnotation(p.type) && !isIndirect) {
@@ -5758,10 +5613,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     " /* nullable */" for Ptr<T>? (NULL is valid), " /* notnull */" for Ptr<T>.
     Returns "" for non-pointer types so the call site is always unconditional.
     */
-    private fun ptrNullComment(inResolved: String): String = when { // inResolved — resolved Kotlin type string
-        inResolved.endsWith("^?") || inResolved.endsWith("*?") || inResolved.endsWith("&?") -> " /* nullable */"
-        inResolved.endsWith("^#") || inResolved.endsWith("*#") || inResolved.endsWith("&#") -> " /* notnull */"
-        inResolved.endsWith("^")  || inResolved.endsWith("*")  || inResolved.endsWith("&")  -> " /* notnull */"
+    private fun ptrNullComment(inResolved: String): String = when {
+        inResolved.endsWith("*?") -> " /* nullable */"
+        inResolved.endsWith("*")  -> " /* notnull */"
         else -> ""
     }
 
@@ -5775,11 +5629,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 parts += "ktc_Int ${p.name}\$len"
             } else if (isFuncType(resolved)) {
                 parts += cFuncPtrDecl(resolved, p.name)
-            } else if (resolved.endsWith("^") || resolved.endsWith("^?") || resolved.endsWith("^#") ||
-                       resolved.endsWith("*") || resolved.endsWith("*?") || resolved.endsWith("*#") ||
-                       resolved.endsWith("&") || resolved.endsWith("&?") || resolved.endsWith("&#")) {
-                // Heap/Ptr/Value-wrapped type: raw pointer (NULL-capable for nullable)
-                // Nullability lives in p.type.nullable, not in the resolved suffix (pointer types don't append '?')
+            } else if (resolved.endsWith("*")) {
+                // @Ptr/@Heap/@Value-annotated type: raw pointer
+                // Nullability lives in p.type.nullable
                 val vNullComment = if (p.type.nullable) " /* nullable */" else " /* notnull */"
                 parts += "${cTypeStr(resolved)} ${p.name}$vNullComment"
                 if (isArrayType(resolved)) parts += "int32_t ${p.name}\$len"
@@ -5806,8 +5658,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Function pointer type — can't be expressed as a simple type, use void* as fallback
         // (actual declarations use cFuncPtrDecl which embeds the variable name)
         t.startsWith("Fun(") -> "void*"
-        // Strip nullable marker — handled by companion $has variable
+        // Strip nullable marker — handled by companion $has variable or Optional
         t.endsWith("?") -> cTypeStr(t.dropLast(1))
+        // Strip legacy heap-value-nullable marker — also handled by $has
+        t.endsWith("#") -> cTypeStr(t.dropLast(1))
         // Strip heap-value-nullable marker — also handled by $has
         t.endsWith("#") -> cTypeStr(t.dropLast(1))
         t == "Byte"    -> "ktc_Byte"
@@ -5850,19 +5704,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "UIntOptArray"    -> "ktc_UInt_Optional*"
         t == "ULongOptArray"   -> "ktc_ULong_Optional*"
         t == "StringOptArray"  -> "ktc_String_Optional*"
-        // Typed pointer: "Int*" → "int32_t*", "Vec2*" → "game_Vec2*"
-        t.endsWith("*") -> {
-            val base = t.dropLast(1)
-            if (base.endsWith("Array")) cTypeStr(base) else "${cTypeStr(base)}*"
-        }
-        // Ptr<T>: "Vec2^" → "game_Vec2*" (same C type as Heap)
+        // Pointer type: "Int*" → "int32_t*", "Vec2*" → "game_Vec2*"
         // For array types, don't add another * level — Array is already a pointer
-        t.endsWith("^") -> {
-            val base = t.dropLast(1)
-            if (base.endsWith("Array")) cTypeStr(base) else "${cTypeStr(base)}*"
-        }
-        // Value<T>: "Vec2&" → "game_Vec2*" (same C type as Heap)
-        t.endsWith("&") -> {
+        t.endsWith("*") -> {
             val base = t.dropLast(1)
             if (base.endsWith("Array")) cTypeStr(base) else "${cTypeStr(base)}*"
         }
@@ -5889,7 +5733,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun resolveTypeName(t: TypeRef?): String {
         if (t == null) return "Int"
-        return resolveTypeNameInner(substituteTypeParams(t))
+        val substituted = substituteTypeParams(t)
+        val base = resolveTypeNameInner(substituted)
+        val isPtr = substituted.annotations.any { it.name in setOf("Ptr", "Heap", "Value") }
+        return if (isPtr) "${base}*" else base
     }
 
     /** Recursively substitute type parameters throughout a TypeRef tree. */
@@ -5900,7 +5747,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val newFuncParams = t.funcParams?.map { substituteTypeParams(it) }
         val newFuncReturn = t.funcReturn?.let { substituteTypeParams(it) }
         return if (newName != t.name || newTypeArgs != t.typeArgs || newFuncParams != t.funcParams || newFuncReturn != t.funcReturn) {
-            TypeRef(newName, t.nullable, newTypeArgs, newFuncParams, newFuncReturn)
+            TypeRef(newName, t.nullable, newTypeArgs, newFuncParams, newFuncReturn, t.annotations)
         } else t
     }
 
@@ -5974,35 +5821,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 else      -> { classArrayTypes.add(elem); "${elem}Array" }
             }
         }
-        // Heap<MyClass> → "MyClass*"; Heap<MyClass?> → "MyClass*#"
-        // Heap<Array<T>> → "TArray*"
-        if (t.name == "Heap" && t.typeArgs.isNotEmpty()) {
+        // Heap/Ptr/Value<T> (legacy type-constructor syntax) → "T*"
+        // Heap/Ptr/Value<T?> (legacy, inner nullable) → "T*#" — keeps $has for backward compat
+        // @Ptr/@Heap/@Value also handled in resolveTypeName via annotations
+        if (t.name in setOf("Heap", "Ptr", "Value") && t.typeArgs.isNotEmpty()) {
             val inner = t.typeArgs[0]
-            if (inner.name == "Array") {
-                return "${resolveTypeName(inner)}*"
-            }
-            val resolved = resolveTypeName(inner)
-            return if (inner.nullable) "${resolved}*#" else "${resolved}*"
-        }
-        // Ptr<MyClass> → "MyClass^"; Ptr<MyClass?> → "MyClass^#"
-        // Ptr<Array<T>> → "TArray^"
-        if (t.name == "Ptr" && t.typeArgs.isNotEmpty()) {
-            val inner = t.typeArgs[0]
-            if (inner.name == "Array") {
-                return "${resolveTypeName(inner)}^"
-            }
-            val resolved = resolveTypeName(inner)
-            return if (inner.nullable) "${resolved}^#" else "${resolved}^"
-        }
-        // Value<MyClass> → "MyClass&"; Value<MyClass?> → "MyClass&#"
-        // Value<Array<T>> → "TArray&"
-        if (t.name == "Value" && t.typeArgs.isNotEmpty()) {
-            val inner = t.typeArgs[0]
-            if (inner.name == "Array") {
-                return "${resolveTypeName(inner)}&"
-            }
-            val resolved = resolveTypeName(inner)
-            return if (inner.nullable) "${resolved}&#" else "${resolved}&"
+            val innerNullable = inner.nullable
+            val base = if (inner.name == "Array") resolveTypeName(inner) else resolveTypeName(inner)
+            return if (innerNullable) "${base}*#" else "${base}*"
         }
         return t.name
     }
@@ -6014,25 +5840,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "Boolean" -> "false"
         t == "Char"   -> "'\\0'"
         t == "String" -> "ktc_str(\"\")"
-        t.endsWith("*") || t.endsWith("*?") || t.endsWith("*#") -> "NULL"
-        t.endsWith("^") || t.endsWith("^?") || t.endsWith("^#") -> "NULL"
-        t.endsWith("&") || t.endsWith("&?") || t.endsWith("&#") -> "NULL"
+        t.endsWith("*") || t.endsWith("*?") -> "NULL"
         else -> {
             // Struct default — needs cast for validity as function argument
-            val ct = cTypeStr(t.removeSuffix("?").removeSuffix("#"))
+            val ct = cTypeStr(t.removeSuffix("?"))
             "($ct){0}"
         }
     }
 
-    /** True if the internal type name represents an array (IntArray, LongArray, Vec2Array, etc.). Strips Ptr/Heap/Value/nullable suffixes. */
+    /** True if the internal type name represents an array (IntArray, LongArray, Vec2Array, etc.). Strips pointer/nullable suffixes. */
     private fun isArrayType(t: String): Boolean {
-        val base = t.removeSuffix("?").removeSuffix("#").removeSuffix("*").removeSuffix("^").removeSuffix("&")
+        val base = t.removeSuffix("?").removeSuffix("*")
         return base.endsWith("Array")
     }
 
     /** True if the TypeRef is a raw Array<T> or primitive array type (not wrapped in Heap, Ptr, or Value). */
     private fun isRawArrayTypeRef(t: TypeRef): Boolean {
         if (hasSizeAnnotation(t)) return false
+        if (t.annotations.any { it.name in setOf("Ptr", "Heap", "Value") }) return false
         if (t.name == "Array") return true
         if (t.name in setOf(
             "ByteArray", "ShortArray", "IntArray", "LongArray",
