@@ -56,10 +56,27 @@ fun main(args: Array<String>) {
     val parsedFiles = mutableListOf<ParsedSource>()
 
     // Load stdlib .kt files from resources (package ktc, auto-imported)
-    val stdlibIndex = object {}.javaClass.getResourceAsStream("/stdlib/index.txt")
-    if (stdlibIndex != null) {
-        val stdlibFileNames = stdlibIndex.bufferedReader().readLines().filter { it.isNotBlank() }
-        for (name in stdlibFileNames) {
+    // Auto-discover all .kt files in /stdlib/ — no index.txt needed
+    val stdlibDir = object {}.javaClass.getResource("/stdlib") ?: object {}.javaClass.getResource("/stdlib/")
+    if (stdlibDir != null) {
+        val stdlibFiles = when (stdlibDir.protocol) {
+            "jar" -> {
+                val connection = stdlibDir.openConnection()
+                val jarFile = (connection as java.net.JarURLConnection).jarFile
+                jarFile.entries().asSequence()
+                    .filter { !it.isDirectory && it.name.startsWith("stdlib/") && it.name.endsWith(".kt") }
+                    .map { it.name.removePrefix("stdlib/") }
+                    .toList()
+            }
+            "file" -> {
+                java.io.File(stdlibDir.toURI()).listFiles()
+                    ?.filter { it.name.endsWith(".kt") }
+                    ?.map { it.name }
+                    ?: emptyList()
+            }
+            else -> emptyList()
+        }
+        for (name in stdlibFiles.sorted()) {
             val res = object {}.javaClass.getResourceAsStream("/stdlib/$name")
             if (res != null) {
                 val source = res.bufferedReader().readText()
