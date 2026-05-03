@@ -2820,13 +2820,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val resolved = resolveTypeName(bp.type)
         if (!isArrayType(resolved)) return
         if (hasSizeAnnotation(bp.type)) return
+        val fieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
         val allocSize = extractAllocSize(bp.init)
         if (allocSize != null) {
-            impl.appendLine("    \$self.${bp.name}\$len = ${genExpr(allocSize)};")
+            impl.appendLine("    \$self.$fieldName\$len = ${genExpr(allocSize)};")
         } else if (bp.init is NameExpr) {
-            // Copy $len from a ctor param or local variable with the same name
             val initName = (bp.init as NameExpr).name
-            impl.appendLine("    \$self.${bp.name}\$len = ${initName}\$len;")
+            impl.appendLine("    \$self.$fieldName\$len = ${initName}\$len;")
         }
     }
 
