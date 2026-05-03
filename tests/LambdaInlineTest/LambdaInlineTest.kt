@@ -25,7 +25,7 @@ fun main() {
     val a = arrayOf(1, 2, 3)
     a.let { arr ->
         println("let:")
-        for (i in 0..<a.size) {
+        for (i in 0..<arr.size) {
             print("$i, ")
         }
         println()
@@ -36,7 +36,7 @@ fun main() {
     val b : Array<Int>? = a
     b.let { arr ->
         println("let:")
-        for (i in 0..<a.size) {
+        for (i in 0..<arr.size) {
             print("$i, ")
         }
         println()
@@ -47,7 +47,7 @@ fun main() {
     val c : Array<Int>? = null
     c?.let { arr ->
         println("let:")
-        for (i in 0..<a.size) {
+        for (i in 0..<arr.size) {
             print("$i, ")
         }
         println()
