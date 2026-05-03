@@ -46,14 +46,23 @@ uint32_t ktc_rand(void);
 uint32_t ktc_rand_range(uint32_t bound);
 
 /* ═══════════════════════════ alloca compat ═══════════════════════════ */
-#ifdef _MSC_VER
-  #include <malloc.h>
-  #define ktc_alloca(size) _alloca(size)
-#elif defined(__GNUC__) || defined(__clang__)
-  #define ktc_alloca(size) __builtin_alloca(size)
-#else
-  #include <alloca.h>
-  #define ktc_alloca(size) alloca(size)
+#if defined(_MSC_VER)
+    #include <malloc.h>
+    #define ktc_alloca(size) _alloca(size)
+
+#elif defined(__clang__) || defined(__GNUC__)
+    #define ktc_alloca(size) __builtin_alloca(size)
+
+#elif defined(__has_builtin)
+    #if __has_builtin(__builtin_alloca)
+        #define ktc_alloca(size) __builtin_alloca(size)
+    #endif
+
+#endif
+
+#ifndef ktc_alloca
+    #include <alloca.h>
+    #define ktc_alloca(size) alloca(size)
 #endif
 
 /* ═══════════════════════════ Array Trampoline ════════════════════════ */
