@@ -25,10 +25,12 @@ class Parser(private val tokens: List<Token>) {
         // track 'operator' and 'private' modifiers
         val isOperator = at(TokenType.IDENT) && cur().value == "operator"
         if (isOperator) advance()
+        val isInline = at(TokenType.IDENT) && cur().value == "inline" && peek().type == TokenType.FUN
+        if (isInline) advance()
         val isPrivate = at(TokenType.PRIVATE)
         if (isPrivate) advance()
         return when {
-            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate)
+            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate, isInline = isInline)
             at(TokenType.DATA)   -> { if (isPrivate) error("private with data not supported"); advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
@@ -54,7 +56,7 @@ class Parser(private val tokens: List<Token>) {
 
     // ── fun ──────────────────────────────────────────────────────────
 
-    private fun parseFunDecl(isOperator: Boolean = false, isPrivate: Boolean = false): FunDecl {
+    private fun parseFunDecl(isOperator: Boolean = false, isPrivate: Boolean = false, isInline: Boolean = false): FunDecl {
         expect(TokenType.FUN)
         // Parse optional type parameters: fun <T, U> name(...)
         val typeParams = if (at(TokenType.LT)) {
@@ -100,7 +102,7 @@ class Parser(private val tokens: List<Token>) {
             else -> null
         }
         skipTerminator()
-        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator, isPrivate)
+        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator, isPrivate, isInline)
     }
 
     private fun parseParamList(): List<Param> {
@@ -506,7 +508,8 @@ class Parser(private val tokens: List<Token>) {
                     advance(); nesting++; skipNL()
                     val args = parseArgList()
                     expect(TokenType.RPAREN); nesting--
-                    CallExpr(e, args)
+                    val allArgs = if (at(TokenType.LBRACE)) args + Arg(null, parseLambdaExpr()) else args
+                    CallExpr(e, allArgs)
                 }
                 // Type-parameterized call: malloc<Int>(n)
                 at(TokenType.LT) && e is NameExpr && looksLikeTypeArgs() -> {
@@ -570,6 +573,7 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.COLON_COLON) -> { advance(); FunRefExpr(expectIdent()) }
             at(TokenType.IF)         -> parseIfExpr()
             at(TokenType.WHEN)       -> parseWhenExpr()
+            at(TokenType.LBRACE)     -> parseLambdaExpr()
             at(TokenType.LPAREN)     -> { advance(); nesting++; skipNL(); val e = parseExpr(); skipNL(); expect(TokenType.RPAREN); nesting--; e }
             else -> error("Expected expression, got ${cur()}")
         }
@@ -852,7 +856,48 @@ class Parser(private val tokens: List<Token>) {
         TokenType.TRUE, TokenType.FALSE, TokenType.NULL, TokenType.THIS,
         TokenType.IDENT, TokenType.LPAREN, TokenType.IF, TokenType.WHEN,
         TokenType.COLON_COLON,
-        TokenType.MINUS, TokenType.EXCL, TokenType.PLUS_PLUS, TokenType.MINUS_MINUS -> true
+        TokenType.MINUS, TokenType.EXCL, TokenType.PLUS_PLUS, TokenType.MINUS_MINUS,
+        TokenType.LBRACE -> true
         else -> false
+    }
+
+    /*
+    Parses a lambda expression: { [param1, param2, ... ->] statements }
+    The parameter list before -> is optional. If absent, the lambda takes no named params
+    (the body may still reference `it` if the expected type has one parameter).
+    */
+    private fun parseLambdaExpr(): LambdaExpr {
+        expect(TokenType.LBRACE)
+        nesting++
+        skipNL()
+        val params = mutableListOf<String>()
+        val savedPos = pos
+        try {
+            while (at(TokenType.IDENT)) {
+                params += advance().value
+                skipNL()
+                if (at(TokenType.COMMA)) { advance(); skipNL() } else break
+            }
+            if (at(TokenType.ARROW)) {
+                advance(); skipNL()
+            } else {
+                pos = savedPos
+                params.clear()
+            }
+        } catch (_: Exception) {
+            pos = savedPos
+            params.clear()
+        }
+        val stmts = mutableListOf<Stmt>()
+        while (!at(TokenType.RBRACE) && !at(TokenType.EOF)) {
+            skipNL()
+            if (at(TokenType.RBRACE)) break
+            stmts += parseStmt()
+            skipTerminator()
+            skipNL()
+        }
+        expect(TokenType.RBRACE)
+        nesting--
+        return LambdaExpr(params, stmts)
     }
 }

@@ -32,7 +32,8 @@ data class FunDecl(
     val receiver: TypeRef? = null,
     val typeParams: List<String> = emptyList(),
     val isOperator: Boolean = false,
-    val isPrivate: Boolean = false
+    val isPrivate: Boolean = false,
+    val isInline: Boolean = false
 ) : Decl()
 
 data class ClassDecl(
@@ -155,6 +156,7 @@ data class ElvisExpr(val left: Expr, val right: Expr) : Expr()   // ?:
 data class IsCheckExpr(val expr: Expr, val type: TypeRef, val negated: Boolean) : Expr()
 data class CastExpr(val expr: Expr, val type: TypeRef) : Expr()
 data class FunRefExpr(val name: String) : Expr()   // ::functionName
+data class LambdaExpr(val params: List<String>, val body: List<Stmt>) : Expr()
 
 // ═══════════════════════════ Helpers ═══════════════════════════
 

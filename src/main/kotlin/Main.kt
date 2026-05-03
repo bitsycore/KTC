@@ -346,6 +346,11 @@ private fun dumpExpr(e: Expr): String = when (e) {
     is IsCheckExpr -> "${dumpExpr(e.expr)} ${if (e.negated) "!is" else "is"} ${dumpTypeRef(e.type)}"
     is CastExpr -> "${dumpExpr(e.expr)} as ${dumpTypeRef(e.type)}"
     is FunRefExpr -> "::${e.name}"
+    is LambdaExpr -> {
+        val params = if (e.params.isNotEmpty()) e.params.joinToString(", ") + " -> " else ""
+        val body = e.body.joinToString("; ") { dumpStmt(it, 0).trim() }
+        "{ $params$body }"
+    }
 }
 
 private fun dumpWhenCond(c: WhenCond): String = when (c) {

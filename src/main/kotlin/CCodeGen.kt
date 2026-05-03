@@ -60,6 +60,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val enums    = mutableMapOf<String, EnumInfo>()
     private val objects  = mutableMapOf<String, ObjInfo>()
     private val funSigs  = mutableMapOf<String, FunSig>()
+    private val inlineFunDecls = mutableMapOf<String, FunDecl>()
+    private data class ActiveLambda(val expr: LambdaExpr, val paramTypes: List<String>)
+    private var activeLambdas: Map<String, ActiveLambda> = emptyMap()
+    private val lambdaParamSubst = mutableMapOf<String, String>()  // lambda param name → C expression (substitution during inline expansion)
+    private var inlineReturnVar: String? = null  // when non-null, emitReturn assigns here instead of using C return
+    private var currentInd: String = "    "  // current emit indentation, kept in sync by emitStmt
+    private var inlineCounter: Int = 0  // counter for unique inline temp variable names
     private val topProps = mutableSetOf<String>()  // top-level property names (need pfx)
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
     private val interfaces = mutableMapOf<String, IfaceInfo>()
@@ -635,6 +642,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     funSigs["${recvName}.${d.name}"] = FunSig(d.params, d.returnType)
                 } else {
                     funSigs[d.name] = FunSig(d.params, d.returnType)
+                    if (d.isInline) inlineFunDecls[d.name] = d
                 }
             }
             is PropDecl  -> { topProps.add(d.name) }
@@ -810,6 +818,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             is CastExpr -> { scanExprForGenerics(e.expr, skip); scanTypeRefForGenerics(e.type, skip) }
             is StrTemplateExpr -> e.parts.forEach { if (it is ExprPart) scanExprForGenerics(it.expr, skip) }
+            is LambdaExpr -> e.body.forEach { scanStmtForGenerics(it, skip) }
             else -> {}
         }
     }
@@ -1213,6 +1222,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is StrTemplateExpr -> {
                 var f = false
                 for (p in e.parts) if (p is ExprPart && scanExprWithSubst(p.expr, subst)) f = true
+                f
+            }
+            is LambdaExpr -> {
+                var f = false
+                for (stmt in e.body) if (scanStmtWithSubst(stmt, subst)) f = true
                 f
             }
             else -> false
@@ -2404,6 +2418,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── top-level fun ────────────────────────────────────────────────
 
     private fun emitFun(f: FunDecl) {
+        if (f.isInline) return  // inline funs are expanded at call sites, not emitted as C functions
 
         if (f.name != "main") {
             val paramSig = f.params.joinToString(", ") { p -> typeRefToStr(p.type) }
@@ -2541,6 +2556,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun emitStmt(s: Stmt, ind: String, insideMethod: Boolean = false) {
         if (s.line > 0) currentStmtLine = s.line
+        currentInd = ind
         when (s) {
             is VarDeclStmt  -> emitVarDecl(s, ind, insideMethod)
             is AssignStmt   -> emitAssign(s, ind, insideMethod)
@@ -3051,6 +3067,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── return ───────────────────────────────────────────────────────
 
     private fun emitReturn(s: ReturnStmt, ind: String) {
+        val retVar = inlineReturnVar
+        if (retVar != null) {
+            if (s.value != null) {
+                val expr = genExpr(s.value)
+                flushPreStmts(ind)
+                impl.appendLine("$ind$retVar = $expr;")
+            }
+            return
+        }
         if (currentFnReturnsNullable) {
             val optType = currentFnOptReturnCTypeName
             if (s.value == null || s.value is NullLit) {
@@ -3139,6 +3164,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // if / when used as statements
         if (e is IfExpr) { emitIfStmt(e, ind, method); return }
         if (e is WhenExpr) { emitWhenStmt(e, ind, method); return }
+        // Inline function call — expand body at call site
+        if (e is CallExpr && e.callee is NameExpr) {
+            val name = e.callee.name
+            val inlineDecl = inlineFunDecls[name]
+            if (inlineDecl != null) { emitInlineCall(inlineDecl, e.args, ind, method); return }
+            // Active lambda call (inside an inline body expansion)
+            val lambda = activeLambdas[name]
+            if (lambda != null) { emitLambdaCall(lambda, e.args, ind); return }
+        }
         // println / print as statements — avoid GCC statement-expressions
         if (e is CallExpr && e.callee is NameExpr) {
             val name = e.callee.name
@@ -3191,6 +3225,55 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val expr = genExpr(e)
         flushPreStmts(ind)
         impl.appendLine("$ind$expr;")
+    }
+
+    /* Expand an inline function call as a C block at the call site.
+    Non-lambda args become const-initialized locals; lambda args are
+    registered in activeLambdas so their call sites expand inline too. */
+    private fun emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: String, method: Boolean) {
+        val body = decl.body ?: return
+        impl.appendLine("$ind{ // inline ${decl.name}")
+        pushScope()
+        val savedLambdas = activeLambdas
+        val newLambdas = activeLambdas.toMutableMap()
+
+        // Bind each parameter: lambda params go into activeLambdas, value params become locals
+        callArgs.forEachIndexed { i, arg ->
+            val param = decl.params.getOrNull(i) ?: return@forEachIndexed
+            val expr = arg.expr
+            if (expr is LambdaExpr) {
+                // Collect the Kotlin types for the lambda params from the function type
+                val funcParams = param.type.funcParams ?: emptyList()
+                val paramTypes = funcParams.map { resolveTypeName(it) }
+                newLambdas[param.name] = ActiveLambda(expr, paramTypes)
+            } else {
+                val cTypeName = cType(param.type)
+                val cVal = genExpr(expr)
+                impl.appendLine("$ind    $cTypeName ${param.name} = $cVal;")
+                defineVar(param.name, resolveTypeName(param.type))
+            }
+        }
+        activeLambdas = newLambdas
+
+        emitBlock(body, ind, method)
+
+        activeLambdas = savedLambdas
+        popScope()
+        impl.appendLine("$ind}")
+    }
+
+    /* Expand a lambda call inside an inline body (statement position).
+    Lambda params are substituted via lambdaParamSubst rather than declared as C variables,
+    avoiding name-collision issues when lambda params shadow enclosing inline params. */
+    private fun emitLambdaCall(active: ActiveLambda, callArgs: List<Arg>, ind: String) {
+        val savedSubst = lambdaParamSubst.toMap()
+        active.expr.params.forEachIndexed { i, pName ->
+            val arg = callArgs.getOrNull(i)
+            if (arg != null) lambdaParamSubst[pName] = genExpr(arg.expr)
+        }
+        for (stmt in active.expr.body) emitStmt(stmt, ind)
+        lambdaParamSubst.clear()
+        lambdaParamSubst.putAll(savedSubst)
     }
 
     /** Emit println as C statements. */
@@ -3691,11 +3774,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is IsCheckExpr -> "/* is-check */ true"
         is CastExpr    -> "(${cType(e.type)})(${genExpr(e.expr)})"
         is FunRefExpr  -> pfx(e.name)    // ::functionName → C function pointer
+        is LambdaExpr  -> error("Lambda can only be passed to an inline function, not used as a standalone expression")
     }
 
     // ── names (may resolve to enum, object field, self->field) ───────
 
     private fun genName(e: NameExpr): String {
+        val subst = lambdaParamSubst[e.name]
+        if (subst != null) return subst
         val curType = lookupVar(e.name)
         // Check if it's a known variable in scope
         if (curType != null) {
@@ -3874,6 +3960,41 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         val name = (e.callee as? NameExpr)?.name ?: return "${genExpr(e.callee)}(${e.args.joinToString(", ") { genExpr(it.expr) }})"
         val args = e.args
+
+        // Inline function call in value position — emit body as C block, capture return via result var
+        val inlineDecl = inlineFunDecls[name]
+        if (inlineDecl != null) {
+            val retType = inlineDecl.returnType
+            if (retType == null) {
+                emitInlineCall(inlineDecl, e.args, currentInd, false)
+                return ""
+            }
+            val resultName = "\$ir${inlineCounter++}"
+            impl.appendLine("$currentInd${cType(retType)} $resultName;")
+            val savedRetVar = inlineReturnVar
+            inlineReturnVar = resultName
+            emitInlineCall(inlineDecl, e.args, currentInd, false)
+            inlineReturnVar = savedRetVar
+            return resultName
+        }
+
+        // Active lambda call in value position (inside inline body expansion)
+        val activeLambda = activeLambdas[name]
+        if (activeLambda != null) {
+            val savedSubst = lambdaParamSubst.toMap()
+            activeLambda.expr.params.forEachIndexed { i, pName ->
+                val arg = e.args.getOrNull(i)
+                if (arg != null) lambdaParamSubst[pName] = genExpr(arg.expr)
+            }
+            val result = when (val last = activeLambda.expr.body.lastOrNull()) {
+                is ExprStmt -> genExpr(last.expr)
+                is ReturnStmt -> if (last.value != null) genExpr(last.value) else "0"
+                else -> "0"
+            }
+            lambdaParamSubst.clear()
+            lambdaParamSubst.putAll(savedSubst)
+            return result
+        }
 
         // Built-in functions
         when (name) {
@@ -5279,6 +5400,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 "Fun($params)->$ret"
             } else null
         }
+        is LambdaExpr -> null
     }
 
     private fun inferCallType(e: CallExpr): String? {
