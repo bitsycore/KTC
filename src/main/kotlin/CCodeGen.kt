@@ -265,12 +265,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     /* Maps an internal type string to its C Optional struct type name. */
     private fun optCTypeName(internalType: String): String {
         return when (val base = internalType.removeSuffix("?").removeSuffix("#")) {
-            "Int"     -> "ktc_Int32_Optional"
-            "Long"    -> "ktc_Int64_Optional"
+            "Byte"    -> "ktc_Byte_Optional"
+            "Short"   -> "ktc_Short_Optional"
+            "Int"     -> "ktc_Int_Optional"
+            "Long"    -> "ktc_Long_Optional"
             "Float"   -> "ktc_Float_Optional"
             "Double"  -> "ktc_Double_Optional"
             "Boolean" -> "ktc_Bool_Optional"
             "Char"    -> "ktc_Char_Optional"
+            "UByte"   -> "ktc_UByte_Optional"
+            "UShort"  -> "ktc_UShort_Optional"
+            "UInt"    -> "ktc_UInt_Optional"
+            "ULong"   -> "ktc_ULong_Optional"
             "String"  -> "ktc_String_Optional"
             else -> {
                 if (isArrayType(base)) return "ktc_Array_Optional"
@@ -685,7 +691,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     /** Pre-scan AST for Array<T> type references to populate classArrayTypes. */
     private fun scanForClassArrayTypes() {
-        val primitives = setOf("Int", "Long", "Float", "Double", "Boolean", "Char", "String")
+        val primitives = setOf(
+            "Byte", "Short", "Int", "Long", "Float", "Double", "Boolean", "Char",
+            "UByte", "UShort", "UInt", "ULong", "String"
+        )
         fun checkType(t: TypeRef?) {
             if (t == null) return
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
@@ -3963,20 +3972,27 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return tRealloc(genExpr(args[0].expr), "(size_t)(${genExpr(args[1].expr)})")
             }
             "HeapFree"    -> return tFree(genExpr(args[0].expr))
-            "intArrayOf", "longArrayOf", "floatArrayOf", "doubleArrayOf",
-            "booleanArrayOf", "charArrayOf" -> {
+            "byteArrayOf", "shortArrayOf", "intArrayOf", "longArrayOf",
+            "floatArrayOf", "doubleArrayOf", "booleanArrayOf", "charArrayOf",
+            "ubyteArrayOf", "ushortArrayOf", "uintArrayOf", "ulongArrayOf" -> {
                 // handled in emitVarDecl; if used as expr, wrap in compound literal
                 return genArrayOfExpr(name, args)
             }
             "arrayOf" -> {
                 return genArrayOfExpr(name, args)
             }
-            "IntArray" -> return genNewArray("int32_t", args)
-            "LongArray" -> return genNewArray("int64_t", args)
-            "FloatArray" -> return genNewArray("float", args)
-            "DoubleArray" -> return genNewArray("double", args)
-            "BooleanArray" -> return genNewArray("bool", args)
-            "CharArray" -> return genNewArray("char", args)
+            "ByteArray"    -> return genNewArray("ktc_Byte", args)
+            "ShortArray"   -> return genNewArray("ktc_Short", args)
+            "IntArray"     -> return genNewArray("ktc_Int", args)
+            "LongArray"    -> return genNewArray("ktc_Long", args)
+            "FloatArray"   -> return genNewArray("ktc_Float", args)
+            "DoubleArray"  -> return genNewArray("ktc_Double", args)
+            "BooleanArray" -> return genNewArray("ktc_Bool", args)
+            "CharArray"    -> return genNewArray("ktc_Char", args)
+            "UByteArray"   -> return genNewArray("ktc_UByte", args)
+            "UShortArray"  -> return genNewArray("ktc_UShort", args)
+            "UIntArray"    -> return genNewArray("ktc_UInt", args)
+            "ULongArray"   -> return genNewArray("ktc_ULong", args)
             // Generic Array<T>(size) constructor — stack-allocated like IntArray(size)
             "Array" -> {
                 if (e.typeArgs.isNotEmpty()) {
@@ -4247,27 +4263,32 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "toString" -> return genToString(recv, recvType ?: "Int")
             "toInt" -> {
                 if (recvType == "String") return "ktc_str_toInt($recv)"
-                return "((int32_t)($recv))"
+                return "((ktc_Int)($recv))"
             }
             "toLong" -> {
                 if (recvType == "String") return "ktc_str_toLong($recv)"
-                return "((int64_t)($recv))"
+                return "((ktc_Long)($recv))"
             }
             "toFloat" -> {
-                if (recvType == "String") return "((float)ktc_str_toDouble($recv))"
-                return "((float)($recv))"
+                if (recvType == "String") return "((ktc_Float)ktc_str_toDouble($recv))"
+                return "((ktc_Float)($recv))"
             }
             "toDouble" -> {
                 if (recvType == "String") return "ktc_str_toDouble($recv)"
-                return "((double)($recv))"
+                return "((ktc_Double)($recv))"
             }
-            "toByte" -> return "((int8_t)($recv))"
-            "toChar" -> return "((char)($recv))"
+            "toByte"   -> return "((ktc_Byte)($recv))"
+            "toShort"  -> return "((ktc_Short)($recv))"
+            "toUByte"  -> return "((ktc_UByte)($recv))"
+            "toUShort" -> return "((ktc_UShort)($recv))"
+            "toUInt"   -> return "((ktc_UInt)($recv))"
+            "toULong"  -> return "((ktc_ULong)($recv))"
+            "toChar"   -> return "((char)($recv))"
             // Nullable string-to-number: toIntOrNull, toLongOrNull, toFloatOrNull, toDoubleOrNull
             "toIntOrNull" -> if (recvType == "String") {
                 val t = tmp()
-                preStmts += "int32_t ${t}_val;"
-                preStmts += "ktc_Int32_Optional $t;"
+                preStmts += "ktc_Int ${t}_val;"
+                preStmts += "ktc_Int_Optional $t;"
                 preStmts += "$t.tag = ktc_str_toIntOrNull($recv, &${t}_val) ? SOME : NONE;"
                 preStmts += "$t.value = ${t}_val;"
                 markOptional(t)
@@ -4275,8 +4296,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             "toLongOrNull" -> if (recvType == "String") {
                 val t = tmp()
-                preStmts += "int64_t ${t}_val;"
-                preStmts += "ktc_Int64_Optional $t;"
+                preStmts += "ktc_Long ${t}_val;"
+                preStmts += "ktc_Long_Optional $t;"
                 preStmts += "$t.tag = ktc_str_toLongOrNull($recv, &${t}_val) ? SOME : NONE;"
                 preStmts += "$t.value = ${t}_val;"
                 markOptional(t)
@@ -4284,7 +4305,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             "toDoubleOrNull" -> if (recvType == "String") {
                 val t = tmp()
-                preStmts += "double ${t}_val;"
+                preStmts += "ktc_Double ${t}_val;"
                 preStmts += "ktc_Double_Optional $t;"
                 preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_val) ? SOME : NONE;"
                 preStmts += "$t.value = ${t}_val;"
@@ -4293,10 +4314,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             "toFloatOrNull" -> if (recvType == "String") {
                 val t = tmp()
-                preStmts += "double ${t}_d;"
+                preStmts += "ktc_Double ${t}_d;"
                 preStmts += "ktc_Float_Optional $t;"
                 preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_d) ? SOME : NONE;"
-                preStmts += "$t.value = (float)${t}_d;"
+                preStmts += "$t.value = (ktc_Float)${t}_d;"
                 markOptional(t)
                 t
             }
@@ -4336,14 +4357,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "hashCode" -> {
                 val rt = recvType ?: "Int"
                 return when (rt) {
-                    "Int" -> "ktc_hash_i32($recv)"
-                    "Long" -> "ktc_hash_i64($recv)"
-                    "Float" -> "ktc_hash_f32($recv)"
-                    "Double" -> "ktc_hash_f64($recv)"
+                    "Byte"    -> "ktc_hash_i8($recv)"
+                    "Short"   -> "ktc_hash_i16($recv)"
+                    "Int"     -> "ktc_hash_i32($recv)"
+                    "Long"    -> "ktc_hash_i64($recv)"
+                    "Float"   -> "ktc_hash_f32($recv)"
+                    "Double"  -> "ktc_hash_f64($recv)"
                     "Boolean" -> "ktc_hash_bool($recv)"
-                    "Char" -> "ktc_hash_char($recv)"
-                    "String" -> "ktc_hash_str($recv)"
-                    else -> "${pfx(rt)}_hashCode(&($recv))"
+                    "Char"    -> "ktc_hash_char($recv)"
+                    "UByte"   -> "ktc_hash_u8($recv)"
+                    "UShort"  -> "ktc_hash_u16($recv)"
+                    "UInt"    -> "ktc_hash_u32($recv)"
+                    "ULong"   -> "ktc_hash_u64($recv)"
+                    "String"  -> "ktc_hash_str($recv)"
+                    else      -> "${pfx(rt)}_hashCode(&($recv))"
                 }
             }
         }
@@ -5033,6 +5060,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return "ktc_sb_to_string(&${buf}_sb)"
         }
         return when (type) {
+            "Byte" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[8];"
+                preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+                preStmts += "ktc_sb_append_byte(&${buf}_sb, $recv);"
+                "ktc_sb_to_string(&${buf}_sb)"
+            }
+            "Short" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[8];"
+                preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+                preStmts += "ktc_sb_append_short(&${buf}_sb, $recv);"
+                "ktc_sb_to_string(&${buf}_sb)"
+            }
             "Int" -> {
                 val buf = tmp()
                 preStmts += "char ${buf}[32];"
@@ -5045,6 +5086,34 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 preStmts += "char ${buf}[32];"
                 preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 32};"
                 preStmts += "ktc_sb_append_long(&${buf}_sb, $recv);"
+                "ktc_sb_to_string(&${buf}_sb)"
+            }
+            "UByte" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[8];"
+                preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+                preStmts += "ktc_sb_append_ubyte(&${buf}_sb, $recv);"
+                "ktc_sb_to_string(&${buf}_sb)"
+            }
+            "UShort" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[8];"
+                preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+                preStmts += "ktc_sb_append_ushort(&${buf}_sb, $recv);"
+                "ktc_sb_to_string(&${buf}_sb)"
+            }
+            "UInt" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[32];"
+                preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+                preStmts += "ktc_sb_append_uint(&${buf}_sb, $recv);"
+                "ktc_sb_to_string(&${buf}_sb)"
+            }
+            "ULong" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[32];"
+                preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+                preStmts += "ktc_sb_append_ulong(&${buf}_sb, $recv);"
                 "ktc_sb_to_string(&${buf}_sb)"
             }
             "String" -> recv
@@ -5067,13 +5136,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
         return when (type) {
-            "Int" -> "ktc_sb_append_int($sbRef, $expr);"
-            "Long" -> "ktc_sb_append_long($sbRef, $expr);"
-            "Float" -> "ktc_sb_append_double($sbRef, (double)$expr);"
-            "Double" -> "ktc_sb_append_double($sbRef, $expr);"
+            "Byte"    -> "ktc_sb_append_byte($sbRef, $expr);"
+            "Short"   -> "ktc_sb_append_short($sbRef, $expr);"
+            "Int"     -> "ktc_sb_append_int($sbRef, $expr);"
+            "Long"    -> "ktc_sb_append_long($sbRef, $expr);"
+            "Float"   -> "ktc_sb_append_double($sbRef, (double)$expr);"
+            "Double"  -> "ktc_sb_append_double($sbRef, $expr);"
             "Boolean" -> "ktc_sb_append_bool($sbRef, $expr);"
-            "Char" -> "ktc_sb_append_char($sbRef, $expr);"
-            "String" -> "ktc_sb_append_str($sbRef, $expr);"
+            "Char"    -> "ktc_sb_append_char($sbRef, $expr);"
+            "UByte"   -> "ktc_sb_append_ubyte($sbRef, $expr);"
+            "UShort"  -> "ktc_sb_append_ushort($sbRef, $expr);"
+            "UInt"    -> "ktc_sb_append_uint($sbRef, $expr);"
+            "ULong"   -> "ktc_sb_append_ulong($sbRef, $expr);"
+            "String"  -> "ktc_sb_append_str($sbRef, $expr);"
             else -> {
                 if (classes.containsKey(type) && classes[type]!!.isData) {
                     "${pfx(type)}_toString($expr, $sbRef);"
@@ -5088,9 +5163,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun genArrayOfExpr(name: String, args: List<Arg>): String {
         val elemType = when (name) {
-            "intArrayOf" -> "int32_t"; "longArrayOf" -> "int64_t"
-            "floatArrayOf" -> "float"; "doubleArrayOf" -> "double"
-            "booleanArrayOf" -> "bool"; "charArrayOf" -> "char"
+            "byteArrayOf" -> "ktc_Byte"; "shortArrayOf" -> "ktc_Short"
+            "intArrayOf" -> "ktc_Int"; "longArrayOf" -> "ktc_Long"
+            "floatArrayOf" -> "ktc_Float"; "doubleArrayOf" -> "ktc_Double"
+            "booleanArrayOf" -> "ktc_Bool"; "charArrayOf" -> "ktc_Char"
+            "ubyteArrayOf" -> "ktc_UByte"; "ushortArrayOf" -> "ktc_UShort"
+            "uintArrayOf" -> "ktc_UInt"; "ulongArrayOf" -> "ktc_ULong"
             "arrayOf" -> {
                 val elemKt = if (args.isNotEmpty()) inferExprType(args[0].expr) ?: "Int" else "Int"
                 cTypeStr(elemKt)
@@ -5652,20 +5730,32 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t.endsWith("?") -> cTypeStr(t.dropLast(1))
         // Strip heap-value-nullable marker — also handled by $has
         t.endsWith("#") -> cTypeStr(t.dropLast(1))
-        t == "Int"     -> "int32_t"
-        t == "Long"    -> "int64_t"
-        t == "Float"   -> "float"
-        t == "Double"  -> "double"
-        t == "Boolean" -> "bool"
-        t == "Char"    -> "char"
+        t == "Byte"    -> "ktc_Byte"
+        t == "Short"   -> "ktc_Short"
+        t == "Int"     -> "ktc_Int"
+        t == "Long"    -> "ktc_Long"
+        t == "Float"   -> "ktc_Float"
+        t == "Double"  -> "ktc_Double"
+        t == "Boolean" -> "ktc_Bool"
+        t == "Char"    -> "ktc_Char"
+        t == "UByte"   -> "ktc_UByte"
+        t == "UShort"  -> "ktc_UShort"
+        t == "UInt"    -> "ktc_UInt"
+        t == "ULong"   -> "ktc_ULong"
         t == "String"  -> "ktc_String"
         t == "Unit"    -> "void"
-        t == "IntArray"     -> "int32_t*"
-        t == "LongArray"    -> "int64_t*"
-        t == "FloatArray"   -> "float*"
-        t == "DoubleArray"  -> "double*"
-        t == "BooleanArray" -> "bool*"
-        t == "CharArray"    -> "char*"
+        t == "ByteArray"    -> "ktc_Byte*"
+        t == "ShortArray"   -> "ktc_Short*"
+        t == "IntArray"     -> "ktc_Int*"
+        t == "LongArray"    -> "ktc_Long*"
+        t == "FloatArray"   -> "ktc_Float*"
+        t == "DoubleArray"  -> "ktc_Double*"
+        t == "BooleanArray" -> "ktc_Bool*"
+        t == "CharArray"    -> "ktc_Char*"
+        t == "UByteArray"   -> "ktc_UByte*"
+        t == "UShortArray"  -> "ktc_UShort*"
+        t == "UIntArray"    -> "ktc_UInt*"
+        t == "ULongArray"   -> "ktc_ULong*"
         t == "StringArray"  -> "ktc_String*"
         // Typed pointer: "Int*" → "int32_t*", "Vec2*" → "game_Vec2*"
         t.endsWith("*") -> {
@@ -5824,7 +5914,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun isRawArrayTypeRef(t: TypeRef): Boolean {
         if (hasSizeAnnotation(t)) return false
         if (t.name == "Array") return true
-        if (t.name in setOf("IntArray", "LongArray", "FloatArray", "DoubleArray", "BooleanArray", "CharArray", "StringArray")) return true
+        if (t.name in setOf(
+            "ByteArray", "ShortArray", "IntArray", "LongArray",
+            "FloatArray", "DoubleArray", "BooleanArray", "CharArray",
+            "UByteArray", "UShortArray", "UIntArray", "ULongArray",
+            "StringArray"
+        )) return true
         return false
     }
 
@@ -5844,7 +5939,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun isSizedArrayTypeRef(t: TypeRef): Boolean {
         if (!hasSizeAnnotation(t)) return false
         if (t.name == "Array") return true
-        if (t.name in setOf("IntArray", "LongArray", "FloatArray", "DoubleArray", "BooleanArray", "CharArray", "StringArray")) return true
+        if (t.name in setOf(
+            "ByteArray", "ShortArray", "IntArray", "LongArray",
+            "FloatArray", "DoubleArray", "BooleanArray", "CharArray",
+            "UByteArray", "UShortArray", "UIntArray", "ULongArray",
+            "StringArray"
+        )) return true
         return false
     }
 
@@ -5880,12 +5980,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun arrayElementCType(arrType: String?): String = when (arrType) {
-        "IntArray"     -> "int32_t"
-        "LongArray"    -> "int64_t"
-        "FloatArray"   -> "float"
-        "DoubleArray"  -> "double"
-        "BooleanArray" -> "bool"
-        "CharArray"    -> "char"
+        "ByteArray"    -> "ktc_Byte"
+        "ShortArray"   -> "ktc_Short"
+        "IntArray"     -> "ktc_Int"
+        "LongArray"    -> "ktc_Long"
+        "FloatArray"   -> "ktc_Float"
+        "DoubleArray"  -> "ktc_Double"
+        "BooleanArray" -> "ktc_Bool"
+        "CharArray"    -> "ktc_Char"
+        "UByteArray"   -> "ktc_UByte"
+        "UShortArray"  -> "ktc_UShort"
+        "UIntArray"    -> "ktc_UInt"
+        "ULongArray"   -> "ktc_ULong"
         "StringArray"  -> "ktc_String"
         else -> {
             if (arrType != null) {
@@ -5902,12 +6008,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun arrayElementKtType(arrType: String?): String = when (arrType) {
+        "ByteArray"    -> "Byte"
+        "ShortArray"   -> "Short"
         "IntArray"     -> "Int"
         "LongArray"    -> "Long"
         "FloatArray"   -> "Float"
         "DoubleArray"  -> "Double"
         "BooleanArray" -> "Boolean"
         "CharArray"    -> "Char"
+        "UByteArray"   -> "UByte"
+        "UShortArray"  -> "UShort"
+        "UIntArray"    -> "UInt"
+        "ULongArray"   -> "ULong"
         "StringArray"  -> "String"
         else -> {
             if (arrType != null) {
@@ -5926,12 +6038,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ═══════════════════════════ printf helpers ═══════════════════════
 
     private fun printfFmt(t: String): String = when {
+        t == "Byte"    -> "%\" PRId8 \""
+        t == "Short"   -> "%\" PRId16 \""
         t == "Int"     -> "%\" PRId32 \""
         t == "Long"    -> "%\" PRId64 \""
         t == "Float"   -> "%f"
         t == "Double"  -> "%f"
         t == "Boolean" -> "%s"
         t == "Char"    -> "%c"
+        t == "UByte"   -> "%\" PRIu8 \""
+        t == "UShort"  -> "%\" PRIu16 \""
+        t == "UInt"    -> "%\" PRIu32 \""
+        t == "ULong"   -> "%\" PRIu64 \""
         t == "String"  -> "%.*s"
         t.endsWith("*") || t.endsWith("*?") || t.endsWith("*#") -> "%p"
         else           -> "%.*s"       // assume toString → ktc_String

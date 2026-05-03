@@ -18,6 +18,20 @@
 #endif
 #include <time.h>
 
+/* ═══════════════════════════ Kotlin numeric type aliases ═════════════════ */
+typedef int8_t   ktc_Byte;
+typedef int16_t  ktc_Short;
+typedef int32_t  ktc_Int;
+typedef int64_t  ktc_Long;
+typedef float    ktc_Float;
+typedef double   ktc_Double;
+typedef bool     ktc_Bool;
+typedef char     ktc_Char;
+typedef uint8_t  ktc_UByte;
+typedef uint16_t ktc_UShort;
+typedef uint32_t ktc_UInt;
+typedef uint64_t ktc_ULong;
+
 /* ═══════════════════════════ time ═══════════════════════════ */
 uint64_t ktc_time_ms(void);
 double ktc_time_seconds(void);
@@ -50,14 +64,20 @@ typedef struct { int32_t size; void* data; } ktc_ArrayTrampoline;
 /* ═══════════════════════════ Optional ════════════════════════════════ */
 typedef enum { NONE = 0, SOME = 1 } ktc_OptionalTag;
 
-typedef struct { ktc_OptionalTag tag; int32_t   value; } ktc_Int32_Optional;
-typedef struct { ktc_OptionalTag tag; int64_t   value; } ktc_Int64_Optional;
-typedef struct { ktc_OptionalTag tag; float     value; } ktc_Float_Optional;
-typedef struct { ktc_OptionalTag tag; double    value; } ktc_Double_Optional;
-typedef struct { ktc_OptionalTag tag; bool      value; } ktc_Bool_Optional;
-typedef struct { ktc_OptionalTag tag; char      value; } ktc_Char_Optional;
-typedef struct { ktc_OptionalTag tag; void*     value; } ktc_Ptr_Optional;
-typedef struct { ktc_OptionalTag tag; int32_t   size; void* data; } ktc_Array_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Byte   value; } ktc_Byte_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Short  value; } ktc_Short_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Int    value; } ktc_Int_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Long   value; } ktc_Long_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Float  value; } ktc_Float_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Double value; } ktc_Double_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Bool   value; } ktc_Bool_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Char   value; } ktc_Char_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_UByte  value; } ktc_UByte_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_UShort value; } ktc_UShort_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_UInt   value; } ktc_UInt_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_ULong  value; } ktc_ULong_Optional;
+typedef struct { ktc_OptionalTag tag; void*      value; } ktc_Ptr_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_Int    size; void* data; } ktc_Array_Optional;
 
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*
@@ -278,14 +298,62 @@ static inline void ktc_sb_append_bool(ktc_StrBuf* sb, bool v) {
     ktc_sb_append_cstr(sb, v ? "true" : "false");
 }
 
+static inline void ktc_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId8, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void ktc_sb_append_short(ktc_StrBuf* sb, ktc_Short v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId16, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void ktc_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu8, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void ktc_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu16, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void ktc_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu32, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
+static inline void ktc_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v) {
+    int32_t rem = sb->cap - sb->len;
+    if (rem <= 0) return;
+    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu64, v);
+    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+}
+
 /* ═══════════════════════════ Hash helpers (for monomorphized HashMap) */
 
+static inline int32_t ktc_hash_i8(int8_t v)    { return (int32_t)v; }
+static inline int32_t ktc_hash_i16(int16_t v)  { return (int32_t)v; }
 static inline int32_t ktc_hash_i32(int32_t v)  { return (int32_t)(uint32_t)v; }
 static inline int32_t ktc_hash_i64(int64_t v)  { uint64_t u = (uint64_t)v; return (int32_t)(uint32_t)(u ^ (u >> 32)); }
 static inline int32_t ktc_hash_f32(float v)    { uint32_t b; memcpy(&b, &v, 4); return (int32_t)b; }
 static inline int32_t ktc_hash_f64(double v)   { uint64_t b; memcpy(&b, &v, 8); return (int32_t)(uint32_t)(b ^ (b >> 32)); }
 static inline int32_t ktc_hash_bool(bool v)    { return v ? 1 : 0; }
 static inline int32_t ktc_hash_char(char v)    { return (int32_t)(unsigned char)v; }
+static inline int32_t ktc_hash_u8(uint8_t v)   { return (int32_t)(uint32_t)v; }
+static inline int32_t ktc_hash_u16(uint16_t v) { return (int32_t)(uint32_t)v; }
+static inline int32_t ktc_hash_u32(uint32_t v) { return (int32_t)v; }
+static inline int32_t ktc_hash_u64(uint64_t v) { return (int32_t)(uint32_t)(v ^ (v >> 32)); }
 static inline int32_t ktc_hash_str(ktc_String s) {
     uint32_t h = 2166136261u;
     for (int32_t i = 0; i < s.len; i++) { h ^= (uint8_t)s.ptr[i]; h *= 16777619u; }
