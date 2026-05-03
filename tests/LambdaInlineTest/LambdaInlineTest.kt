@@ -31,8 +31,21 @@ fun main() {
         println()
     }
 
+    // SHOULD BE PASSED AS COPY AS ITS A VALUE
+    // AND NO NULL CHECK SEEM TO BE DONE TO KNOW IF ENTER IN THE SCOPE
     val b : Array<Int>? = a
     b.let { arr ->
+        println("let:")
+        for (i in 0..<a.size) {
+            print("$i, ")
+        }
+        println()
+    }
+
+    // LEN IS BROKEN
+    // AND NO NULL CHECK SEEM TO BE DONE TO KNOW IF ENTER IN THE SCOPE
+    val c : Array<Int>? = null
+    c?.let { arr ->
         println("let:")
         for (i in 0..<a.size) {
             print("$i, ")

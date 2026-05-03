@@ -498,11 +498,17 @@ class Parser(private val tokens: List<Token>) {
             e = when {
                 at(TokenType.DOT) -> {
                     advance(); skipNL()
-                    DotExpr(e, expectIdent())
+                    val dotExpr = DotExpr(e, expectIdent())
+                    // Allow no-paren trailing lambda: expr.method { lambda }
+                    if (at(TokenType.LBRACE)) CallExpr(dotExpr, listOf(Arg(null, parseLambdaExpr())))
+                    else dotExpr
                 }
                 at(TokenType.QUESTION_DOT) -> {
                     advance(); skipNL()
-                    SafeDotExpr(e, expectIdent())
+                    val safeDotExpr = SafeDotExpr(e, expectIdent())
+                    // Allow no-paren trailing lambda: expr?.method { lambda }
+                    if (at(TokenType.LBRACE)) CallExpr(safeDotExpr, listOf(Arg(null, parseLambdaExpr())))
+                    else safeDotExpr
                 }
                 at(TokenType.LPAREN) -> {
                     advance(); nesting++; skipNL()
