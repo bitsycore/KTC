@@ -3,6 +3,8 @@ package com.bitsycore
 import java.io.File
 import kotlin.system.exitProcess
 
+val aClass = object {}.javaClass
+
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
         System.err.println("Usage: ktc <file.kt...> [-o <output_dir>] [--mem-track] [--ast]")
@@ -57,7 +59,7 @@ fun main(args: Array<String>) {
 
     // Load stdlib .kt files from resources (package ktc, auto-imported)
     // Auto-discover all .kt files in /stdlib/ — no index.txt needed
-    val stdlibDir = object {}.javaClass.getResource("/stdlib") ?: object {}.javaClass.getResource("/stdlib/")
+    val stdlibDir = aClass.getResource("/stdlib") ?: aClass.getResource("/stdlib/")
     if (stdlibDir != null) {
         val stdlibFiles = when (stdlibDir.protocol) {
             "jar" -> {
@@ -69,7 +71,7 @@ fun main(args: Array<String>) {
                     .toList()
             }
             "file" -> {
-                java.io.File(stdlibDir.toURI()).listFiles()
+                File(stdlibDir.toURI()).listFiles()
                     ?.filter { it.name.endsWith(".kt") }
                     ?.map { it.name }
                     ?: emptyList()
@@ -77,7 +79,7 @@ fun main(args: Array<String>) {
             else -> emptyList()
         }
         for (name in stdlibFiles.sorted()) {
-            val res = object {}.javaClass.getResourceAsStream("/stdlib/$name")
+            val res = aClass.getResourceAsStream("/stdlib/$name")
             if (res != null) {
                 val source = res.bufferedReader().readText()
                 try {
@@ -160,7 +162,7 @@ fun main(args: Array<String>) {
 
     // ── Copy intrinsic header (always overwrite to keep in sync) ────
     val intrinsicDst = File(outDir, "ktc_intrinsic.h")
-    val intrinsicSrc = object {}.javaClass.getResourceAsStream("/ktc_intrinsic.h")
+    val intrinsicSrc = aClass.getResourceAsStream("/ktc_intrinsic.h")
     if (intrinsicSrc != null) {
         intrinsicDst.writeText(intrinsicSrc.bufferedReader().readText())
     } else {
@@ -169,7 +171,7 @@ fun main(args: Array<String>) {
 
     // ── Copy intrinsic header (always overwrite to keep in sync) ────
     val intrinsicDstC = File(outDir, "ktc_intrinsic.c")
-    val intrinsicSrcC = object {}.javaClass.getResourceAsStream("/ktc_intrinsic.c")
+    val intrinsicSrcC = aClass.getResourceAsStream("/ktc_intrinsic.c")
     if (intrinsicSrcC != null) {
         intrinsicDstC.writeText(intrinsicSrcC.bufferedReader().readText())
     } else {

@@ -42,18 +42,30 @@ open class TranspilerTestBase {
     }
 
     /*
-    Loads and parses all stdlib .kt files listed in /stdlib/index.txt from resources.
+    Loads and parses all stdlib .kt files by scanning the /stdlib/ resource directory.
     Returns a list of ASTs ready to be passed as allAsts to CCodeGen.
     */
     protected fun loadStdlibAsts(): List<KtFile> {
-        val vIndex = object {}.javaClass.getResourceAsStream("/stdlib/index.txt")
-            ?: return emptyList()
-        val vNames = vIndex.bufferedReader().readLines().filter { it.isNotBlank() }
-        return vNames.mapNotNull { vName ->
-            val vRes = object {}.javaClass.getResourceAsStream("/stdlib/$vName") ?: return@mapNotNull null
-            val vSrc = vRes.bufferedReader().readText()
-            val vTokens = Lexer(vSrc).tokenize()
-            Parser(vTokens).parseFile().copy(sourceFile = vName)
+        val cls = this.javaClass
+        val stdlibDir = cls.getResource("/stdlib") ?: cls.getResource("/stdlib/") ?: return emptyList()
+        val names = when (stdlibDir.protocol) {
+            "jar" -> {
+                val conn = stdlibDir.openConnection() as java.net.JarURLConnection
+                conn.jarFile.entries().asSequence()
+                    .filter { !it.isDirectory && it.name.startsWith("stdlib/") && it.name.endsWith(".kt") }
+                    .map { it.name.removePrefix("stdlib/") }
+                    .toList()
+            }
+            "file" -> java.io.File(stdlibDir.toURI()).listFiles()
+                ?.filter { it.name.endsWith(".kt") }
+                ?.map { it.name } ?: emptyList()
+            else -> emptyList()
+        }
+        return names.sorted().mapNotNull { name ->
+            val res = cls.getResourceAsStream("/stdlib/$name") ?: return@mapNotNull null
+            val src = res.bufferedReader().readText()
+            val tokens = Lexer(src).tokenize()
+            Parser(tokens).parseFile().copy(sourceFile = name)
         }
     }
 
@@ -81,7 +93,7 @@ open class TranspilerTestBase {
     Use this to verify declarations emitted by the stdlib itself.
     */
     protected fun transpileStdlibFile(vFileName: String): TranspileResult {
-        val vRes = object {}.javaClass.getResourceAsStream("/stdlib/$vFileName")
+        val vRes = this.javaClass.getResourceAsStream("/stdlib/$vFileName")
             ?: error("stdlib file not found: $vFileName")
         val vSource = vRes.bufferedReader().readText()
         val vTokens = Lexer(vSource).tokenize()
