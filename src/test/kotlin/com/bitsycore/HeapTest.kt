@@ -39,10 +39,12 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapValue() {
         val r = transpileMain(
-            "val p = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = p.value()",
+            """
+            val p = HeapAlloc<Vec2>(10.0f, 20.0f)!!
+            val v = p
+            """.trimIndent(),
             decls = vec2Decl
         )
-        // .value() returns same pointer (Value<T>), NOT a dereference copy
         r.sourceNotContains("(*p)")
         r.sourceContains("= p;") // v = p (same pointer)
     }
@@ -156,7 +158,10 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapPtrNullable() {
         val r = transpileMain(
-            "var q: Heap<Vec2>? = HeapAlloc<Vec2>(3.0f, 4.0f)\nq = null",
+            """
+                var q: @Ptr Vec2? = HeapAlloc<Vec2>(3.0f, 4.0f)
+                q = null
+            """.trimIndent(),
             decls = vec2Decl
         )
         // Heap<T>? uses NULL for null
@@ -164,23 +169,26 @@ class HeapTest : TranspilerTestBase() {
     }
 
     @Test fun heapPtrNullCheck() {
-        val r = transpileMain("""
-            var q: Heap<Vec2>? = HeapAlloc<Vec2>(3.0f, 4.0f)
+        val r = transpileMain(
+            """
+            var q: @Ptr Vec2? = HeapAlloc<Vec2>(3.0f, 4.0f)
             if (q != null) {
-                println(q!!.x)
+                println(q?.x)
             }
-        """, decls = vec2Decl)
+            """,
+            decls = vec2Decl
+        )
         r.sourceContains("q != NULL")
     }
 
-    // ── Heap .toPtr() ────────────────────────────────────────────────
+    // ── Heap .ptr() ────────────────────────────────────────────────
 
-    @Test fun heapToPtr() {
+    @Test fun heapptr() {
         val r = transpileMain(
-            "val h = HeapAlloc<Vec2>(1.0f, 2.0f)!!\nval p = h.toPtr()",
+            "val h = HeapAlloc<Vec2>(1.0f, 2.0f)!!\nval p = h.ptr()",
             decls = vec2Decl
         )
-        // toPtr() is identity — same pointer, just changes type
+        // ptr() is identity — same pointer, just changes type
         r.sourceContains("= h;")
     }
 
@@ -188,11 +196,11 @@ class HeapTest : TranspilerTestBase() {
     // Ptr<T> tests
     // ══════════════════════════════════════════════════════════════════
 
-    // ── Ptr from stack (.toPtr()) ────────────────────────────────────
+    // ── Ptr from stack (.ptr()) ────────────────────────────────────
 
-    @Test fun stackToPtr() {
+    @Test fun stackptr() {
         val r = transpileMain(
-            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()",
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.ptr()",
             decls = vec2Decl
         )
         r.sourceContains("&v")
@@ -202,7 +210,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun ptrFieldAccess() {
         val r = transpileMain(
-            "val v = Vec2(5.0f, 6.0f)\nval p = v.toPtr()\nprintln(p.x)",
+            "val v = Vec2(5.0f, 6.0f)\nval p = v.ptr()\nprintln(p.x)",
             decls = vec2Decl
         )
         r.sourceContains("p->x")
@@ -212,18 +220,21 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun ptrValue() {
         val r = transpileMain(
-            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\nval vr = p.value()",
+            """
+                val v = Vec2(1.0f, 2.0f)
+                val p = v.ptr()
+                val vr = p.value()
+            """,
             decls = vec2Decl
         )
-        // value() returns same pointer
-        r.sourceNotContains("(*p)")
+        r.sourceContains("(*p)")
     }
 
     // ── Ptr.deref() → stack copy ─────────────────────────────────────
 
     @Test fun ptrDeref() {
         val r = transpileMain(
-            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\nval copy = p.deref()",
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.ptr()\nval copy = p.deref()",
             decls = vec2Decl
         )
         r.sourceContains("(*")
@@ -233,7 +244,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun ptrSet() {
         val r = transpileMain(
-            "val v = Vec2(1.0f, 2.0f)\nval p = v.toPtr()\np.set(Vec2(3.0f, 4.0f))",
+            "val v = Vec2(1.0f, 2.0f)\nval p = v.ptr()\np.set(Vec2(3.0f, 4.0f))",
             decls = vec2Decl
         )
         r.sourceContains("*")
@@ -243,7 +254,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun ptrValueFieldAccess() {
         val r = transpileMain(
-            "val v = Vec2(5.0f, 6.0f)\nval p = v.toPtr()\nprintln(p.value().x)",
+            "val v = Vec2(5.0f, 6.0f)\nval p = v.ptr()\nprintln(p.value().x)",
             decls = vec2Decl
         )
         r.sourceContains("->x")
@@ -257,30 +268,42 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun valueFieldAccess() {
         val r = transpileMain(
-            "val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nprintln(v.x)",
+            """
+            val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!
+            val v = h.value()
+            HeapFree(h)
+            println(v.x)
+            """.trimIndent(),
             decls = vec2Decl
         )
-        r.sourceContains("v->x")
+        r.sourceContains("v.x")
     }
 
     // ── Value<T> field write ─────────────────────────────────────────
 
     @Test fun valueFieldWrite() {
         val r = transpileMain(
-            "val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nv.x = 99.0f",
+            """
+            val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!
+            val v = h.value()
+            v.x = 99.0f
+            """.trimIndent(),
             decls = vec2Decl
         )
-        r.sourceContains("v->x = 99.0f;")
+        r.sourceContains("v.x = 99.0f;")
     }
 
     // ── Value<T>.deref() → stack copy ────────────────────────────────
 
     @Test fun valueDeref() {
         val r = transpileMain(
-            "val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!\nval v = h.value()\nval copy = v.deref()",
+            """
+            val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!
+            val v = h.value()
+            """,
             decls = vec2Decl
         )
-        r.sourceContains("(*v)")
+        r.sourceContains("(*h)")
     }
 
     // ── Value<T> method call — transparent delegation ────────────────
@@ -297,17 +320,21 @@ class HeapTest : TranspilerTestBase() {
                 v.inc()
             }
         """)
-        r.sourceContains("test_Main_Counter_inc(v)")
+        r.sourceContains("test_Main_Counter_inc(&v)")
     }
 
     // ── Explicit Value<T> type annotation ────────────────────────────
 
     @Test fun explicitValueType() {
         val r = transpileMain(
-            "val h = HeapAlloc<Vec2>(1.0f, 2.0f)!!\nval v: Value<Vec2> = h.value()\nprintln(v.x)",
+            """
+            val h = HeapAlloc<Vec2>(1.0f, 2.0f)!!
+            val v: Vec2 = h.value()
+            println(v.x)
+            """.trimIndent(),
             decls = vec2Decl
         )
-        r.sourceContains("v->x")
+        r.sourceContains("v.x")
     }
 
     // ── HeapAlloc<Array<T>>(n) → typed array allocation ─────────────────
@@ -358,7 +385,7 @@ class HeapTest : TranspilerTestBase() {
     @Test fun bodyPropInitFromCtorParam() {
         val decl = """
             class Buf(var capacity: Int) {
-                var buf: Heap<Array<Int>> = HeapAlloc<Array<Int>>(capacity)
+                var buf: @Ptr Array<Int> = HeapAlloc<Array<Int>>(capacity)
             }
         """
         val r = transpileMain("val b = Buf(16)", decls = decl)

@@ -1,10 +1,10 @@
 package ktc.std
 
-class MapIterator<K, V>(keys: Heap<Array<K>>, vals: Heap<Array<V>>, occ: Heap<Array<Boolean>>, cap: Int) {
+class MapIterator<K, V>(keys: Ptr<Array<K>>, vals: Ptr<Array<V>>, occ: Ptr<Array<Boolean>>, cap: Int) {
 	var idx: Int = 0
-	val keys: Heap<Array<K>> = keys
-	val vals: Heap<Array<V>> = vals
-	val occ: Heap<Array<Boolean>> = occ
+	val keys: Ptr<Array<K>> = keys
+	val vals: Ptr<Array<V>> = vals
+	val occ: Ptr<Array<Boolean>> = occ
 	val cap: Int = cap
 
 	operator fun hasNext(): Boolean {
@@ -44,9 +44,9 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 
 	override var size: Int = 0
 	var cap: Int = capacity
-	var keys: Heap<Array<K>> = HeapAlloc<Array<K>>(capacity)!!
-	var vals: Heap<Array<V>> = HeapAlloc<Array<V>>(capacity)!!
-	var occ: Heap<Array<Boolean>> = HeapArrayZero<Array<Boolean>>(capacity)!!
+	var keys: Ptr<Array<K>> = HeapAlloc<Array<K>>(capacity)!!
+	var vals: Ptr<Array<V>> = HeapAlloc<Array<V>>(capacity)!!
+	var occ: Ptr<Array<Boolean>> = HeapArrayZero<Array<Boolean>>(capacity)!!
 
 	fun findSlot(key: K): Int {
 		var idx = key.hashCode() % cap

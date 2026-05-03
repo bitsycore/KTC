@@ -22,7 +22,7 @@ package JsonParserTest
 
 class MutableList<T>(capacity: Int) {
     var size: Int = 0
-    var buf: Heap<Array<T>> = HeapAlloc<Array<T>>(capacity)!!
+    var buf: @Ptr Array<T> = HeapAlloc<Array<T>>(capacity)!!
 
     fun add(value: T) {
         if (size >= buf.size) {

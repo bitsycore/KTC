@@ -92,10 +92,10 @@ fun main() {
 
     // ARRAY PTR
 
-    passArrayPtr(array.toPtr())
+    passArrayPtr(array.ptr())
 
-    passArrayNullablePtr(array.toPtr())
-    passArrayNullablePtr(arrayNullable?.toPtr())
+    passArrayNullablePtr(array.ptr())
+    passArrayNullablePtr(arrayNullable?.ptr())
     passArrayNullablePtr(null)
     passArrayNullablePtr()
 
@@ -114,10 +114,10 @@ fun main() {
 
     // VEC PTR
 
-    passVecPtr(vec.toPtr())
+    passVecPtr(vec.ptr())
 
-    passVecNullablePtr(vec.toPtr())
-    passVecNullablePtr(vecNullable?.toPtr())
+    passVecNullablePtr(vec.ptr())
+    passVecNullablePtr(vecNullable?.ptr())
     passVecNullablePtr()
     passVecNullablePtr(null)
 

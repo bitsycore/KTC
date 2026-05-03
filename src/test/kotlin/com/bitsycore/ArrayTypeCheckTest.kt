@@ -98,7 +98,7 @@ class ArrayTypeCheckTest : TranspilerTestBase() {
     @Test fun functionReturningPtrArrayIntSucceeds() {
         val r = transpile("""
             package test.Main
-            fun good(): Ptr<Array<Int>> { return HeapAlloc<Array<Int>>(4)!! }
+            fun good(): @Ptr Array<Int> { return HeapAlloc<Array<Int>>(4)!! }
             fun main(args: Array<String>) {}
         """)
         r.sourceContains("test_Main_good(")
@@ -107,7 +107,7 @@ class ArrayTypeCheckTest : TranspilerTestBase() {
     @Test fun classPropertyWithHeapArrayIntSucceeds() {
         val r = transpile("""
             package test.Main
-            class Foo(var arr: Heap<Array<Int>>)
+            class Foo(var arr: @Ptr Array<Int>)
             fun main(args: Array<String>) {}
         """)
         r.headerContains("ktc_Int* arr;")
@@ -116,7 +116,7 @@ class ArrayTypeCheckTest : TranspilerTestBase() {
     @Test fun classPropertyWithPtrArrayIntSucceeds() {
         val r = transpile("""
             package test.Main
-            class Foo(var arr: Ptr<Array<Int>>)
+            class Foo(var arr: @Ptr Array<Int>)
             fun main(args: Array<String>) {}
         """)
         r.headerContains("ktc_Int* arr;")
