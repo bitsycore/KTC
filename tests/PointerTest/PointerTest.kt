@@ -19,7 +19,7 @@ fun passArrayValue(inarr: Array<Int>? = null) {
         println("inarr is null")
         return
     }
-    for(i in 0..<(inarr?.size)) {
+    for(i in 0..<(inarr.size)) {
         println("inarr[$i] = ${inarr[i]}")
     }
 }

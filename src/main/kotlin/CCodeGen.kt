@@ -3730,7 +3730,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val isIndirectArray = baseType.endsWith("^") && isArrayType(baseType) ||
                                       baseType.endsWith("*") && isArrayType(baseType) ||
                                       baseType.endsWith("&") && isArrayType(baseType)
-                if (!hasNullableReceiverExt(baseType, e.callee.name) && !isIndirectArray) {
+                if (!hasNullableReceiverExt(baseType, e.callee.name) && !isIndirectArray && !isArrayType(baseType)) {
                     val recvSrc = (e.callee.obj as? NameExpr)?.name ?: e.callee.obj.toString()
                     codegenError("Only safe (?.) calls are allowed on a nullable receiver of type '$recvType': $recvSrc.${e.callee.name}()")
                 }
@@ -4049,7 +4049,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         }
                     }
                 } else if (isArrayType(paramType)) {
-                    if (!hasSizeAnnotation(param.type)) {
+                    if (arg.expr is NullLit && !isCtorCall) {
+                        parts += "(Ktc_ArrayTrampoline){.size = 0, .data = NULL}"
+                    } else if (!hasSizeAnnotation(param.type)) {
                         val argName = (arg.expr as? NameExpr)?.name
                         val sizeExpr = if (argName != null && argName in trampolinedParams) "$argName.size" else "${expr}\$len"
                         if (isCtorCall) {
@@ -4062,6 +4064,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     } else {
                         // @Size fixed array — passed as raw pointer
                         parts += expr
+                    }
+                    if (param.type.nullable) {
+                        if (arg.expr is NullLit) {
+                            parts += "false"
+                        } else {
+                            val argVarName = (arg.expr as? NameExpr)?.name
+                            val argVarType = if (argVarName != null) lookupVar(argVarName) else null
+                            if (argVarType != null && argVarType.endsWith("?")) {
+                                parts += "${expr}\$has"
+                            } else {
+                                parts += "true"
+                            }
+                        }
                     }
                 } else if (param.type.nullable) {
                     if (arg.expr is NullLit) {
@@ -4499,14 +4514,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val recv = genExpr(e.obj)
 
         // Reject non-safe access on nullable receiver (enum/object/companion are never nullable)
-        // Allow indirect array types (Ptr<Array<T>>? etc.) where size/index access is safe with $has
+        // Allow array types (plain or indirect) where size/index access is safe
         val isEnumOrObj = e.obj is NameExpr && (enums.containsKey(e.obj.name) || objects.containsKey(e.obj.name) || classCompanions.containsKey(e.obj.name))
         if (recvType != null && recvType.endsWith("?") && !isEnumOrObj) {
             val baseType = recvType.removeSuffix("?")
             val isIndirectArray = baseType.endsWith("^") && isArrayType(baseType) ||
                                   baseType.endsWith("*") && isArrayType(baseType) ||
                                   baseType.endsWith("&") && isArrayType(baseType)
-            if (!isIndirectArray) {
+            if (!isIndirectArray && !isArrayType(baseType)) {
                 val recvSrc = (e.obj as? NameExpr)?.name ?: e.obj.toString()
                 codegenError("Only safe (?.) access is allowed on a nullable receiver of type '$recvType': $recvSrc.${e.name}")
             }
