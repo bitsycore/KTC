@@ -1305,7 +1305,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         // Generic class param: MutableList<T>, arg=MutableList_Int → T=Int
         if (paramType.typeArgs.isNotEmpty() && classes.containsKey(paramType.name) && classes[paramType.name]!!.isGeneric) {
-            val baseType = argType.trimEnd('*', '&', '^', '?', '#')
+            val baseType = argType.trimEnd('*', '?')
             val bindings = genericTypeBindings[baseType] ?: return
             val templateCi = classes[paramType.name] ?: return
             for ((i, typeArg) in paramType.typeArgs.withIndex()) {
@@ -1318,7 +1318,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Generic interface param: List<T>, arg=ArrayList_Int → T=Int
         // Look up what interface the arg class implements and extract type bindings from the mangled name
         if (paramType.typeArgs.isNotEmpty() && genericIfaceDecls.containsKey(paramType.name)) {
-            val baseType = argType.trimEnd('*', '&', '^', '?', '#')
+            val baseType = argType.trimEnd('*', '?')
             val ifaceTemplate = genericIfaceDecls[paramType.name] ?: return
             // Check if the arg class implements a monomorphized version of this interface
             val classIfaces = classInterfaces[baseType] ?: return
@@ -1340,7 +1340,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Intrinsic Pair<A,B> param: Pair<K, V>, arg=Pair_Int_String → K=Int, V=String
         if (paramType.name == "Pair" && paramType.typeArgs.size == 2
             && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
-            val baseType = argType.trimEnd('*', '&', '^', '?', '#')
+            val baseType = argType.trimEnd('*', '?')
             val components = pairTypeComponents[baseType]
             if (components != null) {
                 val (first, second) = components
@@ -3318,7 +3318,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     /**
      * Detect smart-cast candidates from a condition expression.
      * Returns a list of (varName, nonNullType) pairs for variables proven non-null.
-     * Handles value nullable ("T?", "T*#") and pointer nullable ("T*?").
+     * Handles value nullable ("T?") and pointer nullable ("T*?").
      */
     private fun extractSmartCasts(cond: Expr): List<Pair<String, String>> {
         val casts = mutableListOf<Pair<String, String>>()
@@ -5695,9 +5695,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t.startsWith("Fun(") -> "void*"
         // Strip nullable marker — handled by companion $has variable or Optional
         t.endsWith("?") -> cTypeStr(t.dropLast(1))
-        // Strip heap-value-nullable marker — also handled by $has
-            // Strip now doesn't have # suffix but kept for safety
-            t.endsWith("#") -> cTypeStr(t.dropLast(1))
         t == "Byte"    -> "ktc_Byte"
         t == "Short"   -> "ktc_Short"
         t == "Int"     -> "ktc_Int"
@@ -6072,7 +6069,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "UInt"    -> "%\" PRIu32 \""
         t == "ULong"   -> "%\" PRIu64 \""
         t == "String"  -> "%.*s"
-        t.endsWith("*") || t.endsWith("*?") || t.endsWith("*#") -> "%p"
+        t.endsWith("*") || t.endsWith("*?") -> "%p"
         else           -> "%.*s"       // assume toString → ktc_String
     }
 
