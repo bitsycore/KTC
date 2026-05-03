@@ -1424,7 +1424,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (type.nullable) {
                 hdr.appendLine("    ${optCTypeName(resolved)} $name;")
             } else {
-                hdr.appendLine("    ${cType(type)} $name;")
+                hdr.appendLine("    ${cType(type)} $name;${ptrNullComment(resolved)}")
             }
         }
         hdr.appendLine("} $cName;")
@@ -1518,7 +1518,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (type.nullable) {
                 hdr.appendLine("    ${optCTypeName(resolved)} $name;")
             } else {
-                hdr.appendLine("    ${cType(type)} $name;")
+                hdr.appendLine("    ${cType(type)} $name;${ptrNullComment(resolved)}")
             }
         }
         hdr.appendLine("};")
@@ -1597,8 +1597,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun emitDataClassToString(ktName: String, cName: String, ci: ClassInfo) {
-        hdr.appendLine("void ${cName}_toString($cName \$self, ktc_StrBuf* sb);")
-        impl.appendLine("void ${cName}_toString($cName \$self, ktc_StrBuf* sb) {")
+        hdr.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb);")
+        impl.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb) {")
         impl.appendLine("    ktc_sb_append_cstr(sb, \"$ktName(\");")
         for ((i, prop) in ci.props.withIndex()) {
             val (name, type) = prop
@@ -1606,7 +1606,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val tFull = if (type.nullable) "${tBase}?" else tBase
             if (i > 0) impl.appendLine("    ktc_sb_append_cstr(sb, \", \");")
             impl.appendLine("    ktc_sb_append_cstr(sb, \"$name=\");")
-            impl.appendLine("    ${genSbAppend("sb", "\$self.$name", tFull)}")
+            impl.appendLine("    ${genSbAppend("sb", "\$self->$name", tFull)}")
         }
         impl.appendLine("    ktc_sb_append_char(sb, ')');")
         impl.appendLine("}")
@@ -2117,7 +2117,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 hdr.appendLine("    ${cTypeStr(resolved)} ${p.name};")
                 hdr.appendLine("    int32_t ${p.name}\$len;")
             } else {
-                hdr.appendLine("    ${cType(pType)} ${p.name};")
+                hdr.appendLine("    ${cType(pType)} ${p.name};${ptrNullComment(resolved)}")
             }
         }
         hdr.appendLine("} ${cName}_t;")
@@ -2649,17 +2649,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 isAnyValNull -> {
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)
-                    impl.appendLine("$ind$ct ${s.name} = $expr;")
+                    impl.appendLine("$ind$ct ${s.name} /* notnull */ = $expr;")
                     impl.appendLine("${ind}bool ${s.name}\$has = true;")
                 }
                 // ── Heap<T>? / Ptr<T>? / Value<T>? : pointer nullable via NULL ──
                 isAnyPtrNull -> {
                     if (s.init is NullLit) {
-                        impl.appendLine("$ind$ct ${s.name} = NULL;")
+                        impl.appendLine("$ind$ct ${s.name} /* nullable */ = NULL;")
                     } else {
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
-                        impl.appendLine("$ind$ct ${s.name} = $expr;")
+                        impl.appendLine("$ind$ct ${s.name} /* nullable */ = $expr;")
                     }
                     // Emit $len companion for malloc<Array<T>>(n) / calloc<Array<T>>(n)
                     if (isAllocArrayCall(s.init)) {
@@ -3247,7 +3247,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                            else anyIndirectClassName(baseT)?.takeIf { classes[it]?.isData == true }
             if (dataClass != null) {
                 val buf = tmp()
-                val recv = if (dataClass != baseT) "(*$valExpr)" else valExpr
+                // dataClass != baseT means baseT is a pointer type (e.g. Vec2^); pass ptr directly
+                // dataClass == baseT means baseT is the value struct itself; take its address
+                val recv = if (dataClass != baseT) valExpr else "&($valExpr)"
                 impl.appendLine("${ind}char ${buf}[256];")
                 impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
                 impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
@@ -3265,20 +3267,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // data class → emit toString into StrBuf, then printf
         if (classes.containsKey(t) && classes[t]!!.isData) {
             val buf = tmp()
+            val vTmp = tmp()
             impl.appendLine("${ind}char ${buf}[256];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
-            impl.appendLine("${ind}${pfx(t)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+            impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
             return
         }
 
-        // Heap/Ptr/Value pointer to data class → dereference, then toString
+        // Heap/Ptr/Value pointer to data class → pass pointer directly (no dereference)
         val indirectBase = anyIndirectClassName(t)
         if (indirectBase != null && classes[indirectBase]?.isData == true) {
             val buf = tmp()
             impl.appendLine("${ind}char ${buf}[256];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
-            impl.appendLine("${ind}${pfx(indirectBase)}_toString(*$expr, &${buf}_sb);")
+            impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
             return
         }
@@ -4992,18 +4996,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // data class → use preStmts for toString buffer
         if (classes.containsKey(t) && classes[t]!!.isData) {
             val buf = tmp()
+            val vTmp = tmp()
             preStmts += "char ${buf}[256];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
-            preStmts += "${pfx(t)}_toString($expr, &${buf}_sb);"
+            preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
+            preStmts += "${pfx(t)}_toString(&$vTmp, &${buf}_sb);"
             return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
         }
-        // Heap/Ptr/Value to data class → deref, then toString
+        // Heap/Ptr/Value to data class → pass pointer directly (no dereference)
         val indirectBase = anyIndirectClassName(t)
         if (indirectBase != null && classes[indirectBase]?.isData == true) {
             val buf = tmp()
             preStmts += "char ${buf}[256];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
-            preStmts += "${pfx(indirectBase)}_toString(*$expr, &${buf}_sb);"
+            preStmts += "${pfx(indirectBase)}_toString($expr, &${buf}_sb);"
             return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
         }
 
@@ -5054,9 +5060,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun genToString(recv: String, type: String): String {
         if (classes.containsKey(type) && classes[type]!!.isData) {
             val buf = tmp()
+            val vTmp = tmp()
             preStmts += "char ${buf}[256];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
-            preStmts += "${pfx(type)}_toString($recv, &${buf}_sb);"
+            preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
+            preStmts += "${pfx(type)}_toString(&$vTmp, &${buf}_sb);"
             return "ktc_sb_to_string(&${buf}_sb)"
         }
         return when (type) {
@@ -5151,7 +5159,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "String"  -> "ktc_sb_append_str($sbRef, $expr);"
             else -> {
                 if (classes.containsKey(type) && classes[type]!!.isData) {
-                    "${pfx(type)}_toString($expr, $sbRef);"
+                    // Copy to a named temp so we can legally take its address
+                    // (expr may be an rvalue, e.g. a function call return value)
+                    val vTmp = tmp()
+                    "{ ${cTypeStr(type)} $vTmp = ($expr); ${pfx(type)}_toString(&$vTmp, $sbRef); }"
                 } else {
                     "ktc_sb_append_cstr($sbRef, \"<$type>\");"
                 }
@@ -5685,6 +5696,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
+    /*
+    Returns a trailing C comment reflecting Kotlin pointer nullability.
+    " /* nullable */" for Ptr<T>? (NULL is valid), " /* notnull */" for Ptr<T>.
+    Returns "" for non-pointer types so the call site is always unconditional.
+    */
+    private fun ptrNullComment(inResolved: String): String = when { // inResolved — resolved Kotlin type string
+        inResolved.endsWith("^?") || inResolved.endsWith("*?") || inResolved.endsWith("&?") -> " /* nullable */"
+        inResolved.endsWith("^#") || inResolved.endsWith("*#") || inResolved.endsWith("&#") -> " /* notnull */"
+        inResolved.endsWith("^")  || inResolved.endsWith("*")  || inResolved.endsWith("&")  -> " /* notnull */"
+        else -> ""
+    }
+
     /** Expand a parameter list: variable array params → ktc_ArrayTrampoline, @Size arrays → T*, nullable params → OptT name. */
     private fun expandParams(params: List<Param>): String {
         val parts = mutableListOf<String>()
@@ -5699,7 +5722,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                        resolved.endsWith("*") || resolved.endsWith("*?") || resolved.endsWith("*#") ||
                        resolved.endsWith("&") || resolved.endsWith("&?") || resolved.endsWith("&#")) {
                 // Heap/Ptr/Value-wrapped type: raw pointer (NULL-capable for nullable)
-                parts += "${cTypeStr(resolved)} ${p.name}"
+                // Nullability lives in p.type.nullable, not in the resolved suffix (pointer types don't append '?')
+                val vNullComment = if (p.type.nullable) " /* nullable */" else " /* notnull */"
+                parts += "${cTypeStr(resolved)} ${p.name}$vNullComment"
                 if (isArrayType(resolved)) parts += "int32_t ${p.name}\$len"
             } else if (isArrayType(resolved)) {
                 if (hasSizeAnnotation(p.type)) {
@@ -5711,7 +5736,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     parts += "int32_t ${p.name}\$len"
                 } else {
                     // Variable array — trampoline for pass-by-value semantics
-                    parts += "ktc_ArrayTrampoline ${p.name}"
+                    parts += "ktc_ArrayTrampoline ${p.name} /* ${arrayElementCType(resolved)}[] */"
                 }
             } else if (p.type.nullable) {
                 parts += "${optCTypeName(resolved)} ${p.name}"
