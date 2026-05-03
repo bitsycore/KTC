@@ -21,7 +21,7 @@ class ClassTest : TranspilerTestBase() {
                 println(p.health)
             }
         """)
-        r.headerContains("kt_String name;")
+        r.headerContains("ktc_String name;")
         r.headerContains("int32_t health;")
         r.headerContains("int32_t score;")
     }

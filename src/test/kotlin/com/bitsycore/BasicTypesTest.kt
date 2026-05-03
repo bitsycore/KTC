@@ -68,7 +68,7 @@ class BasicTypesTest : TranspilerTestBase() {
 
     @Test fun stringLiteral() {
         val r = transpileMain("val s = \"hello\"\nprintln(s)")
-        r.sourceContains("kt_String s = kt_str(\"hello\")")
+        r.sourceContains("ktc_String s = ktc_str(\"hello\")")
     }
 
     @Test fun stringLength() {

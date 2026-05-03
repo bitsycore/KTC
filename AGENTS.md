@@ -59,7 +59,7 @@ The `resolveTypeName()` function resolves `TypeRef` AST nodes to these internal 
 Functions returning nullable types use the **out-pointer pattern**:
 ```c
 // Kotlin: fun get(key: Int): String?
-// C: bool HashMap_Int_String_get(HashMap_Int_String* $self, int32_t key, kt_String* $out);
+// C: bool HashMap_Int_String_get(HashMap_Int_String* $self, int32_t key, ktc_String* $out);
 // Returns true if value exists, writes value through $out pointer
 ```
 
@@ -196,5 +196,5 @@ Requires JDK 25+ and a C11 compiler (GCC, Clang, or MSVC) on PATH.
 - Package prefix uses `_` separator: `package game.Main` → `game_Main_`
 - The `operator` keyword is required for dispatch (matches Kotlin semantics)
 - `defer` is a non-standard extension (not in real Kotlin) for RAII-style cleanup
-- Strings are non-owning slices (`kt_String { const char* ptr; int32_t len; }`)
+- Strings are non-owning slices (`ktc_String { const char* ptr; int32_t len; }`)
 - All generated files include `ktc_intrinsic.h` for runtime primitives

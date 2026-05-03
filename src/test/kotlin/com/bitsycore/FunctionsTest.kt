@@ -34,7 +34,7 @@ class FunctionsTest : TranspilerTestBase() {
                 greet("hello")
             }
         """)
-        r.sourceContains("void test_Main_greet(kt_String name)")
+        r.sourceContains("void test_Main_greet(ktc_String name)")
     }
 
     // ── Expression body ──────────────────────────────────────────────
@@ -63,7 +63,7 @@ class FunctionsTest : TranspilerTestBase() {
             }
         """)
         // When called without the default arg, the default is substituted
-        r.sourceContains("kt_str(\"Hello\")")
+        r.sourceContains("ktc_str(\"Hello\")")
     }
 
     @Test fun defaultParamOverridden() {
@@ -76,7 +76,7 @@ class FunctionsTest : TranspilerTestBase() {
                 greet("World", "Hi")
             }
         """)
-        r.sourceContains("kt_str(\"Hi\")")
+        r.sourceContains("ktc_str(\"Hi\")")
     }
 
     // ── Multiple return paths ────────────────────────────────────────
@@ -148,7 +148,7 @@ class FunctionsTest : TranspilerTestBase() {
                 println(describe(5))
             }
         """)
-        r.sourceContains("kt_String test_Main_describe(int32_t x)")
+        r.sourceContains("ktc_String test_Main_describe(int32_t x)")
     }
 
     // ── Float/Double params and return ───────────────────────────────
@@ -169,7 +169,7 @@ class FunctionsTest : TranspilerTestBase() {
     @Test fun mainWithArgs() {
         val r = transpileMain("println(args.size)")
         r.sourceContains("int main(int argc, char** argv)")
-        r.sourceContains("kt_String")  // args buffer setup
+        r.sourceContains("ktc_String")  // args buffer setup
     }
 
     @Test fun mainBareReturnEmitsZero() {

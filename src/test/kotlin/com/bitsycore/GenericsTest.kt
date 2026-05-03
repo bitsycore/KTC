@@ -93,7 +93,7 @@ class GenericsTest : TranspilerTestBase() {
             }
         """)
         r.headerContains("test_Main_Box_String")
-        r.headerContains("kt_String item;")
+        r.headerContains("ktc_String item;")
     }
 
     // ── Generic class with methods ──────────────────────────────────

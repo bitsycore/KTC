@@ -35,7 +35,7 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 s.shout()
             }
         """)
-        r.sourceContains("void test_Main_String_shout(kt_String ${'$'}self)")
+        r.sourceContains("void test_Main_String_shout(ktc_String ${'$'}self)")
         r.sourceContains("test_Main_String_shout(s)")
     }
 

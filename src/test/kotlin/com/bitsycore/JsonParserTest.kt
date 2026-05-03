@@ -131,7 +131,7 @@ class JsonParserTest : TranspilerTestBase() {
     @Test fun lexerDataClass() {
         val r = transpileJsonParser()
         r.headerContains("} json_Main_Lexer;")
-        r.sourceContains("json_Main_Lexer_create(kt_String input, int32_t len)")
+        r.sourceContains("json_Main_Lexer_create(ktc_String input, int32_t len)")
         r.sourceContains("json_Main_Lexer_equals(json_Main_Lexer a, json_Main_Lexer b)")
     }
 

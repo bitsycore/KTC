@@ -175,25 +175,25 @@ static inline void ktc_mem_report(void) {
 typedef struct {
     const char* ptr;
     int32_t     len;
-} kt_String;
+} ktc_String;
 
-typedef struct { ktc_OptionalTag tag; kt_String value; } ktc_String_Optional;
+typedef struct { ktc_OptionalTag tag; ktc_String value; } ktc_String_Optional;
 
 /* String from literal — zero-cost, points into static storage. */
-#define kt_str(s) ((kt_String){(s), (int32_t)(sizeof(s) - 1)})
+#define ktc_str(s) ((ktc_String){(s), (int32_t)(sizeof(s) - 1)})
 
 /* String from pointer + length (no copy). */
-static inline kt_String kt_string_wrap(const char* p, int32_t n) {
-    return (kt_String){p, n};
+static inline ktc_String ktc_string_wrap(const char* p, int32_t n) {
+    return (ktc_String){p, n};
 }
 
 /* String equality. */
-static inline bool kt_string_eq(kt_String a, kt_String b) {
+static inline bool ktc_string_eq(ktc_String a, ktc_String b) {
     return a.len == b.len && memcmp(a.ptr, b.ptr, (size_t)a.len) == 0;
 }
 
 /* String comparison (lexicographic). Returns <0, 0, or >0. */
-static inline int kt_string_cmp(kt_String a, kt_String b) {
+static inline int ktc_string_cmp(ktc_String a, ktc_String b) {
     int32_t minlen = (a.len < b.len) ? a.len : b.len;
     int r = memcmp(a.ptr, b.ptr, (size_t)minlen);
     if (r != 0) return r;
@@ -201,25 +201,25 @@ static inline int kt_string_cmp(kt_String a, kt_String b) {
 }
 
 /* Concatenate two strings into a caller-provided buffer.
- * Usage:  char buf[256]; kt_String s = kt_string_cat(buf, sizeof(buf), a, b);
+ * Usage:  char buf[256]; ktc_String s = ktc_string_cat(buf, sizeof(buf), a, b);
  */
-static inline kt_String kt_string_cat(char* buf, int bufsz, kt_String a, kt_String b) {
+static inline ktc_String ktc_string_cat(char* buf, int bufsz, ktc_String a, ktc_String b) {
     int32_t total = a.len + b.len;
     if (total >= bufsz) total = bufsz - 1;
     memcpy(buf, a.ptr, (size_t)a.len);
     int32_t rest = total - a.len;
     memcpy(buf + a.len, b.ptr, (size_t)rest);
     buf[total] = '\0';
-    return (kt_String){buf, total};
+    return (ktc_String){buf, total};
 }
 
 /* Substring — returns a view into the original string (no copy).
  * substring(from) and substring(from, to) Kotlin semantics. */
-static inline kt_String kt_string_substring(kt_String s, int32_t from, int32_t to) {
+static inline ktc_String ktc_string_substring(ktc_String s, int32_t from, int32_t to) {
     if (from < 0) from = 0;
     if (to > s.len) to = s.len;
-    if (from >= to) return (kt_String){"", 0};
-    return (kt_String){s.ptr + from, to - from};
+    if (from >= to) return (ktc_String){"", 0};
+    return (ktc_String){s.ptr + from, to - from};
 }
 
 /* ═══════════════════════════ String Builder ══════════════════════════ */
@@ -228,15 +228,15 @@ typedef struct {
     char*   ptr;
     int32_t len;
     int32_t cap;
-} kt_StrBuf;
+} ktc_StrBuf;
 
-/* Stack-backed string builder: char buf[256]; kt_StrBuf sb = {buf, 0, 256}; */
+/* Stack-backed string builder: char buf[256]; ktc_StrBuf sb = {buf, 0, 256}; */
 
-static inline kt_String kt_sb_to_string(kt_StrBuf* sb) {
-    return (kt_String){sb->ptr, sb->len};
+static inline ktc_String ktc_sb_to_string(ktc_StrBuf* sb) {
+    return (ktc_String){sb->ptr, sb->len};
 }
 
-static inline void kt_sb_append_str(kt_StrBuf* sb, kt_String s) {
+static inline void ktc_sb_append_str(ktc_StrBuf* sb, ktc_String s) {
     int32_t n = s.len;
     if (sb->len + n > sb->cap) n = sb->cap - sb->len;
     if (n <= 0) return;
@@ -244,48 +244,48 @@ static inline void kt_sb_append_str(kt_StrBuf* sb, kt_String s) {
     sb->len += n;
 }
 
-static inline void kt_sb_append_cstr(kt_StrBuf* sb, const char* s) {
-    kt_sb_append_str(sb, (kt_String){s, (int32_t)strlen(s)});
+static inline void ktc_sb_append_cstr(ktc_StrBuf* sb, const char* s) {
+    ktc_sb_append_str(sb, (ktc_String){s, (int32_t)strlen(s)});
 }
 
-static inline void kt_sb_append_char(kt_StrBuf* sb, char c) {
+static inline void ktc_sb_append_char(ktc_StrBuf* sb, char c) {
     if (sb->len < sb->cap) sb->ptr[sb->len++] = c;
 }
 
-static inline void kt_sb_append_int(kt_StrBuf* sb, int32_t v) {
+static inline void ktc_sb_append_int(ktc_StrBuf* sb, int32_t v) {
     int32_t rem = sb->cap - sb->len;
     if (rem <= 0) return;
     int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId32, v);
     if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
 }
 
-static inline void kt_sb_append_long(kt_StrBuf* sb, int64_t v) {
+static inline void ktc_sb_append_long(ktc_StrBuf* sb, int64_t v) {
     int32_t rem = sb->cap - sb->len;
     if (rem <= 0) return;
     int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId64, v);
     if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
 }
 
-static inline void kt_sb_append_double(kt_StrBuf* sb, double v) {
+static inline void ktc_sb_append_double(ktc_StrBuf* sb, double v) {
     int32_t rem = sb->cap - sb->len;
     if (rem <= 0) return;
     int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%f", v);
     if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
 }
 
-static inline void kt_sb_append_bool(kt_StrBuf* sb, bool v) {
-    kt_sb_append_cstr(sb, v ? "true" : "false");
+static inline void ktc_sb_append_bool(ktc_StrBuf* sb, bool v) {
+    ktc_sb_append_cstr(sb, v ? "true" : "false");
 }
 
 /* ═══════════════════════════ Hash helpers (for monomorphized HashMap) */
 
-static inline int32_t kt_hash_i32(int32_t v)  { return (int32_t)(uint32_t)v; }
-static inline int32_t kt_hash_i64(int64_t v)  { uint64_t u = (uint64_t)v; return (int32_t)(uint32_t)(u ^ (u >> 32)); }
-static inline int32_t kt_hash_f32(float v)    { uint32_t b; memcpy(&b, &v, 4); return (int32_t)b; }
-static inline int32_t kt_hash_f64(double v)   { uint64_t b; memcpy(&b, &v, 8); return (int32_t)(uint32_t)(b ^ (b >> 32)); }
-static inline int32_t kt_hash_bool(bool v)    { return v ? 1 : 0; }
-static inline int32_t kt_hash_char(char v)    { return (int32_t)(unsigned char)v; }
-static inline int32_t kt_hash_str(kt_String s) {
+static inline int32_t ktc_hash_i32(int32_t v)  { return (int32_t)(uint32_t)v; }
+static inline int32_t ktc_hash_i64(int64_t v)  { uint64_t u = (uint64_t)v; return (int32_t)(uint32_t)(u ^ (u >> 32)); }
+static inline int32_t ktc_hash_f32(float v)    { uint32_t b; memcpy(&b, &v, 4); return (int32_t)b; }
+static inline int32_t ktc_hash_f64(double v)   { uint64_t b; memcpy(&b, &v, 8); return (int32_t)(uint32_t)(b ^ (b >> 32)); }
+static inline int32_t ktc_hash_bool(bool v)    { return v ? 1 : 0; }
+static inline int32_t ktc_hash_char(char v)    { return (int32_t)(unsigned char)v; }
+static inline int32_t ktc_hash_str(ktc_String s) {
     uint32_t h = 2166136261u;
     for (int32_t i = 0; i < s.len; i++) { h ^= (uint8_t)s.ptr[i]; h *= 16777619u; }
     return (int32_t)h;
@@ -293,29 +293,29 @@ static inline int32_t kt_hash_str(kt_String s) {
 
 /* ═══════════════════════════ Conversion helpers ═════════════════════ */
 
-static inline kt_String kt_int_to_string(char* buf, int bufsz, int32_t v) {
+static inline ktc_String ktc_int_to_string(char* buf, int bufsz, int32_t v) {
     int n = snprintf(buf, (size_t)bufsz, "%" PRId32, v);
-    return (kt_String){buf, n};
+    return (ktc_String){buf, n};
 }
 
-static inline kt_String kt_long_to_string(char* buf, int bufsz, int64_t v) {
+static inline ktc_String ktc_long_to_string(char* buf, int bufsz, int64_t v) {
     int n = snprintf(buf, (size_t)bufsz, "%" PRId64, v);
-    return (kt_String){buf, n};
+    return (ktc_String){buf, n};
 }
 
-static inline kt_String kt_double_to_string(char* buf, int bufsz, double v) {
+static inline ktc_String ktc_double_to_string(char* buf, int bufsz, double v) {
     int n = snprintf(buf, (size_t)bufsz, "%f", v);
-    return (kt_String){buf, n};
+    return (ktc_String){buf, n};
 }
 
-static inline kt_String kt_bool_to_string(bool v) {
-    return v ? kt_str("true") : kt_str("false");
+static inline ktc_String ktc_bool_to_string(bool v) {
+    return v ? ktc_str("true") : ktc_str("false");
 }
 
 /* ═══════════════════════════ String → Number parsing ═════════════════ */
 
-/* Parse kt_String to int32_t (simple atoi-like, stops at non-digit). */
-static inline int32_t kt_str_toInt(kt_String s) {
+/* Parse ktc_String to int32_t (simple atoi-like, stops at non-digit). */
+static inline int32_t ktc_str_toInt(ktc_String s) {
     char buf[32];
     int32_t n = s.len < 31 ? s.len : 31;
     memcpy(buf, s.ptr, (size_t)n);
@@ -323,8 +323,8 @@ static inline int32_t kt_str_toInt(kt_String s) {
     return (int32_t)atoi(buf);
 }
 
-/* Parse kt_String to int64_t. */
-static inline int64_t kt_str_toLong(kt_String s) {
+/* Parse ktc_String to int64_t. */
+static inline int64_t ktc_str_toLong(ktc_String s) {
     char buf[32];
     int32_t n = s.len < 31 ? s.len : 31;
     memcpy(buf, s.ptr, (size_t)n);
@@ -332,8 +332,8 @@ static inline int64_t kt_str_toLong(kt_String s) {
     return (int64_t)atoll(buf);
 }
 
-/* Parse kt_String to double. */
-static inline double kt_str_toDouble(kt_String s) {
+/* Parse ktc_String to double. */
+static inline double ktc_str_toDouble(ktc_String s) {
     char buf[64];
     int32_t n = s.len < 63 ? s.len : 63;
     memcpy(buf, s.ptr, (size_t)n);
@@ -343,8 +343,8 @@ static inline double kt_str_toDouble(kt_String s) {
 
 /* ═══════════════════ String → Number nullable parsing ════════════════ */
 
-/* Parse kt_String to int32_t, returning false on failure. */
-static inline bool kt_str_toIntOrNull(kt_String s, int32_t* out) {
+/* Parse ktc_String to int32_t, returning false on failure. */
+static inline bool ktc_str_toIntOrNull(ktc_String s, int32_t* out) {
     if (s.len == 0) return false;
     char buf[32];
     int32_t n = s.len < 31 ? s.len : 31;
@@ -357,8 +357,8 @@ static inline bool kt_str_toIntOrNull(kt_String s, int32_t* out) {
     return true;
 }
 
-/* Parse kt_String to int64_t, returning false on failure. */
-static inline bool kt_str_toLongOrNull(kt_String s, int64_t* out) {
+/* Parse ktc_String to int64_t, returning false on failure. */
+static inline bool ktc_str_toLongOrNull(ktc_String s, int64_t* out) {
     if (s.len == 0) return false;
     char buf[32];
     int32_t n = s.len < 31 ? s.len : 31;
@@ -371,8 +371,8 @@ static inline bool kt_str_toLongOrNull(kt_String s, int64_t* out) {
     return true;
 }
 
-/* Parse kt_String to double, returning false on failure. */
-static inline bool kt_str_toDoubleOrNull(kt_String s, double* out) {
+/* Parse ktc_String to double, returning false on failure. */
+static inline bool ktc_str_toDoubleOrNull(ktc_String s, double* out) {
     if (s.len == 0) return false;
     char buf[64];
     int32_t n = s.len < 63 ? s.len : 63;

@@ -22,7 +22,7 @@ class NullableTest : TranspilerTestBase() {
 
     @Test fun nullableStringWithValue() {
         val r = transpileMain("""var s: String? = "hello"""")
-        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){SOME, kt_str(\"hello\")};")
+        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){SOME, ktc_str(\"hello\")};")
     }
 
     @Test fun nullableStringNull() {
@@ -200,7 +200,7 @@ class NullableTest : TranspilerTestBase() {
             var x: Int? = null
             println("value=${'$'}x")
         """)
-        r.sourceContains("kt_sb_append_cstr")
+        r.sourceContains("ktc_sb_append_cstr")
         r.sourceContains("\"null\"")
     }
 }

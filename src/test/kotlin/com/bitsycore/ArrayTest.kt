@@ -45,7 +45,7 @@ class ArrayTest : TranspilerTestBase() {
             val names = arrayOf("Alice", "Bob")
             println(names[0])
         """)
-        r.sourceContains("kt_String names[] =")
+        r.sourceContains("ktc_String names[] =")
     }
 
     // ── For over array ───────────────────────────────────────────────

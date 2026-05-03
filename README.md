@@ -135,7 +135,7 @@ c.strlen(s.ptr)
 
 ### String Operations
 
-Strings are represented as `kt_String { const char* ptr; int32_t len; }` (non-owning slice).
+Strings are represented as `ktc_String { const char* ptr; int32_t len; }` (non-owning slice).
 
 Built-in methods: `length`, `substring()`, `startsWith()`, `endsWith()`, `contains()`, `indexOf()`, `isEmpty()`, `isNotEmpty()`, character indexing via `[]`.
 

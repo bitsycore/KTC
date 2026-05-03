@@ -14,7 +14,7 @@ class PairVarargTest : TranspilerTestBase() {
             val p = 1 to "hello"
             println(p.first)
         """)
-        r.headerContains("kt_Pair_Int_String")
+        r.headerContains("ktc_Pair_Int_String")
         r.sourceContains(".first")
     }
 
@@ -23,7 +23,7 @@ class PairVarargTest : TranspilerTestBase() {
             val p = 10 to 20
             println(p.second)
         """)
-        r.headerContains("kt_Pair_Int_Int")
+        r.headerContains("ktc_Pair_Int_Int")
         r.sourceContains(".second")
     }
 
@@ -34,7 +34,7 @@ class PairVarargTest : TranspilerTestBase() {
             val p = Pair<Int, Int>(3, 4)
             println(p.first)
         """)
-        r.headerContains("kt_Pair_Int_Int")
+        r.headerContains("ktc_Pair_Int_Int")
     }
 
     @Test fun pairConstructorInferred() {
@@ -42,7 +42,7 @@ class PairVarargTest : TranspilerTestBase() {
             val p = Pair(true, 42)
             println(p.second)
         """)
-        r.headerContains("kt_Pair_Boolean_Int")
+        r.headerContains("ktc_Pair_Boolean_Int")
     }
 
     // ── Pair: typedef struct emitted ────────────────────────────────
@@ -51,7 +51,7 @@ class PairVarargTest : TranspilerTestBase() {
         val r = transpileMain("""
             val p = 1 to 2
         """)
-        r.headerContains("typedef struct { int32_t first; int32_t second; } kt_Pair_Int_Int;")
+        r.headerContains("typedef struct { int32_t first; int32_t second; } ktc_Pair_Int_Int;")
     }
 
     // ── Pair: as function parameter / return ────────────────────────
@@ -66,7 +66,7 @@ class PairVarargTest : TranspilerTestBase() {
                 printPair(1 to 2)
             }
         """)
-        r.headerContains("kt_Pair_Int_Int")
+        r.headerContains("ktc_Pair_Int_Int")
         r.sourceContains("p.first")
     }
 
