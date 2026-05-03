@@ -12,24 +12,22 @@ class NullableTest : TranspilerTestBase() {
 
     @Test fun nullableIntWithValue() {
         val r = transpileMain("var x: Int? = 42")
-        r.sourceContains("int32_t x = 42;")
-        r.sourceContains("bool x\$has = true;")
+        r.sourceContains("ktc_Int32_Optional x = (ktc_Int32_Optional){SOME, 42};")
     }
 
     @Test fun nullableIntNull() {
         val r = transpileMain("var x: Int? = null")
-        r.sourceContains("bool x\$has = false;")
+        r.sourceContains("ktc_Int32_Optional x = (ktc_Int32_Optional){NONE};")
     }
 
     @Test fun nullableStringWithValue() {
         val r = transpileMain("""var s: String? = "hello"""")
-        r.sourceContains("kt_String s = kt_str(\"hello\")")
-        r.sourceContains("bool s\$has = true;")
+        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){SOME, kt_str(\"hello\")};")
     }
 
     @Test fun nullableStringNull() {
         val r = transpileMain("var s: String? = null")
-        r.sourceContains("bool s\$has = false;")
+        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){NONE};")
     }
 
     // ── Nullable return (out-pointer convention) ─────────────────────
@@ -45,8 +43,8 @@ class NullableTest : TranspilerTestBase() {
                 val a = findValue(true)
             }
         """)
-        // Return type is bool, last param is Int* $out
-        r.sourceContains("bool test_Main_findValue(bool flag, int32_t* \$out)")
+        // Return type is ktc_Int32_Optional
+        r.sourceContains("ktc_Int32_Optional test_Main_findValue(bool flag)")
     }
 
     @Test fun nullableReturnNull() {
@@ -55,7 +53,7 @@ class NullableTest : TranspilerTestBase() {
             fun findValue(): Int? { return null }
             fun main(args: Array<String>) { val a = findValue() }
         """)
-        r.sourceContains("return false;")
+        r.sourceContains("return (ktc_Int32_Optional){NONE};")
     }
 
     @Test fun nullableReturnValue() {
@@ -64,8 +62,7 @@ class NullableTest : TranspilerTestBase() {
             fun findValue(): Int? { return 42 }
             fun main(args: Array<String>) { val a = findValue() }
         """)
-        r.sourceContains("*\$out = 42;")
-        r.sourceContains("return true;")
+        r.sourceContains("return (ktc_Int32_Optional){SOME, 42};")
     }
 
     @Test fun nullableReturnCallSite() {
@@ -77,28 +74,28 @@ class NullableTest : TranspilerTestBase() {
                 println(a!!)
             }
         """)
-        // Caller gets value + $has
-        r.sourceContains("int32_t a;")
-        r.sourceContains("bool a\$has = test_Main_findValue(&a);")
+        // Caller gets Optional directly
+        r.sourceContains("ktc_Int32_Optional a = test_Main_findValue();")
+        r.sourceContains("a.value")
     }
 
     // ── Null comparison ──────────────────────────────────────────────
 
     @Test fun nullComparisonEquals() {
         val r = transpileMain("var x: Int? = null\nif (x == null) println(0)")
-        r.sourceContains("!x\$has")
+        r.sourceContains("x.tag == NONE")
     }
 
     @Test fun nullComparisonNotEquals() {
         val r = transpileMain("var x: Int? = 42\nif (x != null) println(x!!)")
-        r.sourceContains("x\$has")
+        r.sourceContains("x.tag == SOME")
     }
 
     // ── Elvis operator ───────────────────────────────────────────────
 
     @Test fun elvisOperator() {
         val r = transpileMain("var x: Int? = null\nval y = x ?: 99")
-        r.sourceContains("x\$has")
+        r.sourceContains("x.tag == SOME")
         r.sourceContains("99")
     }
 
@@ -121,9 +118,9 @@ class NullableTest : TranspilerTestBase() {
                 s?.show()
             }
         """)
-        // Safe call: if (s$has) { String_show(s); }
-        r.sourceContains("s\$has")
-        r.sourceContains("test_Main_String_show(s)")
+        // Safe call: if (s.tag == SOME) { String_show(s.value); }
+        r.sourceContains("s.tag == SOME")
+        r.sourceContains("s.value")
     }
 
     // ── Null safety enforcement ──────────────────────────────────────
@@ -140,13 +137,12 @@ class NullableTest : TranspilerTestBase() {
 
     @Test fun assignNullToNullableVar() {
         val r = transpileMain("var x: Int? = 42\nx = null")
-        r.sourceContains("x\$has = false;")
+        r.sourceContains("x = (ktc_Int32_Optional){NONE};")
     }
 
     @Test fun assignValueToNullableVar() {
         val r = transpileMain("var x: Int? = null\nx = 10")
-        r.sourceContains("x = 10;")
-        r.sourceContains("x\$has = true;")
+        r.sourceContains("x = (ktc_Int32_Optional){SOME, 10};")
     }
 
     // ── Passing null to nullable param ───────────────────────────────
@@ -161,8 +157,8 @@ class NullableTest : TranspilerTestBase() {
                 show(null)
             }
         """)
-        // Passing null literal → pass 0 for value, false for $has
-        r.sourceMatches(Regex("test_Main_show\\(0.*false\\)"))
+        // Passing null literal → ktc_Int32_Optional{NONE}
+        r.sourceContains("test_Main_show((ktc_Int32_Optional){NONE})")
     }
 
     @Test fun passValueToNullableParam() {
@@ -175,8 +171,8 @@ class NullableTest : TranspilerTestBase() {
                 show(99)
             }
         """)
-        // Passing non-null literal → pass value, true for $has
-        r.sourceMatches(Regex("test_Main_show\\(99.*true\\)"))
+        // Passing non-null literal → ktc_Int32_Optional{SOME, 99}
+        r.sourceContains("test_Main_show((ktc_Int32_Optional){SOME, 99})")
     }
 
     // ── Printing nullable values ─────────────────────────────────────
@@ -186,7 +182,7 @@ class NullableTest : TranspilerTestBase() {
             var x: Int? = 42
             println(x)
         """)
-        r.sourceContains("x\$has")
+        r.sourceContains("x.tag == SOME")
         r.sourceContains("printf(\"null")
     }
 
@@ -195,7 +191,7 @@ class NullableTest : TranspilerTestBase() {
             var s: String? = null
             println(s)
         """)
-        r.sourceContains("s\$has")
+        r.sourceContains("s.tag == SOME")
         r.sourceContains("printf(\"null")
     }
 

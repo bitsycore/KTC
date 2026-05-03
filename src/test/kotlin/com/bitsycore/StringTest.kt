@@ -126,7 +126,8 @@ class StringTest : TranspilerTestBase() {
             val n = s.toIntOrNull()
         """)
         r.sourceContains("kt_str_toIntOrNull")
-        r.sourceContains("n${'$'}has")
+        r.sourceContains("n = ")
+        r.sourceContains("ktc_Int32_Optional")
     }
 
     @Test fun toIntOrNull_usedWithElvis() {
@@ -145,7 +146,8 @@ class StringTest : TranspilerTestBase() {
             val n = s.toLongOrNull()
         """)
         r.sourceContains("kt_str_toLongOrNull")
-        r.sourceContains("n${'$'}has")
+        r.sourceContains("n = ")
+        r.sourceContains("ktc_Int64_Optional")
     }
 
     // ── toDoubleOrNull ───────────────────────────────────────────────
@@ -156,7 +158,8 @@ class StringTest : TranspilerTestBase() {
             val d = s.toDoubleOrNull()
         """)
         r.sourceContains("kt_str_toDoubleOrNull")
-        r.sourceContains("d${'$'}has")
+        r.sourceContains("d = ")
+        r.sourceContains("ktc_Double_Optional")
     }
 
     // ── toFloatOrNull ────────────────────────────────────────────────
@@ -168,7 +171,8 @@ class StringTest : TranspilerTestBase() {
         """)
         r.sourceContains("kt_str_toDoubleOrNull")
         r.sourceContains("(float)")
-        r.sourceContains("f${'$'}has")
+        r.sourceContains("f = ")
+        r.sourceContains("ktc_Float_Optional")
     }
 
     // ── toIntOrNull with null check ──────────────────────────────────
@@ -181,7 +185,7 @@ class StringTest : TranspilerTestBase() {
                 println(n)
             }
         """)
-        r.sourceContains("n${'$'}has")
+        r.sourceContains("n.tag")
         r.sourceContains("kt_str_toIntOrNull")
     }
 

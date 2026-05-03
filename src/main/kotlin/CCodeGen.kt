@@ -122,8 +122,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ── Per-scope variable → type mapping ────────────────────────────
     private val scopes = ArrayDeque<MutableMap<String, String>>()
-    private fun pushScope() { scopes.addLast(mutableMapOf()) }
-    private fun popScope()  { scopes.removeLast() }
+    private fun pushScope() { scopes.addLast(mutableMapOf()); optValVarNames.addLast(mutableSetOf()) }
+    private fun popScope()  { scopes.removeLast(); optValVarNames.removeLast() }
     private fun defineVar(name: String, type: String) { scopes.last()[name] = type }
     private fun lookupVar(name: String): String? { for (i in scopes.indices.reversed()) { scopes[i][name]?.let { return it } }; return preScanVarTypes?.get(name) }
 
@@ -139,9 +139,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // Track variables stored as Optional structs (value-nullable T? → OptT in C).
     // When a variable is in this set but its current scope type is non-nullable (smart cast),
     // genName returns name.value to unwrap the Optional.
-    private val optValVarNames = mutableSetOf<String>()
-    private fun markOptional(name: String) { optValVarNames.add(name) }
-    private fun isOptional(name: String): Boolean = name in optValVarNames
+    // Scoped: each pushScope() adds a new set, popScope() removes it, so allocations never leak across scopes.
+    private val optValVarNames = ArrayDeque<MutableSet<String>>()
+    private fun markOptional(name: String) { optValVarNames.lastOrNull()?.add(name) }
+    private fun isOptional(name: String): Boolean = optValVarNames.any { name in it }
 
     // ── Current class context (when generating methods) ──────────────
     private var currentClass: String? = null
@@ -3591,7 +3592,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is CharLit   -> "'${escapeC(e.value)}'"
         is StrLit    -> "kt_str(\"${escapeStr(e.value)}\")"
         is NullLit   -> "0 /* null */"
-        is ThisExpr  -> if (selfIsPointer) "(*\$self)" else "\$self"
+        is ThisExpr  -> {
+            val selfType = lookupVar("\$self")
+            if (selfType != null && isOptional("\$self") && !selfType.endsWith("?") && !selfType.endsWith("#")) {
+                "\$self.value"
+            } else if (selfIsPointer) "(*\$self)" else "\$self"
+        }
         is NameExpr  -> genName(e)
         is BinExpr   -> genBin(e)
         is PrefixExpr  -> "(${e.op}${genExpr(e.expr)})"
@@ -3705,7 +3711,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Trampolined array param: redirect to local stack copy
             if (e.name in trampolinedParams) return "local\$${e.name}"
             // Optional var smart-casted to non-nullable: unwrap to .value
-            if (e.name in optValVarNames && !curType.endsWith("?") && !curType.endsWith("#")) {
+            if (isOptional(e.name) && !curType.endsWith("?") && !curType.endsWith("#")) {
                 return "${e.name}.value"
             }
             return e.name
@@ -4101,16 +4107,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return t
         }
 
-        // If function returns nullable, hoist to preStmt with temp Optional var
-        if (sig?.returnType?.nullable == true && isValueNullableType("${resolveTypeName(sig.returnType)}?")) {
-            val retType = resolveTypeName(sig.returnType)
-            val optType = optCTypeName("${retType}?")
-            val t = tmp()
-            preStmts += "$optType $t = ${pfx(name)}($expandedArgs);"
-            markOptional(t)
-            defineVar(t, "${retType}?")
-            return t
-        }
+        // Value-nullable functions now return Optional directly; no hoisting needed.
+        // The variable declaration code handles wrapping for already-Opt values.
 
         return "${pfx(name)}($expandedArgs)"
     }
@@ -4237,8 +4235,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val rawRecvType = inferExprType(dot.obj)
         val recvType = rawRecvType?.removeSuffix("?")
-        val recv = genExpr(dot.obj)
+        val rawRecv = genExpr(dot.obj)
         val method = dot.name
+        val hasNullRecv = hasNullableReceiverExt(recvType ?: "", method)
+        val isValueNull = rawRecvType != null && rawRecvType.endsWith("?") && isValueNullableType(rawRecvType) && !hasNullRecv
+        val recv = if (isValueNull) "$rawRecv.value" else rawRecv
         val argStr = args.joinToString(", ") { genExpr(it.expr) }
 
         // Built-in methods
@@ -4265,28 +4266,39 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Nullable string-to-number: toIntOrNull, toLongOrNull, toFloatOrNull, toDoubleOrNull
             "toIntOrNull" -> if (recvType == "String") {
                 val t = tmp()
-                preStmts += "int32_t $t;"
-                preStmts += "bool ${t}\$has = kt_str_toIntOrNull($recv, &$t);"
-                return t
+                preStmts += "int32_t ${t}_val;"
+                preStmts += "ktc_Int32_Optional $t;"
+                preStmts += "$t.tag = kt_str_toIntOrNull($recv, &${t}_val) ? SOME : NONE;"
+                preStmts += "$t.value = ${t}_val;"
+                markOptional(t)
+                t
             }
             "toLongOrNull" -> if (recvType == "String") {
                 val t = tmp()
-                preStmts += "int64_t $t;"
-                preStmts += "bool ${t}\$has = kt_str_toLongOrNull($recv, &$t);"
-                return t
+                preStmts += "int64_t ${t}_val;"
+                preStmts += "ktc_Int64_Optional $t;"
+                preStmts += "$t.tag = kt_str_toLongOrNull($recv, &${t}_val) ? SOME : NONE;"
+                preStmts += "$t.value = ${t}_val;"
+                markOptional(t)
+                t
             }
             "toDoubleOrNull" -> if (recvType == "String") {
                 val t = tmp()
-                preStmts += "double $t;"
-                preStmts += "bool ${t}\$has = kt_str_toDoubleOrNull($recv, &$t);"
-                return t
+                preStmts += "double ${t}_val;"
+                preStmts += "ktc_Double_Optional $t;"
+                preStmts += "$t.tag = kt_str_toDoubleOrNull($recv, &${t}_val) ? SOME : NONE;"
+                preStmts += "$t.value = ${t}_val;"
+                markOptional(t)
+                t
             }
             "toFloatOrNull" -> if (recvType == "String") {
                 val t = tmp()
                 preStmts += "double ${t}_d;"
-                preStmts += "bool ${t}\$has = kt_str_toDoubleOrNull($recv, &${t}_d);"
-                preStmts += "float $t = (float)${t}_d;"
-                return t
+                preStmts += "ktc_Float_Optional $t;"
+                preStmts += "$t.tag = kt_str_toDoubleOrNull($recv, &${t}_d) ? SOME : NONE;"
+                preStmts += "$t.value = (float)${t}_d;"
+                markOptional(t)
+                t
             }
             "substring" -> if (recvType == "String") {
                 val from = genExpr(args[0].expr)
@@ -5309,10 +5321,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     typeSubst = subst
                     val result = resolveTypeName(genFun.returnType)
                     typeSubst = saved
-                    return result
+                    return if (genFun.returnType.nullable && !result.endsWith("?")) "${result}?" else result
                 }
             }
-            funSigs[name]?.returnType?.let { return resolveTypeName(it) }
+            funSigs[name]?.returnType?.let {
+                val base = resolveTypeName(it)
+                return if (it.nullable && !base.endsWith("?")) "${base}?" else base
+            }
         }
         if (e.callee is DotExpr) return inferMethodReturnType(e.callee, e.args)
         if (e.callee is SafeDotExpr) {
@@ -5347,7 +5362,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val vCompanionName = vDotObjName?.let { classCompanions[it] }
         if (vCompanionName != null) {
             val vMethod = objects[vCompanionName]?.methods?.find { it.name == dot.name }
-            return if (vMethod != null && vMethod.returnType != null) resolveTypeName(vMethod.returnType) else null
+            if (vMethod != null && vMethod.returnType != null) {
+                val base = resolveTypeName(vMethod.returnType)
+                return if (vMethod.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+            }
+            return null
         }
         val recvType = inferExprType(dot.obj) ?: return null
         val method = dot.name
@@ -5435,7 +5454,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val iface = interfaces[recvType]
         if (iface != null) {
             val m = iface.methods.find { it.name == method }
-            if (m != null) return if (m.returnType != null) resolveTypeName(m.returnType) else "Unit"
+            if (m != null && m.returnType != null) {
+                return resolveMethodReturnType(recvType, m.returnType)
+            }
         }
         // Class method
         val ci = classes[recvType]

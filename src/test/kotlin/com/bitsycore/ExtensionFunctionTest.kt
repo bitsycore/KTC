@@ -87,8 +87,8 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 s.printSafe()
             }
         """)
-        // Should have $self + $self$has params
-        r.sourceContains("void test_Main_String_printSafe(kt_String ${'$'}self, bool ${'$'}self${'$'}has)")
+        // Should pass ktc_String_Optional $self
+        r.sourceContains("void test_Main_String_printSafe(ktc_String_Optional \$self)")
     }
 
     @Test fun nullableReceiverCallPassesHas() {
@@ -105,8 +105,8 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 s.printSafe()
             }
         """)
-        // Call site should pass s and s$has
-        r.sourceContains("test_Main_String_printSafe(s, s\$has)")
+        // Call site should pass s (Optional directly)
+        r.sourceContains("test_Main_String_printSafe(s)")
     }
 
     @Test fun nullableReceiverBodyChecksHas() {
@@ -120,8 +120,8 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 s.printSafe()
             }
         """)
-        // Inside the function, `this != null` should check $self$has
-        r.sourceContains("\$self\$has")
+        // Inside the function, `this != null` should check $self.tag == SOME
+        r.sourceContains("\$self.tag == SOME")
     }
 
     @Test fun nullableReceiverOnClassType() {
@@ -139,9 +139,9 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 v.printSafe()
             }
         """)
-        // Class type: $self is by-value + $self$has
-        r.sourceContains("test_Main_Vec2 ${'$'}self, bool ${'$'}self${'$'}has")
-        r.sourceContains("test_Main_Vec2_printSafe(v, v\$has)")
+        // Class type: $self is by-value Optional
+        r.sourceContains("test_Main_Vec2_Optional \$self")
+        r.sourceContains("test_Main_Vec2_printSafe(v)")
     }
 
     @Test fun nullableReceiverNoErrorOnDotCall() {
@@ -155,7 +155,7 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 s.safe()
             }
         """)
-        r.sourceContains("test_Main_String_safe(s, s\$has)")
+        r.sourceContains("test_Main_String_safe(s)")
     }
 
     @Test fun dotCallOnNullableWithoutNullableReceiverErrors() {

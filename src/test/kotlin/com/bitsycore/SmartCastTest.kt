@@ -32,8 +32,8 @@ class SmartCastTest : TranspilerTestBase() {
                 s.show()
             }
         """)
-        // After guard, s is smart-cast to String — .show() should work
-        r.sourceContains("test_Main_String_show(s)")
+        // After guard, s is smart-cast to String — s.value unwraps Optional
+        r.sourceContains("test_Main_String_show(s.value)")
     }
 
     @Test fun guardSmartCastWithBreak() {
@@ -48,8 +48,8 @@ class SmartCastTest : TranspilerTestBase() {
                 }
             }
         """)
-        // After guard with break, x should be smart-cast
-        r.sourceNotContains("x\$has ?")  // no ternary guard on x after smart cast
+        // After guard with break, x should be smart-cast — printed via .value
+        r.sourceContains("x.value")
     }
 
     @Test fun guardSmartCastWithContinue() {
@@ -81,7 +81,7 @@ class SmartCastTest : TranspilerTestBase() {
                 }
             }
         """)
-        r.sourceContains("test_Main_String_show(s)")
+        r.sourceContains("test_Main_String_show(s.value)")
     }
 
     // ── If-else narrowing: if (x == null) { ... } else { x.use() } ──
@@ -99,8 +99,8 @@ class SmartCastTest : TranspilerTestBase() {
                 }
             }
         """)
-        // In else branch, x is smart-cast — should print x directly
-        r.sourceContains("printf(\"%\" PRId32 \"\\n\", x)")
+        // In else branch, x is smart-cast — should print x.value
+        r.sourceContains("x.value")
     }
 
     // ── Var NOT smart-cast ───────────────────────────────────────────
@@ -147,7 +147,7 @@ class SmartCastTest : TranspilerTestBase() {
                 s.show()
             }
         """)
-        r.sourceContains("test_Main_String_show(s)")
+        r.sourceContains("test_Main_String_show(s.value)")
     }
 
     // ── Smart cast on this in nullable receiver ──────────────────────
@@ -163,9 +163,9 @@ class SmartCastTest : TranspilerTestBase() {
                 s.safe()
             }
         """)
-        // Inside the if, this should be smart-cast to String → proper printf
-        r.sourceContains("(${'$'}self).len")
-        r.sourceContains("(${'$'}self).ptr")
+        // Inside the if, this should be smart-cast to String → $self.value
+        r.sourceContains("(\$self.value).len")
+        r.sourceContains("(\$self.value).ptr")
     }
 
     // ── No smart cast without guard/if ───────────────────────────────
