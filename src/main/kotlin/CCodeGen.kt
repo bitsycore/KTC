@@ -1351,6 +1351,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val cName = pfx(d.name)
         val ci = classes[d.name]!!
 
+        val kind = if (d.isData) "data class" else "class"
+        impl.appendLine("// ══ $kind ${d.name} ($currentSourceFile) ══")
+        impl.appendLine()
+
         // --- header: typedef struct ---
         hdr.appendLine("typedef struct {")
         for ((name, type) in ci.props) {
@@ -1444,6 +1448,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitGenericClass(templateDecl: ClassDecl, mangledName: String) {
         val cName = pfx(mangledName)
         val ci = classes[mangledName]!!
+
+        val kind = if (templateDecl.isData) "data class" else "class"
+        val concreteTypes = mangledName.removePrefix(templateDecl.name).removePrefix("_").replace("_", ", ")
+        impl.appendLine("// ══ $kind ${templateDecl.name}<$concreteTypes> ($currentSourceFile) ══")
+        impl.appendLine()
 
         // --- header: struct definition (forward typedef already emitted) ---
         hdr.appendLine("struct $cName {")
@@ -1661,6 +1670,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── extension function ───────────────────────────────────────────
 
     private fun emitExtensionFun(f: FunDecl) {
+        impl.appendLine("// ══ ext ${f.name} on ${f.receiver!!.name} ($currentSourceFile) ══")
+        impl.appendLine()
+
         val recvTypeName = f.receiver!!.name
         val recvIsNullable = f.receiver.nullable
         val returnsSizedArray = f.returnType != null && isSizedArrayTypeRef(f.returnType)
@@ -1780,6 +1792,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val prevSubst = typeSubst
             typeSubst = subst
             val mangledName = "${f.name}_${typeArgs.joinToString("_")}"
+
+            impl.appendLine("// ══ generic ${f.name}<${typeArgs.joinToString(", ")}> ($currentSourceFile) ══")
+            impl.appendLine()
 
             // Resolve return type and params under substitution
             val returnsArray = f.returnType != null && isArrayType(resolveTypeName(f.returnType))
@@ -2047,6 +2062,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val props = d.members.filterIsInstance<PropDecl>()
         val initBlocks = d.members.filterIsInstance<FunDecl>().filter { it.name == "init" }
         val methods = d.members.filterIsInstance<FunDecl>().filter { it.name != "init" }
+
+        impl.appendLine("// ══ object ${d.name} ($currentSourceFile) ══")
+        impl.appendLine()
 
         hdr.appendLine("typedef struct {")
         if (props.isEmpty()) hdr.appendLine("    char _dummy;")
@@ -2357,6 +2375,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── top-level fun ────────────────────────────────────────────────
 
     private fun emitFun(f: FunDecl) {
+
+        if (f.name != "main") {
+            impl.appendLine("// ══ fun ${f.name} ($currentSourceFile) ══")
+            impl.appendLine()
+        }
         val isMain = f.name == "main"
         val isMainWithArgs = isMain && f.params.size == 1 &&
                 f.params[0].type.name == "Array" &&
