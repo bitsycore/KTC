@@ -1,11 +1,13 @@
 package ktc.std
 
-class MapIterator<K, V>(@Ptr keys: Array<K>, @Ptr vals: Array<V>, @Ptr occ: Array<Boolean>, cap: Int) {
-	var idx: Int = 0
-	@Ptr val keys: Array<K> = keys
-	@Ptr val vals: Array<V> = vals
-	@Ptr val occ: Array<Boolean> = occ
-	val cap: Int = cap
+class MapIterator<K, V>(
+	private val keys: @Ptr Array<K>,
+	private val vals: @Ptr Array<V>,
+	private val occ: @Ptr Array<Boolean>,
+	private val cap: Int
+) {
+
+	private var idx: Int = 0
 
 	operator fun hasNext(): Boolean {
 		while (idx < cap) {
@@ -23,6 +25,7 @@ class MapIterator<K, V>(@Ptr keys: Array<K>, @Ptr vals: Array<V>, @Ptr occ: Arra
 		idx = idx + 1
 		return k to v
 	}
+
 }
 
 interface Map<K, V> : Disposable {
@@ -43,12 +46,13 @@ interface MutableMap<K, V> : Map<K, V> {
 class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 
 	override var size: Int = 0
-	var cap: Int = capacity
+	private var cap: Int = capacity
+
 	@Ptr var keys: Array<K> = HeapAlloc<Array<K>>(capacity)!!
 	@Ptr var vals: Array<V> = HeapAlloc<Array<V>>(capacity)!!
 	@Ptr var occ: Array<Boolean> = HeapArrayZero<Array<Boolean>>(capacity)!!
 
-	fun findSlot(key: K): Int {
+	private fun findSlot(key: K): Int {
 		var idx = key.hashCode() % cap
 		if (idx < 0) {
 			idx = idx + cap
@@ -129,7 +133,7 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		size = 0
 	}
 
-	fun grow() {
+	private fun grow() {
 		val oldKeys = keys
 		val oldVals = vals
 		val oldOcc = occ

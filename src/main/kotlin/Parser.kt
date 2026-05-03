@@ -22,12 +22,14 @@ class Parser(private val tokens: List<Token>) {
         skipNL()
         // skip 'override' modifier — we just note it and continue
         if (at(TokenType.OVERRIDE)) advance()
-        // track 'operator' modifier
+        // track 'operator' and 'private' modifiers
         val isOperator = at(TokenType.IDENT) && cur().value == "operator"
         if (isOperator) advance()
+        val isPrivate = at(TokenType.PRIVATE)
+        if (isPrivate) advance()
         return when {
-            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator)
-            at(TokenType.DATA)   -> { advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
+            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate)
+            at(TokenType.DATA)   -> { if (isPrivate) error("private with data not supported"); advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
             at(TokenType.INTERFACE) -> parseInterfaceDecl()
@@ -36,13 +38,13 @@ class Parser(private val tokens: List<Token>) {
                 parseCompanionObjectDecl()
             }
             at(TokenType.OBJECT) -> parseObjectDecl()
-            at(TokenType.VAL)    -> parsePropDecl(mutable = false)
-            at(TokenType.VAR)    -> parsePropDecl(mutable = true)
+            at(TokenType.VAL)    -> parsePropDecl(mutable = false, isPrivate = isPrivate)
+            at(TokenType.VAR)    -> parsePropDecl(mutable = true, isPrivate = isPrivate)
             at(TokenType.AT) -> {
                 // @Ptr val/var — parse annotations, then delegate
                 val anns = parseAnnotations()
-                if (at(TokenType.VAL)) parsePropDecl(mutable = false, anns)
-                else if (at(TokenType.VAR)) parsePropDecl(mutable = true, anns)
+                if (at(TokenType.VAL)) parsePropDecl(mutable = false, preAnnotations = anns, isPrivate = isPrivate)
+                else if (at(TokenType.VAR)) parsePropDecl(mutable = true, preAnnotations = anns, isPrivate = isPrivate)
                 else error("Expected val/var after annotation at ${cur()}")
             }
             at(TokenType.INIT)   -> { advance(); FunDecl("init", emptyList(), null, parseBlock()) }
@@ -52,7 +54,7 @@ class Parser(private val tokens: List<Token>) {
 
     // ── fun ──────────────────────────────────────────────────────────
 
-    private fun parseFunDecl(isOperator: Boolean = false): FunDecl {
+    private fun parseFunDecl(isOperator: Boolean = false, isPrivate: Boolean = false): FunDecl {
         expect(TokenType.FUN)
         // Parse optional type parameters: fun <T, U> name(...)
         val typeParams = if (at(TokenType.LT)) {
@@ -98,7 +100,7 @@ class Parser(private val tokens: List<Token>) {
             else -> null
         }
         skipTerminator()
-        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator)
+        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator, isPrivate)
     }
 
     private fun parseParamList(): List<Param> {
@@ -169,6 +171,8 @@ class Parser(private val tokens: List<Token>) {
         skipNL()
         while (!at(TokenType.RPAREN) && !at(TokenType.EOF)) {
             val annotations = parseAnnotations()
+            val isPriv = at(TokenType.PRIVATE)
+            if (isPriv) advance()
             var isVal = false; var isVar = false
             if (at(TokenType.VAL)) { isVal = true; advance() }
             else if (at(TokenType.VAR)) { isVar = true; advance() }
@@ -297,7 +301,7 @@ class Parser(private val tokens: List<Token>) {
 
     // ── val / var (top-level or class-level property) ────────────────
 
-    private fun parsePropDecl(mutable: Boolean, preAnnotations: List<Annotation> = emptyList()): PropDecl {
+    private fun parsePropDecl(mutable: Boolean, preAnnotations: List<Annotation> = emptyList(), isPrivate: Boolean = false): PropDecl {
         val line = cur().line
         val annotations = if (preAnnotations.isNotEmpty()) preAnnotations else parseAnnotations()
         advance()   // skip val/var
@@ -309,7 +313,7 @@ class Parser(private val tokens: List<Token>) {
         } else null
         val init = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
         skipTerminator()
-        return PropDecl(name, type, init, mutable, line)
+        return PropDecl(name, type, init, mutable, line, isPrivate)
     }
 
     // ═══════════════════════════ Statements ═══════════════════════════

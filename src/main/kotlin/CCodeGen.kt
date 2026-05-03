@@ -27,7 +27,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     // ── Symbol tables (populated by collectDecls) ────────────────────
-    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0)
+    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false)
 
     private data class ClassInfo(
         val name: String, val isData: Boolean,
@@ -36,7 +36,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val bodyProps: List<BodyProp> = emptyList(),
         val methods: MutableList<FunDecl> = mutableListOf(),
         val initBlocks: List<Block> = emptyList(),
-        val typeParams: List<String> = emptyList()
+        val typeParams: List<String> = emptyList(),
+        val privateProps: Set<String> = emptySet()
     ) {
         val props: List<Pair<String, TypeRef>>
             get() = ctorProps + bodyProps.map { it.name to it.type }
@@ -308,6 +309,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── Output sections ──────────────────────────────────────────────
     private val hdr   = StringBuilder()   // .h forward decls & typedefs
     private val impl  = StringBuilder()   // .c implementations
+    private val implFwd = StringBuilder()  // .c private forward decls (prepended at end)
 
     // ═══════════════════════════ Public entry ═════════════════════════
 
@@ -481,6 +483,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val src = StringBuilder()
         src.appendLine("#include \"$srcName.h\"")
         src.appendLine()
+        if (implFwd.isNotEmpty()) {
+            src.append(implFwd)
+            src.appendLine()
+        }
         src.append(impl)
 
         return COutput(hdr.toString(), src.toString())
@@ -561,9 +567,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
                 val ctorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { it.name to it.type }
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
-                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line)
+                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line, p.isPrivate)
                 }
-                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams)
+                val privateProps = bodyProps.filter { it.isPrivate }.map { it.name }.toSet()
+                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams, privateProps = privateProps)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
                 for (m in d.members) if (m is FunDecl && m.receiver == null) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
@@ -846,10 +853,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 // Substitute types in body props
                 val bodyProps = templateCi.bodyProps.map { bp ->
-                    BodyProp(bp.name, substituteTypeRef(bp.type, subst), bp.init, bp.line)
+                    BodyProp(bp.name, substituteTypeRef(bp.type, subst), bp.init, bp.line, bp.isPrivate)
                 }
                 val ci = ClassInfo(mangledName, templateCi.isData, ctorProps, ctorPlainParams, bodyProps,
-                    initBlocks = templateCi.initBlocks)
+                    initBlocks = templateCi.initBlocks, typeParams = templateCi.typeParams, privateProps = templateCi.privateProps)
                 // Copy methods from template
                 for (m in templateCi.methods) ci.methods += m
                 classes[mangledName] = ci
@@ -1358,22 +1365,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // --- header: typedef struct ---
         hdr.appendLine("typedef struct {")
         for ((name, type) in ci.props) {
+            val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val resolved = resolveTypeName(type)
             if (isFuncType(resolved)) {
-                hdr.appendLine("    ${cFuncPtrDecl(resolved, name)};")
+                hdr.appendLine("    ${cFuncPtrDecl(resolved, fieldName)};")
             } else if (isArrayType(resolved)) {
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    hdr.appendLine("    $elemType $name[${sizeAnn}];")
+                    hdr.appendLine("    $elemType $fieldName[${sizeAnn}];")
                 } else {
-                    hdr.appendLine("    ${cTypeStr(resolved)} $name;")
-                    hdr.appendLine("    int32_t ${name}\$len;")
+                    hdr.appendLine("    ${cTypeStr(resolved)} $fieldName;")
+                    hdr.appendLine("    int32_t ${fieldName}\$len;")
                 }
             } else if (type.nullable) {
-                hdr.appendLine("    ${optCTypeName(resolved)} $name;")
+                hdr.appendLine("    ${optCTypeName(resolved)} $fieldName;")
             } else {
-                hdr.appendLine("    ${cType(type)} $name;${ptrNullComment(resolved)}")
+                hdr.appendLine("    ${cType(type)} $fieldName;${ptrNullComment(resolved)}")
             }
         }
         hdr.appendLine("} $cName;")
@@ -1387,22 +1395,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName ${cName}_create($paramDecl);")
         impl.appendLine("$cName ${cName}_create($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { it.first }}};")
+            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
             for ((name, type) in ci.ctorProps) {
+                val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
                 val resolved = resolveTypeName(type)
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    impl.appendLine("    memcpy(\$self.$name, $name, $sizeAnn * sizeof($elemType));")
+                    impl.appendLine("    memcpy(\$self.$fieldName, $name, $sizeAnn * sizeof($elemType));")
                 } else if (isArrayType(resolved)) {
-                    impl.appendLine("    \$self.$name = $name;")
-                    impl.appendLine("    \$self.${name}\$len = ${name}\$len;")
+                    impl.appendLine("    \$self.$fieldName = $name;")
+                    impl.appendLine("    \$self.${fieldName}\$len = ${name}\$len;")
                 } else if (type.nullable) {
-                    impl.appendLine("    \$self.$name = $name;")
+                    impl.appendLine("    \$self.$fieldName = $name;")
                 } else {
-                    impl.appendLine("    \$self.$name = $name;")
+                    impl.appendLine("    \$self.$fieldName = $name;")
                 }
             }
             for (bp in ci.bodyProps) {
@@ -1410,7 +1419,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (bp.line > 0) currentStmtLine = bp.line
                     val expr = genExpr(bp.init)
                     flushPreStmts("    ")
-                    impl.appendLine("    \$self.${bp.name} = $expr;")
+                    val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
+                    impl.appendLine("    \$self.$bodyFieldName = $expr;")
                     emitBodyPropLenIfArray(bp)
                 }
             }
@@ -1457,22 +1467,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // --- header: struct definition (forward typedef already emitted) ---
         hdr.appendLine("struct $cName {")
         for ((name, type) in ci.props) {
+            val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val resolved = resolveTypeName(type)
             if (isFuncType(resolved)) {
-                hdr.appendLine("    ${cFuncPtrDecl(resolved, name)};")
+                hdr.appendLine("    ${cFuncPtrDecl(resolved, fieldName)};")
             } else if (isArrayType(resolved)) {
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    hdr.appendLine("    $elemType $name[${sizeAnn}];")
+                    hdr.appendLine("    $elemType $fieldName[${sizeAnn}];")
                 } else {
-                    hdr.appendLine("    ${cTypeStr(resolved)} $name;")
-                    hdr.appendLine("    int32_t ${name}\$len;")
+                    hdr.appendLine("    ${cTypeStr(resolved)} $fieldName;")
+                    hdr.appendLine("    int32_t ${fieldName}\$len;")
                 }
             } else if (type.nullable) {
-                hdr.appendLine("    ${optCTypeName(resolved)} $name;")
+                hdr.appendLine("    ${optCTypeName(resolved)} $fieldName;")
             } else {
-                hdr.appendLine("    ${cType(type)} $name;${ptrNullComment(resolved)}")
+                hdr.appendLine("    ${cType(type)} $fieldName;${ptrNullComment(resolved)}")
             }
         }
         hdr.appendLine("};")
@@ -1486,22 +1497,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName ${cName}_create($paramDecl);")
         impl.appendLine("$cName ${cName}_create($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { it.first }}};")
+            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
             for ((name, type) in ci.ctorProps) {
+                val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
                 val resolved = resolveTypeName(type)
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    impl.appendLine("    memcpy(\$self.$name, $name, $sizeAnn * sizeof($elemType));")
+                    impl.appendLine("    memcpy(\$self.$fieldName, $name, $sizeAnn * sizeof($elemType));")
                 } else if (isArrayType(resolved)) {
-                    impl.appendLine("    \$self.$name = $name;")
-                    impl.appendLine("    \$self.${name}\$len = ${name}\$len;")
+                    impl.appendLine("    \$self.$fieldName = $name;")
+                    impl.appendLine("    \$self.${fieldName}\$len = ${name}\$len;")
                 } else if (type.nullable) {
-                    impl.appendLine("    \$self.$name = $name;")
+                    impl.appendLine("    \$self.$fieldName = $name;")
                 } else {
-                    impl.appendLine("    \$self.$name = $name;")
+                    impl.appendLine("    \$self.$fieldName = $name;")
                 }
             }
             for (bp in ci.bodyProps) {
@@ -1509,7 +1521,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (bp.line > 0) currentStmtLine = bp.line
                     val expr = genExpr(bp.init)
                     flushPreStmts("    ")
-                    impl.appendLine("    \$self.${bp.name} = $expr;")
+                    val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
+                    impl.appendLine("    \$self.$bodyFieldName = $expr;")
                     emitBodyPropLenIfArray(bp)
                 }
             }
@@ -1537,12 +1550,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("bool ${cName}_equals($cName a, $cName b);")
         impl.appendLine("bool ${cName}_equals($cName a, $cName b) {")
         val eqs = ci.props.joinToString(" && ") { (name, type) ->
+            val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val t = resolveTypeName(type)
             when {
-                type.nullable -> "(a.$name.tag == b.$name.tag && (a.$name.tag == NONE || a.$name.value == b.$name.value))"
-                t == "String" -> "ktc_string_eq(a.$name, b.$name)"
-                classes[t]?.isData == true -> "${pfx(t)}_equals(a.$name, b.$name)"
-                else -> "a.$name == b.$name"
+                type.nullable -> "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == NONE || a.$fieldName.value == b.$fieldName.value))"
+                t == "String" -> "ktc_string_eq(a.$fieldName, b.$fieldName)"
+                classes[t]?.isData == true -> "${pfx(t)}_equals(a.$fieldName, b.$fieldName)"
+                else -> "a.$fieldName == b.$fieldName"
             }
         }
         impl.appendLine("    return ${eqs.ifEmpty { "true" }};")
@@ -1556,11 +1570,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine("    ktc_sb_append_cstr(sb, \"$ktName(\");")
         for ((i, prop) in ci.props.withIndex()) {
             val (name, type) = prop
+            val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val tBase = resolveTypeName(type)
             val tFull = if (type.nullable) "${tBase}?" else tBase
             if (i > 0) impl.appendLine("    ktc_sb_append_cstr(sb, \", \");")
             impl.appendLine("    ktc_sb_append_cstr(sb, \"$name=\");")
-            impl.appendLine("    ${genSbAppend("sb", "\$self->$name", tFull)}")
+            impl.appendLine("    ${genSbAppend("sb", "\$self->$fieldName", tFull)}")
         }
         impl.appendLine("    ktc_sb_append_char(sb, ')');")
         impl.appendLine("}")
@@ -1589,6 +1604,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun emitMethod(className: String, f: FunDecl) {
         val cClass = pfx(className)
+        val methodName = if (f.isPrivate) "PRIV_${f.name}" else f.name
         val returnsNullable = f.returnType != null && f.returnType.nullable
         val returnsSizedArray = !returnsNullable && f.returnType != null && isSizedArrayTypeRef(f.returnType)
         val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else ""
@@ -1610,8 +1626,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (outParam != null) allParts += outParam
         val allParams = allParts.joinToString(", ")
 
-        hdr.appendLine("$cRet ${cClass}_${f.name}($allParams);")
-        impl.appendLine("$cRet ${cClass}_${f.name}($allParams) {")
+        if (f.isPrivate) {
+            // Private: forward decl only in .c, not in .h
+            implFwd.appendLine("$cRet ${cClass}_${methodName}($allParams);")
+        } else {
+            hdr.appendLine("$cRet ${cClass}_${methodName}($allParams);")
+        }
+        impl.appendLine("$cRet ${cClass}_${methodName}($allParams) {")
 
         val prevReturnsNullable = currentFnReturnsNullable
         val prevReturnsArray = currentFnReturnsArray
@@ -3669,9 +3690,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Check if it's a known variable in scope
         if (curType != null) {
             if (currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true) {
-                val fieldRef = if (selfIsPointer) "\$self->${e.name}" else "\$self.${e.name}"
+                val ci = classes[currentClass]!!
+                val fieldName = if (e.name in ci.privateProps) "PRIV_${e.name}" else e.name
+                val fieldRef = if (selfIsPointer) "\$self->${fieldName}" else "\$self.${fieldName}"
                 // If field is stored as Optional but accessed after smart-cast (non-nullable context), unwrap
-                val fieldType = classes[currentClass]!!.props.find { it.first == e.name }?.second
+                val fieldType = ci.props.find { it.first == e.name }?.second
                 if (fieldType?.nullable == true && !curType.endsWith("?")) {
                     return "$fieldRef.value"
                 }
@@ -4419,11 +4442,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             } else if (isExtFun) "$recv"
             else "&$recv"
             val allArgs = if (argStr.isEmpty()) selfArg else "$selfArg, $argStr"
+            val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_${method}" else method
             // Nullable return: use out-pointer pattern
             if (methodDecl?.returnType?.nullable == true) {
-                return genNullableMethodCall(recvType, "${pfx(recvType)}_$method", allArgs, methodDecl)
+                return genNullableMethodCall(recvType, "${pfx(recvType)}_$fnPrefix", allArgs, methodDecl)
             }
-            return "${pfx(recvType)}_$method($allArgs)"
+            return "${pfx(recvType)}_$fnPrefix($allArgs)"
         }
         // Object method
         if (recvType != null && objects.containsKey(recvType)) {
@@ -4607,7 +4631,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Heap<T> / Ptr<T> / Value<T>: p->field (auto-deref through pointer)
         if (pointerClassName(recvType) != null) {
-            return "$recv->${e.name}"
+            val fieldName = if (currentClass != null && e.obj is ThisExpr) {
+                val ci = classes[currentClass]!!
+                if (e.name in ci.privateProps) "PRIV_${e.name}" else e.name
+            } else e.name
+            return "$recv->${fieldName}"
         }
 
         // Interface property access via vtable: list.size → list.vt->size(list.obj)
@@ -4619,7 +4647,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
 
-        return "$recv.${e.name}"
+        val fieldName = if (currentClass != null && e.obj is ThisExpr) {
+            val ci = classes[currentClass]!!
+            if (e.name in ci.privateProps) "PRIV_${e.name}" else e.name
+        } else e.name
+        return "$recv.${fieldName}"
     }
 
     private fun genSafeDot(e: SafeDotExpr): String {
@@ -5151,7 +5183,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return when (e) {
             is NameExpr -> {
                 if (method && currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true) {
-                    if (selfIsPointer) "\$self->${e.name}" else "\$self.${e.name}"
+                    val ci = classes[currentClass]!!
+                    val fieldName = if (e.name in ci.privateProps) "PRIV_${e.name}" else e.name
+                    if (selfIsPointer) "\$self->${fieldName}" else "\$self.${fieldName}"
                 }
                 else if (currentObject.let { vCO -> vCO != null && objects[vCO]?.props?.any { it.first == e.name } == true })
                     "${pfx(currentObject!!)}.${e.name}"

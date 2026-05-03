@@ -31,7 +31,8 @@ data class FunDecl(
     val body: Block?,
     val receiver: TypeRef? = null,
     val typeParams: List<String> = emptyList(),
-    val isOperator: Boolean = false
+    val isOperator: Boolean = false,
+    val isPrivate: Boolean = false
 ) : Decl()
 
 data class ClassDecl(
@@ -67,7 +68,8 @@ data class PropDecl(
     val type: TypeRef?,
     val init: Expr?,
     val mutable: Boolean,
-    val line: Int = 0
+    val line: Int = 0,
+    val isPrivate: Boolean = false
 ) : Decl()
 
 // ═══════════════════════════ Parameters ═══════════════════════════
