@@ -1,4 +1,4 @@
-package PairVararg.Main
+package PairVararg
 
 fun sum(vararg nums: Int): Int {
 	var total = 0

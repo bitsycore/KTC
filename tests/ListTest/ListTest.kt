@@ -1,4 +1,4 @@
-package TestProject.Main
+package ListTest.Main
 
 // Disposable, List<T>, MutableList<T>, ArrayList<T> come from ktc stdlib (auto-imported)
 

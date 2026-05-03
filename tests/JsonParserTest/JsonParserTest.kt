@@ -1,4 +1,4 @@
-package json.Main
+package JsonParserTest
 
 // ═══════════════════════════════════════════════════════════════════════
 // JSON Parser — Showcase for KotlinToC transpiler
