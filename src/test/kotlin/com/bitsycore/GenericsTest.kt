@@ -25,7 +25,7 @@ class GenericsTest : TranspilerTestBase() {
         // Mangled struct: Box_Int (forward typedef + struct definition)
         r.headerContains("typedef struct test_Main_Box_Int test_Main_Box_Int;")
         r.headerContains("struct test_Main_Box_Int {")
-        r.headerContains("int32_t item;")
+        r.headerContains("ktc_Int item;")
     }
 
     @Test fun genericClassCreateFunction() {
@@ -110,8 +110,8 @@ class GenericsTest : TranspilerTestBase() {
             }
         """)
         r.sourceContains("test_Main_Box_Int_get(")
-        // Method return type is concrete int32_t
-        r.sourceMatches(Regex("int32_t test_Main_Box_Int_get"))
+        // Method return type is concrete ktc_Int
+        r.sourceMatches(Regex("ktc_Int test_Main_Box_Int_get"))
     }
 
     @Test fun genericClassMethodWithParam() {
@@ -128,8 +128,8 @@ class GenericsTest : TranspilerTestBase() {
             }
         """)
         r.sourceContains("test_Main_Box_Int_set(")
-        // Method takes concrete int32_t parameter
-        r.sourceMatches(Regex("void test_Main_Box_Int_set.*int32_t"))
+        // Method takes concrete ktc_Int parameter
+        r.sourceMatches(Regex("void test_Main_Box_Int_set.*ktc_Int"))
     }
 
     // ── Generic class with body props ───────────────────────────────
@@ -144,8 +144,8 @@ class GenericsTest : TranspilerTestBase() {
                 val w = Wrapper<Int>(42)
             }
         """)
-        r.headerContains("int32_t item;")
-        r.headerContains("int32_t count;")
+        r.headerContains("ktc_Int item;")
+        r.headerContains("ktc_Int count;")
         r.sourceContains("count = 0")
     }
 
@@ -173,8 +173,8 @@ class GenericsTest : TranspilerTestBase() {
                 val p = Pair<Int>(1, 2)
             }
         """)
-        r.headerContains("int32_t first;")
-        r.headerContains("int32_t second;")
+        r.headerContains("ktc_Int first;")
+        r.headerContains("ktc_Int second;")
         r.sourceContains("test_Main_Pair_Int_create(1, 2)")
     }
 
@@ -226,9 +226,9 @@ class GenericsTest : TranspilerTestBase() {
                 val s = Stack<Int>(0)
             }
         """)
-        // Both fields should be int32_t (T→Int)
-        r.headerMatches(Regex("int32_t initial;"))
-        r.headerMatches(Regex("int32_t top;"))
+        // Both fields should be ktc_Int (T→Int)
+        r.headerMatches(Regex("ktc_Int initial;"))
+        r.headerMatches(Regex("ktc_Int top;"))
     }
 
     // ── TypeRef scanning for generic instantiation in type positions ─
@@ -262,7 +262,7 @@ class GenericsTest : TranspilerTestBase() {
         """)
         // Mangled function name: identity_Int
         r.headerContains("test_Main_identity_Int(")
-        r.sourceContains("int32_t test_Main_identity_Int(int32_t x)")
+        r.sourceContains("ktc_Int test_Main_identity_Int(ktc_Int x)")
         r.sourceContains("test_Main_identity_Int(42)")
     }
 
@@ -340,7 +340,7 @@ class GenericsTest : TranspilerTestBase() {
                 printVal<Int>(42)
             }
         """)
-        r.sourceContains("void test_Main_printVal_Int(int32_t x)")
+        r.sourceContains("void test_Main_printVal_Int(ktc_Int x)")
         r.sourceContains("test_Main_printVal_Int(42)")
     }
 
@@ -364,7 +364,7 @@ class GenericsTest : TranspilerTestBase() {
         """)
         // Star ext expands to Box_Int_getCount
         r.sourceContains("test_Main_Box_Int_getCount(")
-        r.sourceMatches(Regex("int32_t test_Main_Box_Int_getCount"))
+        r.sourceMatches(Regex("ktc_Int test_Main_Box_Int_getCount"))
     }
 
     @Test fun starExtMultipleInstantiations() {
@@ -419,7 +419,7 @@ class GenericsTest : TranspilerTestBase() {
         // Even though Box<Int> is used twice, star ext should emit only once
         val count = Regex("test_Main_Box_Int_tag\\(").findAll(r.source).count()
         // Implementation + one call per usage = more than 1, but the definition itself appears once
-        val implCount = Regex("int32_t test_Main_Box_Int_tag\\(test_Main_Box_Int\\*").findAll(r.source).count()
+        val implCount = Regex("ktc_Int test_Main_Box_Int_tag\\(test_Main_Box_Int\\*").findAll(r.source).count()
         assertTrue(implCount == 1, "Star ext should be emitted exactly once, got $implCount\n${r.source}")
     }
 
@@ -435,6 +435,6 @@ class GenericsTest : TranspilerTestBase() {
                 val r = w.reset()
             }
         """)
-        r.sourceMatches(Regex("int32_t test_Main_Wrapper_Int_reset"))
+        r.sourceMatches(Regex("ktc_Int test_Main_Wrapper_Int_reset"))
     }
 }

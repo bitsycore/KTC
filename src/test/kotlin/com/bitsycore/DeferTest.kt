@@ -60,7 +60,7 @@ class DeferTest : TranspilerTestBase() {
             }
         """)
         // Return value should be evaluated into a temp before defers run
-        r.sourceMatches(Regex("int32_t \\$\\d+ = "))
+        r.sourceMatches(Regex("ktc_Int \\$\\d+ = "))
         r.sourceContains("free(p)")
     }
 

@@ -17,8 +17,8 @@ class DataClassTest : TranspilerTestBase() {
     @Test fun structTypedef() {
         val r = transpileMain("val v = Vec2(1.0f, 2.0f)", decls = vec2Decl)
         r.headerContains("typedef struct {")
-        r.headerContains("float x;")
-        r.headerContains("float y;")
+        r.headerContains("ktc_Float x;")
+        r.headerContains("ktc_Float y;")
         r.headerContains("} test_Main_Vec2;")
     }
 
@@ -26,7 +26,7 @@ class DataClassTest : TranspilerTestBase() {
 
     @Test fun createFunction() {
         val r = transpileMain("val v = Vec2(1.0f, 2.0f)", decls = vec2Decl)
-        r.sourceContains("test_Main_Vec2 test_Main_Vec2_create(float x, float y)")
+        r.sourceContains("test_Main_Vec2 test_Main_Vec2_create(ktc_Float x, ktc_Float y)")
         r.sourceContains("test_Main_Vec2 v = test_Main_Vec2_create(1.0f, 2.0f);")
     }
 
@@ -97,7 +97,7 @@ class DataClassTest : TranspilerTestBase() {
 
     @Test fun heapNew() {
         val r = transpileMain("val v = Vec2(1.0f, 2.0f)", decls = vec2Decl)
-        r.sourceContains("test_Main_Vec2* test_Main_Vec2_new(float x, float y)")
+        r.sourceContains("test_Main_Vec2* test_Main_Vec2_new(ktc_Float x, ktc_Float y)")
     }
 
     // ── Nested data class (struct-type ctor arg passed by value) ─────

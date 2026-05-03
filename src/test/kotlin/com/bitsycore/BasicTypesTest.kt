@@ -11,57 +11,57 @@ class BasicTypesTest : TranspilerTestBase() {
 
     @Test fun intLiteral() {
         val r = transpileMain("val x: Int = 42\nprintln(x)")
-        r.sourceContains("int32_t x = 42;")
+        r.sourceContains("ktc_Int x = 42;")
     }
 
     @Test fun intArithmetic() {
         val r = transpileMain("val a = 10\nval b = 20\nval c = a + b\nprintln(c)")
-        r.sourceContains("int32_t c = (a + b);")
+        r.sourceContains("ktc_Int c = (a + b);")
     }
 
     @Test fun intNegative() {
         val r = transpileMain("val x = -5\nprintln(x)")
-        r.sourceContains("int32_t x = (-5);")
+        r.sourceContains("ktc_Int x = (-5);")
     }
 
     // ── Long ─────────────────────────────────────────────────────────
 
     @Test fun longLiteral() {
         val r = transpileMain("val x: Long = 100L\nprintln(x)")
-        r.sourceContains("int64_t x = 100LL;")
+        r.sourceContains("ktc_Long x = 100LL;")
     }
 
     // ── Float ────────────────────────────────────────────────────────
 
     @Test fun floatLiteral() {
         val r = transpileMain("val x = 3.14f\nprintln(x)")
-        r.sourceContains("float x = 3.14f;")
+        r.sourceContains("ktc_Float x = 3.14f;")
     }
 
     // ── Double ───────────────────────────────────────────────────────
 
     @Test fun doubleLiteral() {
         val r = transpileMain("val x = 3.14\nprintln(x)")
-        r.sourceContains("double x = 3.14;")
+        r.sourceContains("ktc_Double x = 3.14;")
     }
 
     // ── Boolean ──────────────────────────────────────────────────────
 
     @Test fun boolTrue() {
         val r = transpileMain("val x = true\nprintln(x)")
-        r.sourceContains("bool x = true;")
+        r.sourceContains("ktc_Bool x = true;")
     }
 
     @Test fun boolFalse() {
         val r = transpileMain("val x = false\nprintln(x)")
-        r.sourceContains("bool x = false;")
+        r.sourceContains("ktc_Bool x = false;")
     }
 
     // ── Char ─────────────────────────────────────────────────────────
 
     @Test fun charLiteral() {
         val r = transpileMain("val c = 'A'\nprintln(c)")
-        r.sourceContains("char c = 'A';")
+        r.sourceContains("ktc_Char c = 'A';")
     }
 
     // ── String ───────────────────────────────────────────────────────
@@ -80,12 +80,12 @@ class BasicTypesTest : TranspilerTestBase() {
 
     @Test fun valDeclaration() {
         val r = transpileMain("val x = 10")
-        r.sourceContains("int32_t x = 10;")
+        r.sourceContains("ktc_Int x = 10;")
     }
 
     @Test fun varDeclaration() {
         val r = transpileMain("var x = 10\nx = 20")
-        r.sourceContains("int32_t x = 10;")
+        r.sourceContains("ktc_Int x = 10;")
         r.sourceContains("x = 20;")
     }
 
@@ -98,32 +98,32 @@ class BasicTypesTest : TranspilerTestBase() {
 
     @Test fun toFloat() {
         val r = transpileMain("val x = 42\nval f = x.toFloat()")
-        r.sourceContains("(float)(x)")
+        r.sourceContains("(ktc_Float)(x)")
     }
 
     @Test fun toLong() {
         val r = transpileMain("val x = 42\nval l = x.toLong()")
-        r.sourceContains("(int64_t)(x)")
+        r.sourceContains("(ktc_Long)(x)")
     }
 
     @Test fun toInt() {
         val r = transpileMain("val f = 3.14\nval i = f.toInt()")
-        r.sourceContains("(int32_t)(f)")
+        r.sourceContains("(ktc_Int)(f)")
     }
 
     @Test fun toDouble() {
         val r = transpileMain("val x = 42\nval d = x.toDouble()")
-        r.sourceContains("(double)(x)")
+        r.sourceContains("(ktc_Double)(x)")
     }
 
     @Test fun toByte() {
         val r = transpileMain("val x = 65\nval b = x.toByte()")
-        r.sourceContains("(int8_t)(x)")
+        r.sourceContains("(ktc_Byte)(x)")
     }
 
     @Test fun toChar() {
         val r = transpileMain("val x = 65\nval c = x.toChar()")
-        r.sourceContains("(char)(x)")
+        r.sourceContains("(ktc_Char)(x)")
     }
 
     // ── println for each type ────────────────────────────────────────

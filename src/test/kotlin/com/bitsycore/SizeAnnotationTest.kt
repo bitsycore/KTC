@@ -30,7 +30,7 @@ class SizeAnnotationTest : TranspilerTestBase() {
             }
             fun main(args: Array<String>) {}
         """)
-        r.headerContains("void test_Main_makeData(int32_t* \$out);")
+        r.headerContains("void test_Main_makeData(ktc_Int* \$out);")
     }
 
     @Test fun sizedArrayReturnNoLenOut() {
@@ -52,7 +52,7 @@ class SizeAnnotationTest : TranspilerTestBase() {
             class Buf(val buf: @Size(4) IntArray)
             fun main(args: Array<String>) {}
         """)
-        r.headerContains("int32_t buf[4];")
+        r.headerContains("ktc_Int buf[4];")
         r.headerNotContains("buf\$len")
     }
 
@@ -62,7 +62,7 @@ class SizeAnnotationTest : TranspilerTestBase() {
             class Buf(val buf: @Size(8) Array<Int>)
             fun main(args: Array<String>) {}
         """)
-        r.headerContains("int32_t buf[8];")
+        r.headerContains("ktc_Int buf[8];")
         r.headerNotContains("buf\$len")
     }
 
@@ -74,7 +74,7 @@ class SizeAnnotationTest : TranspilerTestBase() {
             class Buf(val buf: @Size(3) IntArray)
             fun main(args: Array<String>) {}
         """)
-        r.headerContains("int32_t* buf);")
+        r.headerContains("ktc_Int* buf);")
         r.headerNotContains("buf\$len")
     }
 
@@ -97,7 +97,7 @@ class SizeAnnotationTest : TranspilerTestBase() {
                 return intArrayOf(1, 2, 3)
             }
         """)
-        r.sourceContains("int32_t arr[3];")
+        r.sourceContains("ktc_Int arr[3];")
         r.sourceContains("test_Main_makeData(")
     }
 
@@ -124,7 +124,7 @@ class SizeAnnotationTest : TranspilerTestBase() {
             }
             fun main(args: Array<String>) {}
         """)
-        r.headerContains("void test_Main_Calc_items(test_Main_Calc* \$self, int32_t* \$out);")
+        r.headerContains("void test_Main_Calc_items(test_Main_Calc* \$self, ktc_Int* \$out);")
     }
 
     // ── Object property with @Size ────────────────────────────────────

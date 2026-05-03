@@ -14,7 +14,7 @@ fun passArray(inarr: Ptr<Array<Int>>? = null) {
     }
 }
 
-fun passArrayValue(inarr: Array<Int>? = null) {
+fun passArrayValue(inarr: Array<Int?>? = null) {
     if (inarr == null) {
         println("inarr is null")
         return
@@ -46,7 +46,6 @@ fun main() {
     passArray()
     passArray(null)
 
-    passArrayValue(array)
     passArrayValue()
     passArrayValue(null)
 

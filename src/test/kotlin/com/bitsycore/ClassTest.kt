@@ -22,8 +22,8 @@ class ClassTest : TranspilerTestBase() {
             }
         """)
         r.headerContains("ktc_String name;")
-        r.headerContains("int32_t health;")
-        r.headerContains("int32_t score;")
+        r.headerContains("ktc_Int health;")
+        r.headerContains("ktc_Int score;")
     }
 
     @Test fun classConstructorInit() {
@@ -57,7 +57,7 @@ class ClassTest : TranspilerTestBase() {
                 p.takeDamage(30)
             }
         """)
-        r.sourceContains("void test_Main_Player_takeDamage(test_Main_Player* ${'$'}self, int32_t amount)")
+        r.sourceContains("void test_Main_Player_takeDamage(test_Main_Player* ${'$'}self, ktc_Int amount)")
     }
 
     @Test fun classMethodExprBody() {
@@ -72,7 +72,7 @@ class ClassTest : TranspilerTestBase() {
                 println(p.isAlive())
             }
         """)
-        r.sourceContains("bool test_Main_Player_isAlive(test_Main_Player* ${'$'}self)")
+        r.sourceContains("ktc_Bool test_Main_Player_isAlive(test_Main_Player* ${'$'}self)")
     }
 
     // ── Class with only ctor params (var) ────────────────────────────
@@ -90,7 +90,7 @@ class ClassTest : TranspilerTestBase() {
                 println(c.get())
             }
         """)
-        r.headerContains("int32_t count;")
+        r.headerContains("ktc_Int count;")
         r.sourceContains("test_Main_Counter_increment")
         r.sourceContains("test_Main_Counter_get")
     }

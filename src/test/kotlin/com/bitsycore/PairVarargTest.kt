@@ -51,7 +51,7 @@ class PairVarargTest : TranspilerTestBase() {
         val r = transpileMain("""
             val p = 1 to 2
         """)
-        r.headerContains("typedef struct { int32_t first; int32_t second; } ktc_Pair_Int_Int;")
+        r.headerContains("typedef struct { ktc_Int first; ktc_Int second; } ktc_Pair_Int_Int;")
     }
 
     // ── Pair: as function parameter / return ────────────────────────
@@ -87,10 +87,10 @@ class PairVarargTest : TranspilerTestBase() {
             }
         """)
         // Function signature should have pointer + len
-        r.headerContains("int32_t* nums")
-        r.headerContains("int32_t nums\$len")
+        r.headerContains("ktc_Int* nums")
+        r.headerContains("ktc_Int nums\$len")
         // Call site should pack args into array
-        r.sourceContains("int32_t")
+        r.sourceContains("ktc_Int")
         r.sourceContains("{1, 2, 3}")
     }
 
@@ -156,8 +156,8 @@ class PairVarargTest : TranspilerTestBase() {
                 println(log(42, 1, 2, 3))
             }
         """)
-        r.headerContains("int32_t tag")
-        r.headerContains("int32_t* msgs")
-        r.headerContains("int32_t msgs\$len")
+        r.headerContains("ktc_Int tag")
+        r.headerContains("ktc_Int* msgs")
+        r.headerContains("ktc_Int msgs\$len")
     }
 }

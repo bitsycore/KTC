@@ -58,8 +58,8 @@ class FunctionPointerTest : TranspilerTestBase() {
                 println(applyOp(5, 6, ::addTwo))
             }
         """)
-        // Function pointer param: int32_t (*op)(int32_t, int32_t)
-        r.sourceMatches(Regex("int32_t \\(\\*op\\)\\(int32_t, int32_t\\)"))
+        // Function pointer param: ktc_Int (*op)(ktc_Int, ktc_Int)
+        r.sourceMatches(Regex("ktc_Int \\(\\*op\\)\\(ktc_Int, ktc_Int\\)"))
     }
 
     // ── Reassign function pointer ────────────────────────────────────

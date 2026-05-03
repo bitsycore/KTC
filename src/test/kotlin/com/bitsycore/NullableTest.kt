@@ -12,12 +12,12 @@ class NullableTest : TranspilerTestBase() {
 
     @Test fun nullableIntWithValue() {
         val r = transpileMain("var x: Int? = 42")
-        r.sourceContains("ktc_Int32_Optional x = (ktc_Int32_Optional){SOME, 42};")
+        r.sourceContains("ktc_Int_Optional x = (ktc_Int_Optional){SOME, 42};")
     }
 
     @Test fun nullableIntNull() {
         val r = transpileMain("var x: Int? = null")
-        r.sourceContains("ktc_Int32_Optional x = (ktc_Int32_Optional){NONE};")
+        r.sourceContains("ktc_Int_Optional x = (ktc_Int_Optional){NONE};")
     }
 
     @Test fun nullableStringWithValue() {
@@ -43,8 +43,8 @@ class NullableTest : TranspilerTestBase() {
                 val a = findValue(true)
             }
         """)
-        // Return type is ktc_Int32_Optional
-        r.sourceContains("ktc_Int32_Optional test_Main_findValue(bool flag)")
+        // Return type is ktc_Int_Optional
+        r.sourceContains("ktc_Int_Optional test_Main_findValue(ktc_Bool flag)")
     }
 
     @Test fun nullableReturnNull() {
@@ -53,7 +53,7 @@ class NullableTest : TranspilerTestBase() {
             fun findValue(): Int? { return null }
             fun main(args: Array<String>) { val a = findValue() }
         """)
-        r.sourceContains("return (ktc_Int32_Optional){NONE};")
+        r.sourceContains("return (ktc_Int_Optional){NONE};")
     }
 
     @Test fun nullableReturnValue() {
@@ -62,7 +62,7 @@ class NullableTest : TranspilerTestBase() {
             fun findValue(): Int? { return 42 }
             fun main(args: Array<String>) { val a = findValue() }
         """)
-        r.sourceContains("return (ktc_Int32_Optional){SOME, 42};")
+        r.sourceContains("return (ktc_Int_Optional){SOME, 42};")
     }
 
     @Test fun nullableReturnCallSite() {
@@ -75,7 +75,7 @@ class NullableTest : TranspilerTestBase() {
             }
         """)
         // Caller gets Optional directly
-        r.sourceContains("ktc_Int32_Optional a = test_Main_findValue();")
+        r.sourceContains("ktc_Int_Optional a = test_Main_findValue();")
         r.sourceContains("a.value")
     }
 
@@ -137,12 +137,12 @@ class NullableTest : TranspilerTestBase() {
 
     @Test fun assignNullToNullableVar() {
         val r = transpileMain("var x: Int? = 42\nx = null")
-        r.sourceContains("x = (ktc_Int32_Optional){NONE};")
+        r.sourceContains("x = (ktc_Int_Optional){NONE};")
     }
 
     @Test fun assignValueToNullableVar() {
         val r = transpileMain("var x: Int? = null\nx = 10")
-        r.sourceContains("x = (ktc_Int32_Optional){SOME, 10};")
+        r.sourceContains("x = (ktc_Int_Optional){SOME, 10};")
     }
 
     // ── Passing null to nullable param ───────────────────────────────
@@ -157,8 +157,8 @@ class NullableTest : TranspilerTestBase() {
                 show(null)
             }
         """)
-        // Passing null literal → ktc_Int32_Optional{NONE}
-        r.sourceContains("test_Main_show((ktc_Int32_Optional){NONE})")
+        // Passing null literal → ktc_Int_Optional{NONE}
+        r.sourceContains("test_Main_show((ktc_Int_Optional){NONE})")
     }
 
     @Test fun passValueToNullableParam() {
@@ -171,8 +171,8 @@ class NullableTest : TranspilerTestBase() {
                 show(99)
             }
         """)
-        // Passing non-null literal → ktc_Int32_Optional{SOME, 99}
-        r.sourceContains("test_Main_show((ktc_Int32_Optional){SOME, 99})")
+        // Passing non-null literal → ktc_Int_Optional{SOME, 99}
+        r.sourceContains("test_Main_show((ktc_Int_Optional){SOME, 99})")
     }
 
     // ── Printing nullable values ─────────────────────────────────────

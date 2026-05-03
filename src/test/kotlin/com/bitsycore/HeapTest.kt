@@ -92,7 +92,7 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun typedPointerHeapAlloc() {
         val r = transpileMain("val ints = HeapAlloc<Int>(5)")
-        r.sourceContains("(int32_t*)malloc(sizeof(int32_t) *")
+        r.sourceContains("(ktc_Int*)malloc(sizeof(ktc_Int) *")
     }
 
     @Test fun typedPointerIndexRead() {
@@ -314,43 +314,43 @@ class HeapTest : TranspilerTestBase() {
 
     @Test fun heapAllocArrayInt() {
         val r = transpileMain("val buf = HeapAlloc<Array<Int>>(10)")
-        r.sourceContains("(int32_t*)malloc(sizeof(int32_t) * (size_t)(10))")
+        r.sourceContains("(ktc_Int*)malloc(sizeof(ktc_Int) * (size_t)(10))")
     }
 
     @Test fun heapAllocArrayFloat() {
         val r = transpileMain("val buf = HeapAlloc<Array<Float>>(5)")
-        r.sourceContains("(float*)malloc(sizeof(float) * (size_t)(5))")
+        r.sourceContains("(ktc_Float*)malloc(sizeof(ktc_Float) * (size_t)(5))")
     }
 
     @Test fun heapAllocArrayLong() {
         val r = transpileMain("val buf = HeapAlloc<Array<Long>>(3)")
-        r.sourceContains("(int64_t*)malloc(sizeof(int64_t) * (size_t)(3))")
+        r.sourceContains("(ktc_Long*)malloc(sizeof(ktc_Long) * (size_t)(3))")
     }
 
     // ── HeapAlloc<T>() with no args → single element allocation ─────────
 
     @Test fun heapAllocSingleInt() {
         val r = transpileMain("val p = HeapAlloc<Int>()")
-        r.sourceContains("(int32_t*)malloc(sizeof(int32_t))")
+        r.sourceContains("(ktc_Int*)malloc(sizeof(ktc_Int))")
     }
 
     @Test fun heapAllocSingleFloat() {
         val r = transpileMain("val p = HeapAlloc<Float>()")
-        r.sourceContains("(float*)malloc(sizeof(float))")
+        r.sourceContains("(ktc_Float*)malloc(sizeof(ktc_Float))")
     }
 
     // ── HeapArrayResize<Array<T>>(ptr, n) → typed array realloc ──────────────
 
     @Test fun heapArrayResizeInt() {
         val r = transpileMain("val buf = HeapAlloc<Array<Int>>(10)\nval buf2 = HeapArrayResize<Array<Int>>(buf, 20)")
-        r.sourceContains("(int32_t*)realloc(buf, sizeof(int32_t) * (size_t)(20))")
+        r.sourceContains("(ktc_Int*)realloc(buf, sizeof(ktc_Int) * (size_t)(20))")
     }
 
     // ── HeapArrayZero<Array<T>>(n) → typed array calloc ─────────────────────
 
     @Test fun heapZeroArrayInt() {
         val r = transpileMain("val buf = HeapArrayZero<Array<Int>>(10)")
-        r.sourceContains("(int32_t*)calloc((size_t)(10), sizeof(int32_t))")
+        r.sourceContains("(ktc_Int*)calloc((size_t)(10), sizeof(ktc_Int))")
     }
 
     // ── Body prop with initializer referencing ctor param ────────────
@@ -362,10 +362,10 @@ class HeapTest : TranspilerTestBase() {
             }
         """
         val r = transpileMain("val b = Buf(16)", decls = decl)
-        // struct field: int32_t* buf
-        r.headerContains("int32_t* buf;")
+        // struct field: ktc_Int* buf
+        r.headerContains("ktc_Int* buf;")
         // _create initializes body prop from ctor param
-        r.sourceContains("(int32_t*)malloc(sizeof(int32_t) * (size_t)(capacity))")
+        r.sourceContains("(ktc_Int*)malloc(sizeof(ktc_Int) * (size_t)(capacity))")
     }
 
     @Test fun bodyPropInitConstant() {

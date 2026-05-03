@@ -18,7 +18,7 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 println(n.isEven())
             }
         """)
-        r.sourceContains("bool test_Main_Int_isEven(int32_t ${'$'}self)")
+        r.sourceContains("ktc_Bool test_Main_Int_isEven(ktc_Int ${'$'}self)")
         r.sourceContains("test_Main_Int_isEven(n)")
     }
 
@@ -51,7 +51,7 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 println(v.lengthSquared())
             }
         """)
-        r.sourceContains("float test_Main_Vec2_lengthSquared(test_Main_Vec2 ${'$'}self)")
+        r.sourceContains("ktc_Float test_Main_Vec2_lengthSquared(test_Main_Vec2 ${'$'}self)")
         r.sourceContains("test_Main_Vec2_lengthSquared(v)")
     }
 
@@ -71,7 +71,7 @@ class ExtensionFunctionTest : TranspilerTestBase() {
                 p.heal(10)
             }
         """)
-        r.sourceContains("void test_Main_Player_heal(test_Main_Player ${'$'}self, int32_t amount)")
+        r.sourceContains("void test_Main_Player_heal(test_Main_Player ${'$'}self, ktc_Int amount)")
     }
 
     // ── Nullable receiver extension ──────────────────────────────────

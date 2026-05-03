@@ -14,7 +14,7 @@ class ArrayTest : TranspilerTestBase() {
             val arr = intArrayOf(10, 20, 30)
             println(arr[0])
         """)
-        r.sourceContains("int32_t arr[] = {10, 20, 30};")
+        r.sourceContains("ktc_Int arr[] = {10, 20, 30};")
         r.sourceContains("arr[0]")
     }
 

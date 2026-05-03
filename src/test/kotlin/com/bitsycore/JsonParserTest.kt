@@ -23,10 +23,10 @@ class JsonParserTest : TranspilerTestBase() {
 
     @Test fun topLevelConstantsDefinedWithPrefix() {
         val r = transpileJsonParser()
-        r.sourceContains("const int32_t json_Main_TOK_LBRACE = 0;")
-        r.sourceContains("const int32_t json_Main_TOK_EOF = 11;")
-        r.sourceContains("const int32_t json_Main_JSON_STRING = 0;")
-        r.sourceContains("const int32_t json_Main_JSON_OBJECT = 5;")
+        r.sourceContains("const ktc_Int json_Main_TOK_LBRACE = 0;")
+        r.sourceContains("const ktc_Int json_Main_TOK_EOF = 11;")
+        r.sourceContains("const ktc_Int json_Main_JSON_STRING = 0;")
+        r.sourceContains("const ktc_Int json_Main_JSON_OBJECT = 5;")
     }
 
     @Test fun topLevelConstantsReferencedWithPrefix() {
@@ -43,17 +43,17 @@ class JsonParserTest : TranspilerTestBase() {
 
     @Test fun topLevelConstantsExternInHeader() {
         val r = transpileJsonParser()
-        r.headerContains("extern const int32_t json_Main_TOK_LBRACE;")
-        r.headerContains("extern const int32_t json_Main_JSON_OBJECT;")
+        r.headerContains("extern const ktc_Int json_Main_TOK_LBRACE;")
+        r.headerContains("extern const ktc_Int json_Main_JSON_OBJECT;")
     }
 
     // ── IntArray(n) produces mutable (non-const) pointers ───────────
 
     @Test fun intArrayNotConst() {
         val r = transpileJsonParser()
-        // val pos = IntArray(1) should produce "int32_t* pos" not "const int32_t* pos"
-        r.sourceContains("int32_t* pos =")
-        r.sourceNotContains("const int32_t* pos")
+        // val pos = IntArray(1) should produce "ktc_Int* pos" not "const ktc_Int* pos"
+        r.sourceContains("ktc_Int* pos =")
+        r.sourceNotContains("const ktc_Int* pos")
     }
 
     @Test fun intArrayLenCompanionEmitted() {
@@ -114,15 +114,15 @@ class JsonParserTest : TranspilerTestBase() {
         val r = transpileJsonParser()
         r.headerContains("typedef struct json_Main_MutableList_Int json_Main_MutableList_Int;")
         r.headerContains("struct json_Main_MutableList_Int {")
-        r.headerContains("int32_t size;")
-        r.headerContains("int32_t* buf;")
+        r.headerContains("ktc_Int size;")
+        r.headerContains("ktc_Int* buf;")
     }
 
     @Test fun mutableListIntMethodsGenerated() {
         val r = transpileJsonParser()
-        r.sourceContains("void json_Main_MutableList_Int_add(json_Main_MutableList_Int* \$self, int32_t value)")
-        r.sourceContains("int32_t json_Main_MutableList_Int_get(json_Main_MutableList_Int* \$self, int32_t index)")
-        r.sourceContains("void json_Main_MutableList_Int_set(json_Main_MutableList_Int* \$self, int32_t index, int32_t value)")
+        r.sourceContains("void json_Main_MutableList_Int_add(json_Main_MutableList_Int* \$self, ktc_Int value)")
+        r.sourceContains("ktc_Int json_Main_MutableList_Int_get(json_Main_MutableList_Int* \$self, ktc_Int index)")
+        r.sourceContains("void json_Main_MutableList_Int_set(json_Main_MutableList_Int* \$self, ktc_Int index, ktc_Int value)")
         r.sourceContains("void json_Main_MutableList_Int_dispose(json_Main_MutableList_Int* \$self)")
     }
 
@@ -131,7 +131,7 @@ class JsonParserTest : TranspilerTestBase() {
     @Test fun lexerDataClass() {
         val r = transpileJsonParser()
         r.headerContains("} json_Main_Lexer;")
-        r.sourceContains("json_Main_Lexer_create(ktc_String input, int32_t len)")
+        r.sourceContains("json_Main_Lexer_create(ktc_String input, ktc_Int len)")
         r.sourceContains("json_Main_Lexer_equals(json_Main_Lexer a, json_Main_Lexer b)")
     }
 

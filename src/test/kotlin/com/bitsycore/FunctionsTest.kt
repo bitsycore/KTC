@@ -20,7 +20,7 @@ class FunctionsTest : TranspilerTestBase() {
                 println(add(10, 20))
             }
         """)
-        r.sourceContains("int32_t test_Main_add(int32_t a, int32_t b)")
+        r.sourceContains("ktc_Int test_Main_add(ktc_Int a, ktc_Int b)")
         r.sourceContains("return (a + b);")
     }
 
@@ -116,7 +116,7 @@ class FunctionsTest : TranspilerTestBase() {
                 println(fibonacci(10))
             }
         """)
-        r.sourceContains("int32_t test_Main_fibonacci(int32_t n)")
+        r.sourceContains("ktc_Int test_Main_fibonacci(ktc_Int n)")
     }
 
     // ── Boolean return type ──────────────────────────────────────────
@@ -129,7 +129,7 @@ class FunctionsTest : TranspilerTestBase() {
                 println(isPositive(5))
             }
         """)
-        r.sourceContains("bool test_Main_isPositive(int32_t x)")
+        r.sourceContains("ktc_Bool test_Main_isPositive(ktc_Int x)")
     }
 
     // ── String return ────────────────────────────────────────────────
@@ -148,7 +148,7 @@ class FunctionsTest : TranspilerTestBase() {
                 println(describe(5))
             }
         """)
-        r.sourceContains("ktc_String test_Main_describe(int32_t x)")
+        r.sourceContains("ktc_String test_Main_describe(ktc_Int x)")
     }
 
     // ── Float/Double params and return ───────────────────────────────
@@ -161,7 +161,7 @@ class FunctionsTest : TranspilerTestBase() {
                 println(dist(3.0f, 4.0f))
             }
         """)
-        r.sourceContains("float test_Main_dist(float x, float y)")
+        r.sourceContains("ktc_Float test_Main_dist(ktc_Float x, ktc_Float y)")
     }
 
     // ── Main with args ───────────────────────────────────────────────

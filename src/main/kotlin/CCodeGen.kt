@@ -2758,14 +2758,27 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun tryArrayOfInit(varName: String, init: Expr, ct: String, t: String, ind: String): String? {
         if (init !is CallExpr) return null
         val callee = (init.callee as? NameExpr)?.name ?: return null
+        // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
+        if (callee == "arrayOf") {
+            val vTypeArg = init.typeArgs.getOrNull(0)
+            val vIsNullableElem = vTypeArg?.nullable == true || t.endsWith("OptArray")
+            if (vIsNullableElem) {
+                val vOptCType = if (t.endsWith("OptArray")) arrayElementCType(t)
+                                else optCTypeName("${typeSubst[vTypeArg!!.name] ?: vTypeArg.name}?")
+                val vArgs = init.args.joinToString(", ") { vArg ->
+                    if (vArg.expr is NullLit) "($vOptCType){NONE}"
+                    else "($vOptCType){SOME, ${genExpr(vArg.expr)}}"
+                }
+                return "${ind}$vOptCType ${varName}[] = {$vArgs};\n${ind}const int32_t ${varName}\$len = ${init.args.size};"
+            }
+        }
         val elemType = when (callee) {
-            "intArrayOf" -> "int32_t"; "longArrayOf" -> "int64_t"
-            "floatArrayOf" -> "float"; "doubleArrayOf" -> "double"
-            "booleanArrayOf" -> "bool"; "charArrayOf" -> "char"
+            "intArrayOf" -> "ktc_Int"; "longArrayOf" -> "ktc_Long"
+            "floatArrayOf" -> "ktc_Float"; "doubleArrayOf" -> "ktc_Double"
+            "booleanArrayOf" -> "ktc_Bool"; "charArrayOf" -> "ktc_Char"
             "arrayOf" -> {
-                // Infer element type from first argument or from declared type
-                val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"
-                cTypeStr(elemKt)
+                if (init.typeArgs.isNotEmpty()) cTypeStr(typeSubst[init.typeArgs[0].name] ?: init.typeArgs[0].name)
+                else { val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"; cTypeStr(elemKt) }
             }
             else -> return null
         }
@@ -3463,7 +3476,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // for (i in a..b)   inclusive range
             rangeExpr is BinExpr && rangeExpr.op == ".." -> {
                 val inc = if (step != null) "${s.varName} += $step" else "${s.varName}++"
-                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} <= ${genExpr(rangeExpr.right)}; $inc) {")
+                impl.appendLine("${ind}for (ktc_Int ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} <= ${genExpr(rangeExpr.right)}; $inc) {")
                 pushScope(); defineVar(s.varName, "Int")
                 emitBlock(s.body, ind, method)
                 popScope()
@@ -3472,7 +3485,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // for (i in a until b)  or  for (i in a..<b)
             rangeExpr is BinExpr && (rangeExpr.op == "until" || rangeExpr.op == "..<") -> {
                 val inc = if (step != null) "${s.varName} += $step" else "${s.varName}++"
-                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} < ${genExpr(rangeExpr.right)}; $inc) {")
+                impl.appendLine("${ind}for (ktc_Int ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} < ${genExpr(rangeExpr.right)}; $inc) {")
                 pushScope(); defineVar(s.varName, "Int")
                 emitBlock(s.body, ind, method)
                 popScope()
@@ -3481,7 +3494,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // for (i in a downTo b)
             rangeExpr is BinExpr && rangeExpr.op == "downTo" -> {
                 val dec = if (step != null) "${s.varName} -= $step" else "${s.varName}--"
-                impl.appendLine("${ind}for (int32_t ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} >= ${genExpr(rangeExpr.right)}; $dec) {")
+                impl.appendLine("${ind}for (ktc_Int ${s.varName} = ${genExpr(rangeExpr.left)}; ${s.varName} >= ${genExpr(rangeExpr.right)}; $dec) {")
                 pushScope(); defineVar(s.varName, "Int")
                 emitBlock(s.body, ind, method)
                 popScope()
@@ -3520,7 +3533,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val arrOrigName = (rangeExpr as? NameExpr)?.name
                     val sizeExpr = if (arrOrigName != null && arrOrigName in trampolinedParams)
                         "$arrOrigName.size" else "${arrExpr}\$len"
-                    impl.appendLine("${ind}for (int32_t $idx = 0; $idx < $sizeExpr; $idx++) {")
+                    impl.appendLine("${ind}for (ktc_Int $idx = 0; $idx < $sizeExpr; $idx++) {")
                     impl.appendLine("$ind    $elemType ${s.varName} = ${arrExpr}[$idx];")
                     pushScope(); defineVar(s.varName, arrayElementKtType(arrType))
                     emitBlock(s.body, ind, method)
@@ -3983,7 +3996,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 return genArrayOfExpr(name, args)
             }
             "arrayOf" -> {
-                return genArrayOfExpr(name, args)
+                return genArrayOfExpr(name, args, e.typeArgs.getOrNull(0))
             }
             "ByteArray"    -> return genNewArray("ktc_Byte", args)
             "ShortArray"   -> return genNewArray("ktc_Short", args)
@@ -4178,32 +4191,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         if (isArrayType(paramType)) parts += "${expr}\$len"
                     }
                 } else if (isArrayType(paramType)) {
-                    if (param.type.nullable) {
-                        // Nullable array — pass raw pointer + length (NULL for null)
-                        if (arg.expr is NullLit && !isCtorCall) {
-                            parts += "NULL"
-                            parts += "0"
-                        } else {
-                            val argName = (arg.expr as? NameExpr)?.name
-                            val sizeExpr = if (argName != null && argName in trampolinedParams) "$argName.size" else "${expr}\$len"
+                    if (hasSizeAnnotation(param.type)) {
+                        // @Size fixed array — passed as raw pointer
+                        parts += expr
+                    } else if (arg.expr is NullLit && !isCtorCall) {
+                        // Both nullable and non-nullable use ktc_ArrayTrampoline; NULL is data == NULL
+                        parts += "(ktc_ArrayTrampoline){.size = 0, .data = NULL}"
+                    } else {
+                        // Non-null array (nullable or not): pack as ktc_ArrayTrampoline
+                        val argName = (arg.expr as? NameExpr)?.name
+                        val sizeExpr = if (argName != null && argName in trampolinedParams) "$argName.size" else "${expr}\$len"
+                        if (isCtorCall) {
                             parts += expr
                             parts += sizeExpr
-                        }
-                    } else {
-                        if (arg.expr is NullLit && !isCtorCall) {
-                            parts += "(ktc_ArrayTrampoline){.size = 0, .data = NULL}"
-                        } else if (!hasSizeAnnotation(param.type)) {
-                            val argName = (arg.expr as? NameExpr)?.name
-                            val sizeExpr = if (argName != null && argName in trampolinedParams) "$argName.size" else "${expr}\$len"
-                            if (isCtorCall) {
-                                parts += expr
-                                parts += sizeExpr
-                            } else {
-                                parts += "(ktc_ArrayTrampoline){.size = $sizeExpr, .data = $expr}"
-                            }
                         } else {
-                            // @Size fixed array — passed as raw pointer
-                            parts += expr
+                            parts += "(ktc_ArrayTrampoline){.size = $sizeExpr, .data = $expr}"
                         }
                     }
                 } else if (param.type.nullable && isValueNullableType("${paramType}?")) {
@@ -4287,7 +4289,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "toUShort" -> return "((ktc_UShort)($recv))"
             "toUInt"   -> return "((ktc_UInt)($recv))"
             "toULong"  -> return "((ktc_ULong)($recv))"
-            "toChar"   -> return "((char)($recv))"
+            "toChar"   -> return "((ktc_Char)($recv))"
             // Nullable string-to-number: toIntOrNull, toLongOrNull, toFloatOrNull, toDoubleOrNull
             "toIntOrNull" -> if (recvType == "String") {
                 val t = tmp()
@@ -5172,7 +5174,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ── arrayOf helpers ──────────────────────────────────────────────
 
-    private fun genArrayOfExpr(name: String, args: List<Arg>): String {
+    private fun genArrayOfExpr(name: String, args: List<Arg>, inTypeArg: TypeRef? = null): String { // inTypeArg — explicit type argument from the call site, e.g. arrayOf<Int?>(...)
+        // arrayOf<T?>(v1, null, v2) → nullable element array; each element wrapped in Optional struct
+        if (name == "arrayOf" && inTypeArg?.nullable == true) {
+            val vElemName = typeSubst[inTypeArg.name] ?: inTypeArg.name
+            val vOptCType = optCTypeName("${vElemName}?")
+            val vVals = args.joinToString(", ") { vArg ->
+                if (vArg.expr is NullLit) "($vOptCType){NONE}"
+                else "($vOptCType){SOME, ${genExpr(vArg.expr)}}"
+            }
+            val vTmp = tmp()
+            preStmts += "$vOptCType ${vTmp}[] = {$vVals};"
+            preStmts += "const int32_t ${vTmp}\$len = ${args.size};"
+            return vTmp
+        }
         val elemType = when (name) {
             "byteArrayOf" -> "ktc_Byte"; "shortArrayOf" -> "ktc_Short"
             "intArrayOf" -> "ktc_Int"; "longArrayOf" -> "ktc_Long"
@@ -5181,8 +5196,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "ubyteArrayOf" -> "ktc_UByte"; "ushortArrayOf" -> "ktc_UShort"
             "uintArrayOf" -> "ktc_UInt"; "ulongArrayOf" -> "ktc_ULong"
             "arrayOf" -> {
-                val elemKt = if (args.isNotEmpty()) inferExprType(args[0].expr) ?: "Int" else "Int"
-                cTypeStr(elemKt)
+                if (inTypeArg != null) cTypeStr(typeSubst[inTypeArg.name] ?: inTypeArg.name)
+                else { val elemKt = if (args.isNotEmpty()) inferExprType(args[0].expr) ?: "Int" else "Int"; cTypeStr(elemKt) }
             }
             else -> "int32_t"
         }
@@ -5369,7 +5384,34 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (name == "booleanArrayOf" || name == "BooleanArray") return "BooleanArray"
             if (name == "charArrayOf" || name == "CharArray") return "CharArray"
             if (name == "arrayOf") {
-                // Infer element type from first argument
+                // Prefer explicit type argument (arrayOf<T?> or arrayOf<T>)
+                if (e.typeArgs.isNotEmpty()) {
+                    val vTypeArg = e.typeArgs[0]
+                    val vElemName = typeSubst[vTypeArg.name] ?: vTypeArg.name
+                    if (vTypeArg.nullable) {
+                        return when (vElemName) {
+                            "Byte" -> "ByteOptArray"; "Short" -> "ShortOptArray"
+                            "Int" -> "IntOptArray";   "Long" -> "LongOptArray"
+                            "Float" -> "FloatOptArray"; "Double" -> "DoubleOptArray"
+                            "Boolean" -> "BooleanOptArray"; "Char" -> "CharOptArray"
+                            "UByte" -> "UByteOptArray"; "UShort" -> "UShortOptArray"
+                            "UInt" -> "UIntOptArray"; "ULong" -> "ULongOptArray"
+                            "String" -> "StringOptArray"
+                            else -> { classArrayTypes.add(vElemName); "${vElemName}OptArray" }
+                        }
+                    }
+                    return when (vElemName) {
+                        "Byte" -> "ByteArray"; "Short" -> "ShortArray"
+                        "Int" -> "IntArray"; "Long" -> "LongArray"
+                        "Float" -> "FloatArray"; "Double" -> "DoubleArray"
+                        "Boolean" -> "BooleanArray"; "Char" -> "CharArray"
+                        "UByte" -> "UByteArray"; "UShort" -> "UShortArray"
+                        "UInt" -> "UIntArray"; "ULong" -> "ULongArray"
+                        "String" -> "StringArray"
+                        else -> { classArrayTypes.add(vElemName); "${vElemName}Array" }
+                    }
+                }
+                // Fall back to inference from first argument
                 val elemType = if (e.args.isNotEmpty()) inferExprType(e.args[0].expr) ?: "Int" else "Int"
                 return when (elemType) {
                     "Int" -> "IntArray"; "Long" -> "LongArray"
@@ -5603,7 +5645,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return if (base.endsWith("?") || base.endsWith("#")) base else "${base}?"
     }
     private fun inferIndexType(e: IndexExpr): String? {
-        val t = inferExprType(e.obj) ?: return null
+        val tRaw = inferExprType(e.obj) ?: return null
+        // Strip nullability: indexing a nullable array is valid after a null guard
+        val t = tRaw.removeSuffix("?").removeSuffix("#")
         // String indexing: str[i] → Char
         if (t == "String") return "Char"
         // Class with operator get() method → return type of get
@@ -5686,11 +5730,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val isIndirect = resolved.endsWith("^") || resolved.endsWith("^?") || resolved.endsWith("^#") ||
                              resolved.endsWith("*") || resolved.endsWith("*?") || resolved.endsWith("*#") ||
                              resolved.endsWith("&") || resolved.endsWith("&?") || resolved.endsWith("&#")
-            // Nullable arrays use raw pointer (no trampoline); only non-nullable non-indirect arrays use trampoline
-            if (isArrayType(resolved) && !hasSizeAnnotation(p.type) && !isIndirect && !p.type.nullable) {
+            // Both nullable and non-nullable array params use ktc_ArrayTrampoline.
+            // Non-nullable: copy unconditionally. Nullable: copy only when data != NULL.
+            if (isArrayType(resolved) && !hasSizeAnnotation(p.type) && !isIndirect) {
                 val elemCType = arrayElementCType(resolved)
-                impl.appendLine("${ind}$elemCType* local$${p.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * ${p.name}.size);")
-                impl.appendLine("${ind}memcpy(local$${p.name}, ${p.name}.data, sizeof($elemCType) * ${p.name}.size);")
+                if (p.type.nullable) {
+                    impl.appendLine("${ind}$elemCType* local$${p.name} = NULL;")
+                    impl.appendLine("${ind}if (${p.name}.data != NULL) {")
+                    impl.appendLine("${ind}    local$${p.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * ${p.name}.size);")
+                    impl.appendLine("${ind}    memcpy(local$${p.name}, ${p.name}.data, sizeof($elemCType) * ${p.name}.size);")
+                    impl.appendLine("${ind}}")
+                } else {
+                    impl.appendLine("${ind}$elemCType* local$${p.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * ${p.name}.size);")
+                    impl.appendLine("${ind}memcpy(local$${p.name}, ${p.name}.data, sizeof($elemCType) * ${p.name}.size);")
+                }
                 trampolinedParams += p.name
             }
         }
@@ -5715,7 +5768,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val resolved = resolveTypeName(p.type)
             if (p.isVararg) {
                 parts += "${cTypeStr(resolved)}* ${p.name}"
-                parts += "int32_t ${p.name}\$len"
+                parts += "ktc_Int ${p.name}\$len"
             } else if (isFuncType(resolved)) {
                 parts += cFuncPtrDecl(resolved, p.name)
             } else if (resolved.endsWith("^") || resolved.endsWith("^?") || resolved.endsWith("^#") ||
@@ -5730,13 +5783,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (hasSizeAnnotation(p.type)) {
                     // @Size(N) fixed array — passed as raw pointer (size known at compile time)
                     parts += "${cTypeStr(resolved)} ${p.name}"
-                } else if (p.type.nullable) {
-                    // Nullable array — raw pointer (NULL = no array) + length
-                    parts += "${cTypeStr(resolved)} ${p.name}"
-                    parts += "int32_t ${p.name}\$len"
                 } else {
-                    // Variable array — trampoline for pass-by-value semantics
-                    parts += "ktc_ArrayTrampoline ${p.name} /* ${arrayElementCType(resolved)}[] */"
+                    // Both nullable and non-nullable arrays use ktc_ArrayTrampoline for value semantics.
+                    // Nullable: data == NULL means the array argument was null.
+                    val vNullComment = if (p.type.nullable) " /* nullable */" else ""
+                    parts += "ktc_ArrayTrampoline ${p.name}$vNullComment /* ${arrayElementCType(resolved)}[] */"
                 }
             } else if (p.type.nullable) {
                 parts += "${optCTypeName(resolved)} ${p.name}"
@@ -5782,6 +5833,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "UIntArray"    -> "ktc_UInt*"
         t == "ULongArray"   -> "ktc_ULong*"
         t == "StringArray"  -> "ktc_String*"
+        t == "ByteOptArray"    -> "ktc_Byte_Optional*"
+        t == "ShortOptArray"   -> "ktc_Short_Optional*"
+        t == "IntOptArray"     -> "ktc_Int_Optional*"
+        t == "LongOptArray"    -> "ktc_Long_Optional*"
+        t == "FloatOptArray"   -> "ktc_Float_Optional*"
+        t == "DoubleOptArray"  -> "ktc_Double_Optional*"
+        t == "BooleanOptArray" -> "ktc_Bool_Optional*"
+        t == "CharOptArray"    -> "ktc_Char_Optional*"
+        t == "UByteOptArray"   -> "ktc_UByte_Optional*"
+        t == "UShortOptArray"  -> "ktc_UShort_Optional*"
+        t == "UIntOptArray"    -> "ktc_UInt_Optional*"
+        t == "ULongOptArray"   -> "ktc_ULong_Optional*"
+        t == "StringOptArray"  -> "ktc_String_Optional*"
         // Typed pointer: "Int*" → "int32_t*", "Vec2*" → "game_Vec2*"
         t.endsWith("*") -> {
             val base = t.dropLast(1)
@@ -5868,13 +5932,40 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return "Pair_${a}_${b}"
         }
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
-            return when (val elem = t.typeArgs[0].name) {
+            val elemRef     = t.typeArgs[0] // element TypeRef
+            val elem        = elemRef.name  // element Kotlin type name
+            val nullableElem = elemRef.nullable // true for Array<T?>
+            if (nullableElem) {
+                return when (elem) {
+                    "Byte"    -> "ByteOptArray"
+                    "Short"   -> "ShortOptArray"
+                    "Int"     -> "IntOptArray"
+                    "Long"    -> "LongOptArray"
+                    "Float"   -> "FloatOptArray"
+                    "Double"  -> "DoubleOptArray"
+                    "Boolean" -> "BooleanOptArray"
+                    "Char"    -> "CharOptArray"
+                    "UByte"   -> "UByteOptArray"
+                    "UShort"  -> "UShortOptArray"
+                    "UInt"    -> "UIntOptArray"
+                    "ULong"   -> "ULongOptArray"
+                    "String"  -> "StringOptArray"
+                    else      -> { classArrayTypes.add(elem); "${elem}OptArray" }
+                }
+            }
+            return when (elem) {
+                "Byte"    -> "ByteArray"
+                "Short"   -> "ShortArray"
                 "Int"     -> "IntArray"
                 "Long"    -> "LongArray"
                 "Float"   -> "FloatArray"
                 "Double"  -> "DoubleArray"
                 "Boolean" -> "BooleanArray"
                 "Char"    -> "CharArray"
+                "UByte"   -> "UByteArray"
+                "UShort"  -> "UShortArray"
+                "UInt"    -> "UIntArray"
+                "ULong"   -> "ULongArray"
                 "String"  -> "StringArray"
                 else      -> { classArrayTypes.add(elem); "${elem}Array" }
             }
@@ -6018,17 +6109,34 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         "UIntArray"    -> "ktc_UInt"
         "ULongArray"   -> "ktc_ULong"
         "StringArray"  -> "ktc_String"
+        "ByteOptArray"    -> "ktc_Byte_Optional"
+        "ShortOptArray"   -> "ktc_Short_Optional"
+        "IntOptArray"     -> "ktc_Int_Optional"
+        "LongOptArray"    -> "ktc_Long_Optional"
+        "FloatOptArray"   -> "ktc_Float_Optional"
+        "DoubleOptArray"  -> "ktc_Double_Optional"
+        "BooleanOptArray" -> "ktc_Bool_Optional"
+        "CharOptArray"    -> "ktc_Char_Optional"
+        "UByteOptArray"   -> "ktc_UByte_Optional"
+        "UShortOptArray"  -> "ktc_UShort_Optional"
+        "UIntOptArray"    -> "ktc_UInt_Optional"
+        "ULongOptArray"   -> "ktc_ULong_Optional"
+        "StringOptArray"  -> "ktc_String_Optional"
         else -> {
             if (arrType != null) {
                 // Class array: "Vec2Array" → element type "game_Vec2"
                 if (arrType.endsWith("Array") && arrType.length > 5) {
                     val elem = arrType.removeSuffix("Array")
                     if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return pfx(elem)
-                    // Pair or other known types: use cTypeStr
                     if (elem.startsWith("Pair_")) return cTypeStr(elem)
                 }
+                // Nullable-element class array: "Vec2OptArray" → "pkg_Vec2_Optional"
+                if (arrType.endsWith("OptArray") && arrType.length > 8) {
+                    val elem = arrType.removeSuffix("OptArray")
+                    if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return "${pfx(elem)}_Optional"
+                }
             }
-            "int32_t"
+            "ktc_Int"
         }
     }
 
@@ -6046,14 +6154,31 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         "UIntArray"    -> "UInt"
         "ULongArray"   -> "ULong"
         "StringArray"  -> "String"
+        "ByteOptArray"    -> "Byte?"
+        "ShortOptArray"   -> "Short?"
+        "IntOptArray"     -> "Int?"
+        "LongOptArray"    -> "Long?"
+        "FloatOptArray"   -> "Float?"
+        "DoubleOptArray"  -> "Double?"
+        "BooleanOptArray" -> "Boolean?"
+        "CharOptArray"    -> "Char?"
+        "UByteOptArray"   -> "UByte?"
+        "UShortOptArray"  -> "UShort?"
+        "UIntOptArray"    -> "UInt?"
+        "ULongOptArray"   -> "ULong?"
+        "StringOptArray"  -> "String?"
         else -> {
             if (arrType != null) {
                 // Class array: "Vec2Array" → element Kotlin type "Vec2"
                 if (arrType.endsWith("Array") && arrType.length > 5) {
                     val elem = arrType.removeSuffix("Array")
                     if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return elem
-                    // Pair or other known types
                     if (elem.startsWith("Pair_")) return elem
+                }
+                // Nullable-element class array: "Vec2OptArray" → "Vec2?"
+                if (arrType.endsWith("OptArray") && arrType.length > 8) {
+                    val elem = arrType.removeSuffix("OptArray")
+                    if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return "${elem}?"
                 }
             }
             "Int"

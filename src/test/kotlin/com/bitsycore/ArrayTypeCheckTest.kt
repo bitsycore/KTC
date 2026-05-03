@@ -110,7 +110,7 @@ class ArrayTypeCheckTest : TranspilerTestBase() {
             class Foo(var arr: Heap<Array<Int>>)
             fun main(args: Array<String>) {}
         """)
-        r.headerContains("int32_t* arr;")
+        r.headerContains("ktc_Int* arr;")
     }
 
     @Test fun classPropertyWithPtrArrayIntSucceeds() {
@@ -119,6 +119,6 @@ class ArrayTypeCheckTest : TranspilerTestBase() {
             class Foo(var arr: Ptr<Array<Int>>)
             fun main(args: Array<String>) {}
         """)
-        r.headerContains("int32_t* arr;")
+        r.headerContains("ktc_Int* arr;")
     }
 }

@@ -37,7 +37,7 @@ class ControlFlowTest : TranspilerTestBase() {
             }
         """)
         // Multi-statement if-expr uses temp var
-        r.sourceMatches(Regex("int32_t \\$\\d+"))
+        r.sourceMatches(Regex("ktc_Int \\$\\d+"))
     }
 
     // ── When statement ───────────────────────────────────────────────
@@ -87,22 +87,22 @@ class ControlFlowTest : TranspilerTestBase() {
 
     @Test fun forRange() {
         val r = transpileMain("for (i in 0..5) { println(i) }")
-        r.sourceContains("for (int32_t i = 0; i <= 5; i++)")
+        r.sourceContains("for (ktc_Int i = 0; i <= 5; i++)")
     }
 
     @Test fun forUntil() {
         val r = transpileMain("for (i in 0 until 5) { println(i) }")
-        r.sourceContains("for (int32_t i = 0; i < 5; i++)")
+        r.sourceContains("for (ktc_Int i = 0; i < 5; i++)")
     }
 
     @Test fun forRangeExclusive() {
         val r = transpileMain("for (i in 0..<5) { println(i) }")
-        r.sourceContains("for (int32_t i = 0; i < 5; i++)")
+        r.sourceContains("for (ktc_Int i = 0; i < 5; i++)")
     }
 
     @Test fun forDownTo() {
         val r = transpileMain("for (i in 5 downTo 0) { println(i) }")
-        r.sourceContains("for (int32_t i = 5; i >= 0; i--)")
+        r.sourceContains("for (ktc_Int i = 5; i >= 0; i--)")
     }
 
     @Test fun forStep() {
@@ -135,7 +135,7 @@ class ControlFlowTest : TranspilerTestBase() {
             val arr = intArrayOf(1, 2, 3)
             for (x in arr) { println(x) }
         """)
-        r.sourceMatches(Regex("for.*int32_t.*<.*arr\\${'$'}len"))
+        r.sourceMatches(Regex("for.*ktc_Int.*<.*arr\\${'$'}len"))
     }
 
     // ── While ────────────────────────────────────────────────────────
@@ -175,8 +175,8 @@ class ControlFlowTest : TranspilerTestBase() {
                 }
             }
         """)
-        r.sourceContains("for (int32_t i = 0; i <= 2; i++)")
-        r.sourceContains("for (int32_t j = 0; j <= 2; j++)")
+        r.sourceContains("for (ktc_Int i = 0; i <= 2; i++)")
+        r.sourceContains("for (ktc_Int j = 0; j <= 2; j++)")
     }
 
     // ── If-else chains ───────────────────────────────────────────────
