@@ -12,22 +12,22 @@ class NullableUnitTest : TranspilerTestBase() {
 
     @Test fun nullableIntWithValue() {
         val r = transpileMain("var x: Int? = 42")
-        r.sourceContains("ktc_Int_Optional x = (ktc_Int_Optional){SOME, 42};")
+        r.sourceContains("ktc_Int_Optional x = (ktc_Int_Optional){ktc_SOME, 42};")
     }
 
     @Test fun nullableIntNull() {
         val r = transpileMain("var x: Int? = null")
-        r.sourceContains("ktc_Int_Optional x = (ktc_Int_Optional){NONE};")
+        r.sourceContains("ktc_Int_Optional x = (ktc_Int_Optional){ktc_NONE};")
     }
 
     @Test fun nullableStringWithValue() {
         val r = transpileMain("""var s: String? = "hello"""")
-        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){SOME, ktc_str(\"hello\")};")
+        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){ktc_SOME, ktc_str(\"hello\")};")
     }
 
     @Test fun nullableStringNull() {
         val r = transpileMain("var s: String? = null")
-        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){NONE};")
+        r.sourceContains("ktc_String_Optional s = (ktc_String_Optional){ktc_NONE};")
     }
 
     // ── Nullable return (out-pointer convention) ─────────────────────
@@ -53,7 +53,7 @@ class NullableUnitTest : TranspilerTestBase() {
             fun findValue(): Int? { return null }
             fun main(args: Array<String>) { val a = findValue() }
         """)
-        r.sourceContains("return (ktc_Int_Optional){NONE};")
+        r.sourceContains("return (ktc_Int_Optional){ktc_NONE};")
     }
 
     @Test fun nullableReturnValue() {
@@ -62,7 +62,7 @@ class NullableUnitTest : TranspilerTestBase() {
             fun findValue(): Int? { return 42 }
             fun main(args: Array<String>) { val a = findValue() }
         """)
-        r.sourceContains("return (ktc_Int_Optional){SOME, 42};")
+        r.sourceContains("return (ktc_Int_Optional){ktc_SOME, 42};")
     }
 
     @Test fun nullableReturnCallSite() {
@@ -83,19 +83,19 @@ class NullableUnitTest : TranspilerTestBase() {
 
     @Test fun nullComparisonEquals() {
         val r = transpileMain("var x: Int? = null\nif (x == null) println(0)")
-        r.sourceContains("x.tag == NONE")
+        r.sourceContains("x.tag == ktc_NONE")
     }
 
     @Test fun nullComparisonNotEquals() {
         val r = transpileMain("var x: Int? = 42\nif (x != null) println(x!!)")
-        r.sourceContains("x.tag == SOME")
+        r.sourceContains("x.tag == ktc_SOME")
     }
 
     // ── Elvis operator ───────────────────────────────────────────────
 
     @Test fun elvisOperator() {
         val r = transpileMain("var x: Int? = null\nval y = x ?: 99")
-        r.sourceContains("x.tag == SOME")
+        r.sourceContains("x.tag == ktc_SOME")
         r.sourceContains("99")
     }
 
@@ -118,8 +118,8 @@ class NullableUnitTest : TranspilerTestBase() {
                 s?.show()
             }
         """)
-        // Safe call: if (s.tag == SOME) { String_show(s.value); }
-        r.sourceContains("s.tag == SOME")
+        // Safe call: if (s.tag == ktc_SOME) { String_show(s.value); }
+        r.sourceContains("s.tag == ktc_SOME")
         r.sourceContains("s.value")
     }
 
@@ -137,12 +137,12 @@ class NullableUnitTest : TranspilerTestBase() {
 
     @Test fun assignNullToNullableVar() {
         val r = transpileMain("var x: Int? = 42\nx = null")
-        r.sourceContains("x = (ktc_Int_Optional){NONE};")
+        r.sourceContains("x = (ktc_Int_Optional){ktc_NONE};")
     }
 
     @Test fun assignValueToNullableVar() {
         val r = transpileMain("var x: Int? = null\nx = 10")
-        r.sourceContains("x = (ktc_Int_Optional){SOME, 10};")
+        r.sourceContains("x = (ktc_Int_Optional){ktc_SOME, 10};")
     }
 
     // ── Passing null to nullable param ───────────────────────────────
@@ -157,8 +157,8 @@ class NullableUnitTest : TranspilerTestBase() {
                 show(null)
             }
         """)
-        // Passing null literal → ktc_Int_Optional{NONE}
-        r.sourceContains("test_Main_show((ktc_Int_Optional){NONE})")
+        // Passing null literal → ktc_Int_Optional{ktc_NONE}
+        r.sourceContains("test_Main_show((ktc_Int_Optional){ktc_NONE})")
     }
 
     @Test fun passValueToNullableParam() {
@@ -171,8 +171,8 @@ class NullableUnitTest : TranspilerTestBase() {
                 show(99)
             }
         """)
-        // Passing non-null literal → ktc_Int_Optional{SOME, 99}
-        r.sourceContains("test_Main_show((ktc_Int_Optional){SOME, 99})")
+        // Passing non-null literal → ktc_Int_Optional{ktc_SOME, 99}
+        r.sourceContains("test_Main_show((ktc_Int_Optional){ktc_SOME, 99})")
     }
 
     // ── Printing nullable values ─────────────────────────────────────
@@ -182,7 +182,7 @@ class NullableUnitTest : TranspilerTestBase() {
             var x: Int? = 42
             println(x)
         """)
-        r.sourceContains("x.tag == SOME")
+        r.sourceContains("x.tag == ktc_SOME")
         r.sourceContains("printf(\"null")
     }
 
@@ -191,7 +191,7 @@ class NullableUnitTest : TranspilerTestBase() {
             var s: String? = null
             println(s)
         """)
-        r.sourceContains("s.tag == SOME")
+        r.sourceContains("s.tag == ktc_SOME")
         r.sourceContains("printf(\"null")
     }
 

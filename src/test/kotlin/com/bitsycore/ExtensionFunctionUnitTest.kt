@@ -120,8 +120,8 @@ class ExtensionFunctionUnitTest : TranspilerTestBase() {
                 s.printSafe()
             }
         """)
-        // Inside the function, `this != null` should check $self.tag == SOME
-        r.sourceContains("\$self.tag == SOME")
+        // Inside the function, `this != null` should check $self.tag == ktc_SOME
+        r.sourceContains("\$self.tag == ktc_SOME")
     }
 
     @Test fun nullableReceiverOnClassType() {
