@@ -46,6 +46,18 @@ uint32_t ktc_rand_range(uint32_t bound);
  * Functions receive this struct, then copy data to a local stack buffer. */
 typedef struct { int32_t size; void* data; } Ktc_ArrayTrampoline;
 
+/* ═══════════════════════════ Optional ════════════════════════════════ */
+typedef enum { NONE = 0, SOME = 1 } ktc_OptionalTag;
+
+typedef struct { ktc_OptionalTag tag; int32_t   value; } ktc_OptionalInt32;
+typedef struct { ktc_OptionalTag tag; int64_t   value; } ktc_OptionalInt64;
+typedef struct { ktc_OptionalTag tag; float     value; } ktc_OptionalFloat;
+typedef struct { ktc_OptionalTag tag; double    value; } ktc_OptionalDouble;
+typedef struct { ktc_OptionalTag tag; bool      value; } ktc_OptionalBool;
+typedef struct { ktc_OptionalTag tag; char      value; } ktc_OptionalChar;
+typedef struct { ktc_OptionalTag tag; void*     value; } ktc_OptionalPtr;
+typedef struct { ktc_OptionalTag tag; int32_t   size; void* data; } ktc_OptionalArray;
+
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*
  * Enabled by #define KTC_MEM_TRACK before including this header.
@@ -164,6 +176,8 @@ typedef struct {
     const char* ptr;
     int32_t     len;
 } kt_String;
+
+typedef struct { ktc_OptionalTag tag; kt_String value; } ktc_OptionalString;
 
 /* String from literal — zero-cost, points into static storage. */
 #define kt_str(s) ((kt_String){(s), (int32_t)(sizeof(s) - 1)})
