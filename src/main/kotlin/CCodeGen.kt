@@ -5604,6 +5604,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // Emit alloca+memcpy copies for all variable array params and record them as trampolined.
     private fun emitArrayParamCopies(params: List<Param>, ind: String) {
+        var any = false
         for (p in params) {
             if (p.isVararg) continue
             val resolved = resolveTypeName(p.type)
@@ -5611,6 +5612,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Both nullable and non-nullable array params use ktc_ArrayTrampoline.
             // Non-nullable: copy unconditionally. Nullable: copy only when data != NULL.
             if (isArrayType(resolved) && !hasSizeAnnotation(p.type) && !isIndirect) {
+                if (!any) {
+                    impl.appendLine("${ind}// ── trampoline array start ──")
+                    any = true
+                }
                 val elemCType = arrayElementCType(resolved)
                 if (p.type.nullable) {
                     impl.appendLine("${ind}$elemCType* local$${p.name} = NULL;")
@@ -5625,6 +5630,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 trampolinedParams += p.name
             }
         }
+        if (any) impl.appendLine("${ind}// ── trampoline array end ──")
     }
 
     /*
