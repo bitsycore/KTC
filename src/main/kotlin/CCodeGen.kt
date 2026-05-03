@@ -184,14 +184,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     /** True if type is a function pointer type: "Fun(P1,P2)->R" */
     private fun isFuncType(t: String): Boolean = t.startsWith("Fun(")
 
-    /** Parse a function type string "Fun(P1,P2)->R" into (paramTypes, returnType) */
+    /** Parse a function type string "Fun(P1,P2)->R" or "Fun(R|P1,P2)->R" (receiver function) into (paramTypes, returnType) */
     private fun parseFuncType(t: String): Pair<List<String>, String> {
-        // Format: Fun(P1,P2,...)->R
+        // Format: Fun(P1,P2,...)->R or Fun(R|P1,P2)->R
         val inner = t.removePrefix("Fun(")
         val parenEnd = inner.indexOf(")->")
         val paramStr = inner.substring(0, parenEnd)
         val retType = inner.substring(parenEnd + 3)
-        val params = if (paramStr.isEmpty()) emptyList() else paramStr.split(",")
+        val params = if (paramStr.isEmpty()) emptyList() else paramStr.split(",").map { it.removeSuffix("|") }
         return params to retType
     }
 
@@ -3314,7 +3314,34 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: String, method: Boolean, receiverExpr: String? = null, receiverType: String? = null, resultVar: String? = null) {
         val body = decl.body ?: return
         val labelName = "\$end_ir_${inlineCounter++}"
-        impl.appendLine("$ind{ // inline ${decl.name}")
+        val sig = buildString {
+            if (receiverExpr != null) append("$receiverExpr.")
+            append(decl.name)
+            append("(")
+            callArgs.forEachIndexed { idx, a ->
+                if (idx > 0) append(", ")
+                val p = decl.params.getOrNull(idx)
+                val pName = p?.name ?: "arg$idx"
+                if (a.expr is LambdaExpr) {
+                    val pType = p?.type?.let { resolveTypeName(it) } ?: "?"
+                    append("$pName = $pType")
+                } else {
+                    val exprStr = when (a.expr) {
+                        is NameExpr -> a.expr.name
+                        is ThisExpr -> "this"
+                        is IntLit -> a.expr.value.toString()
+                        is StrLit -> "\"${a.expr.value}\""
+                        is BoolLit -> a.expr.value.toString()
+                        else -> "..."
+                    }
+                    append("$pName = $exprStr")
+                }
+            }
+            append(")")
+            decl.returnType?.let { append(": ${resolveTypeName(it)}") }
+        }
+        impl.appendLine("$ind/* inline $sig */")
+        impl.appendLine("$ind{")
         pushScope()
         val savedLambdas = activeLambdas
         val newLambdas = activeLambdas.toMutableMap()
@@ -6040,17 +6067,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val newTypeArgs = t.typeArgs.map { substituteTypeParams(it) }
         val newFuncParams = t.funcParams?.map { substituteTypeParams(it) }
         val newFuncReturn = t.funcReturn?.let { substituteTypeParams(it) }
-        return if (newName != t.name || newTypeArgs != t.typeArgs || newFuncParams != t.funcParams || newFuncReturn != t.funcReturn) {
-            TypeRef(newName, t.nullable, newTypeArgs, newFuncParams, newFuncReturn, t.annotations)
+        val newFuncReceiver = t.funcReceiver?.let { substituteTypeParams(it) }
+        return if (newName != t.name || newTypeArgs != t.typeArgs || newFuncParams != t.funcParams || newFuncReturn != t.funcReturn || newFuncReceiver != t.funcReceiver) {
+            TypeRef(newName, t.nullable, newTypeArgs, newFuncParams, newFuncReturn, newFuncReceiver, t.annotations)
         } else t
     }
 
     private fun resolveTypeNameInner(t: TypeRef): String {
         // Function type: (P1, P2) -> R → "Fun(P1,P2)->R"
+        // Receiver function type: T.(P1) -> R → "Fun(T|P1)->R"
         if (t.funcParams != null) {
+            val receiver = t.funcReceiver?.let { resolveTypeName(it) + "|" } ?: ""
             val params = t.funcParams.joinToString(",") { resolveTypeName(it) }
             val ret = resolveTypeName(t.funcReturn)
-            return "Fun($params)->$ret"
+            return "Fun($receiver$params)->$ret"
         }
         // User-defined generic class takes priority over built-in aliases
         if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {

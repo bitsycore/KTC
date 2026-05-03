@@ -16,10 +16,6 @@ inline fun applyTwo(a: Int, b: Int, combine: (Int, Int) -> Int): Int {
     return combine(a, b)
 }
 
-inline fun <T, R> T.let(block: (T) -> R): R {
-    return block(this)
-}
-
 fun main() {
 
     val a = arrayOf(1, 2, 3)

@@ -719,6 +719,30 @@ class Parser(private val tokens: List<Token>) {
     private fun parseTypeRef(): TypeRef {
         // Parse annotations: @Size(5) Array<Int>
         val annotations = parseAnnotations()
+        // Receiver function type: T.(params) -> R or T.() -> R
+        if (at(TokenType.IDENT) && peek().type == TokenType.DOT) {
+            val recvName = expectIdent()
+            expect(TokenType.DOT)
+            if (at(TokenType.LPAREN)) {
+                val saved = pos
+                try {
+                    advance(); nesting++; skipNL()
+                    val paramTypes = mutableListOf<TypeRef>()
+                    while (!at(TokenType.RPAREN) && !at(TokenType.EOF)) {
+                        paramTypes += parseTypeRef()
+                        if (at(TokenType.COMMA)) { advance(); skipNL() } else break
+                    }
+                    expect(TokenType.RPAREN); nesting--; skipNL()
+                    if (at(TokenType.ARROW)) {
+                        advance(); skipNL()
+                        val retType = parseTypeRef()
+                        val nullable = if (at(TokenType.QUESTION)) { advance(); true } else false
+                        return TypeRef("Function", nullable, emptyList(), paramTypes, retType, TypeRef(recvName), annotations)
+                    }
+                } catch (_: Exception) { }
+                pos = saved
+            }
+        }
         // Function type: (T, T, ...) -> R
         if (at(TokenType.LPAREN)) {
             val saved = pos

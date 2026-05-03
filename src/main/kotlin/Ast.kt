@@ -8,6 +8,7 @@ data class TypeRef(
     val typeArgs: List<TypeRef> = emptyList(),
     val funcParams: List<TypeRef>? = null,   // non-null → this is a function type: (params) -> returnType
     val funcReturn: TypeRef? = null,           // return type when funcParams != null
+    val funcReceiver: TypeRef? = null,         // receiver type for T.(params) -> R
     val annotations: List<Annotation> = emptyList()
 )
 
