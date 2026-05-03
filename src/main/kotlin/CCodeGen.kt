@@ -263,18 +263,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     /* Maps an internal type string to its C Optional struct type name. */
     private fun optCTypeName(internalType: String): String {
-        val base = internalType.removeSuffix("?").removeSuffix("#")
-        return when (base) {
-            "Int"     -> "ktc_OptionalInt32"
-            "Long"    -> "ktc_OptionalInt64"
-            "Float"   -> "ktc_OptionalFloat"
-            "Double"  -> "ktc_OptionalDouble"
-            "Boolean" -> "ktc_OptionalBool"
-            "Char"    -> "ktc_OptionalChar"
-            "String"  -> "ktc_OptionalString"
+        return when (val base = internalType.removeSuffix("?").removeSuffix("#")) {
+            "Int"     -> "ktc_Int32_Optional"
+            "Long"    -> "ktc_Int64_Optional"
+            "Float"   -> "ktc_Float_Optional"
+            "Double"  -> "ktc_Double_Optional"
+            "Boolean" -> "ktc_Bool_Optional"
+            "Char"    -> "ktc_Char_Optional"
+            "String"  -> "ktc_String_Optional"
             else -> {
-                if (isArrayType(base)) return "ktc_OptionalArray"
-                if (base.endsWith("*") || base.endsWith("^") || base.endsWith("&")) return "ktc_OptionalPtr"
+                if (isArrayType(base)) return "ktc_Array_Optional"
+                if (base.endsWith("*") || base.endsWith("^") || base.endsWith("&")) return "ktc_Ptr_Optional"
                 // Use the _Optional suffix to match the typedef emitted after each class struct
                 val sp = symbolPrefix[base]
                 val cName = if (sp != null) "${sp}${base}" else "${prefix}${base}"
@@ -337,7 +336,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ── Temp counter for stack buffers ───────────────────────────────
     private var tmpCounter = 0
-    private fun tmp(): String = "\$${tmpCounter++}"
+    private fun tmp(): String = "$${tmpCounter++}"
 
     // ── Memory tracking helpers (Kotlin source attribution) ──────────
     /** Kotlin source location string for current statement, e.g. `"File.kt", 42` */
@@ -681,21 +680,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             is PropDecl  -> { topProps.add(d.name) }
         }
-    }
-
-    /** Lightweight type inference from AST node during pre-scan (no codegen context). */
-    private fun scanInferType(e: Expr): String? = when (e) {
-        is IntLit    -> "Int"
-        is LongLit   -> "Long"
-        is FloatLit  -> "Float"
-        is DoubleLit -> "Double"
-        is BoolLit   -> "Boolean"
-        is CharLit   -> "Char"
-        is StrLit    -> "String"
-        is CallExpr  -> (e.callee as? NameExpr)?.name?.let { n ->
-            if (classes.containsKey(n)) n else null
-        }
-        else -> null
     }
 
     /** Pre-scan AST for Array<T> type references to populate classArrayTypes. */
@@ -1452,7 +1436,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    impl.appendLine("    memcpy(\$self.$name, $name, ${sizeAnn} * sizeof($elemType));")
+                    impl.appendLine("    memcpy(\$self.$name, $name, $sizeAnn * sizeof($elemType));")
                 } else if (isArrayType(resolved)) {
                     impl.appendLine("    \$self.$name = $name;")
                     impl.appendLine("    \$self.${name}\$len = ${name}\$len;")
@@ -1546,7 +1530,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    impl.appendLine("    memcpy(\$self.$name, $name, ${sizeAnn} * sizeof($elemType));")
+                    impl.appendLine("    memcpy(\$self.$name, $name, $sizeAnn * sizeof($elemType));")
                 } else if (isArrayType(resolved)) {
                     impl.appendLine("    \$self.$name = $name;")
                     impl.appendLine("    \$self.${name}\$len = ${name}\$len;")
@@ -1654,7 +1638,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val selfParam = "$cClass* \$self"
         val extraParams = expandParams(f.params)
         val outParam: String? = if (returnsSizedArray) {
-            val elemCType = arrayElementCType(resolveTypeName(f.returnType!!))
+            val elemCType = arrayElementCType(resolveTypeName(f.returnType))
             "$elemCType* \$out"
         } else null
         val allParts = mutableListOf(selfParam)
@@ -1677,8 +1661,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         currentFnReturnsSizedArray = returnsSizedArray
         currentFnOptReturnCTypeName = optRetCType
         if (returnsSizedArray) {
-            currentFnSizedArraySize = getSizeAnnotation(f.returnType!!)!!
-            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType!!))
+            currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
+            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
         }
         currentFnReturnType = retResolved
 
@@ -1743,7 +1727,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         } else "$cRecvType \$self"
         val extraParams = expandParams(f.params)
         val outParam = if (returnsSizedArray) {
-            val elemCType = arrayElementCType(resolveTypeName(f.returnType!!))
+            val elemCType = arrayElementCType(resolveTypeName(f.returnType))
             "$elemCType* \$out"
         } else null
         val allParts = mutableListOf(selfParam)
@@ -1767,8 +1751,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         currentFnReturnsNullable = returnsNullable
         currentFnOptReturnCTypeName = optRetCType
         if (returnsSizedArray) {
-            currentFnSizedArraySize = getSizeAnnotation(f.returnType!!)!!
-            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType!!))
+            currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
+            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
         }
         currentExtRecvType = if (recvIsNullable) "$recvTypeName?" else recvTypeName
         if (isClassType) {
@@ -1778,13 +1762,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             currentClass = null
             selfIsPointer = false
         }
+        pushScope()
         // If receiver is nullable, $self is an Optional struct — mark it so genName works
         if (recvIsNullable) {
             defineVar("\$self", "${recvTypeName}?")
             markOptional("\$self")
         }
-
-        pushScope()
         for (p in f.params) {
             val resolved = resolveTypeName(p.type)
             defineVar(p.name, when {
@@ -1849,7 +1832,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val concreteRet = genericFunConcreteReturn[mangledName]
             val cRet = when {
                 returnsSizedArray -> "void"
-                concreteRet != null -> "${pfx(concreteRet)}"
+                concreteRet != null -> pfx(concreteRet)
                 f.returnType != null -> cType(f.returnType)
                 else -> "void"
             }
@@ -1857,7 +1840,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val baseParams = expandParams(f.params)
             val params = when {
                 returnsSizedArray -> {
-                    val elemCType = arrayElementCType(resolveTypeName(f.returnType!!))
+                    val elemCType = arrayElementCType(resolveTypeName(f.returnType))
                     val extra = "$elemCType* \$out"
                     if (baseParams.isEmpty()) extra else "$baseParams, $extra"
                 }
@@ -1878,15 +1861,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             currentFnReturnsArray = returnsArray
             currentFnReturnsSizedArray = returnsSizedArray
             if (returnsSizedArray) {
-                currentFnSizedArraySize = getSizeAnnotation(f.returnType!!)!!
-                currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType!!))
+                currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
+                currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
             }
-            currentFnReturnType = if (concreteRet != null) {
-                concreteRet
-            } else if (f.returnType != null) {
-                val base = resolveTypeName(f.returnType)
-                if (f.returnType.nullable && !base.endsWith("?")) "${base}?" else base
-            } else ""
+            currentFnReturnType = concreteRet
+                ?: if (f.returnType != null) {
+                    val base = resolveTypeName(f.returnType)
+                    if (f.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+                } else ""
 
             pushScope()
             for (p in f.params) {
@@ -2156,7 +2138,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 flushPreStmts("    ")
                 if (isArrayType(resolved) && sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    impl.appendLine("    memcpy($cName.${p.name}, $expr, ${sizeAnn} * sizeof($elemType));")
+                    impl.appendLine("    memcpy($cName.${p.name}, $expr, $sizeAnn * sizeof($elemType));")
                     impl.appendLine("    $cName.${p.name}\$len = ${sizeAnn};")
                 } else {
                     impl.appendLine("    $cName.${p.name} = $expr;")
@@ -2439,7 +2421,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val base = expandParams(f.params)
                 val extra = when {
                     returnsSizedArray -> {
-                        val elemCType = arrayElementCType(resolveTypeName(f.returnType!!))
+                        val elemCType = arrayElementCType(resolveTypeName(f.returnType))
                         "$elemCType* \$out"
                     }
                     returnsArray -> "int32_t* \$len_out"
@@ -4191,7 +4173,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         }
                     } else {
                         if (arg.expr is NullLit && !isCtorCall) {
-                            parts += "(Ktc_ArrayTrampoline){.size = 0, .data = NULL}"
+                            parts += "(ktc_ArrayTrampoline){.size = 0, .data = NULL}"
                         } else if (!hasSizeAnnotation(param.type)) {
                             val argName = (arg.expr as? NameExpr)?.name
                             val sizeExpr = if (argName != null && argName in trampolinedParams) "$argName.size" else "${expr}\$len"
@@ -4199,7 +4181,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                                 parts += expr
                                 parts += sizeExpr
                             } else {
-                                parts += "(Ktc_ArrayTrampoline){.size = $sizeExpr, .data = $expr}"
+                                parts += "(ktc_ArrayTrampoline){.size = $sizeExpr, .data = $expr}"
                             }
                         } else {
                             // @Size fixed array — passed as raw pointer
@@ -4741,7 +4723,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             markOptional(t)
             defineVar(t, fieldType)
         } else {
-            val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_OptionalInt32"
+            val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int32_Optional"
             val fieldCType = if (fieldType != null) cTypeStr(fieldType) else "int32_t"
             preStmts += "$optType $t = $guard ? ($optType){SOME, $fieldAccess} : ${optNone(optType)};"
             markOptional(t)
@@ -4914,8 +4896,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         preStmts += "$ct $t;"
         for ((bi, br) in e.branches.withIndex()) {
             if (br.conds == null) {
-                if (bi > 0) preStmts += "} else {"
-                else preStmts += "{"
+                preStmts += if (bi > 0) "} else {"
+                else "{"
             } else {
                 val condStr = br.conds.joinToString(" || ") { genWhenCond(it, e.subject) }
                 val keyword = if (bi == 0) "if" else "} else if"
@@ -5444,7 +5426,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
         // Stack class methods
-        if (recvType != null && classes.containsKey(recvType)) {
+        if (classes.containsKey(recvType)) {
             if (method == "copy") return recvType        // .copy() → T (stack copy)
             if (method == "toHeap") return "${recvType}*" // .toHeap() → Heap<T>
             if (method == "toPtr") return "${recvType}^"  // .toPtr() → Ptr<T>
@@ -5597,14 +5579,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Nullable arrays use raw pointer (no trampoline); only non-nullable non-indirect arrays use trampoline
             if (isArrayType(resolved) && !hasSizeAnnotation(p.type) && !isIndirect && !p.type.nullable) {
                 val elemCType = arrayElementCType(resolved)
-                impl.appendLine("${ind}$elemCType* local\$${p.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * ${p.name}.size);")
-                impl.appendLine("${ind}memcpy(local\$${p.name}, ${p.name}.data, sizeof($elemCType) * ${p.name}.size);")
+                impl.appendLine("${ind}$elemCType* local$${p.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * ${p.name}.size);")
+                impl.appendLine("${ind}memcpy(local$${p.name}, ${p.name}.data, sizeof($elemCType) * ${p.name}.size);")
                 trampolinedParams += p.name
             }
         }
     }
 
-    /** Expand a parameter list: variable array params → Ktc_ArrayTrampoline, @Size arrays → T*, nullable params → OptT name. */
+    /** Expand a parameter list: variable array params → ktc_ArrayTrampoline, @Size arrays → T*, nullable params → OptT name. */
     private fun expandParams(params: List<Param>): String {
         val parts = mutableListOf<String>()
         for (p in params) {
@@ -5630,7 +5612,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     parts += "int32_t ${p.name}\$len"
                 } else {
                     // Variable array — trampoline for pass-by-value semantics
-                    parts += "Ktc_ArrayTrampoline ${p.name}"
+                    parts += "ktc_ArrayTrampoline ${p.name}"
                 }
             } else if (p.type.nullable) {
                 parts += "${optCTypeName(resolved)} ${p.name}"
@@ -5750,8 +5732,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return "Pair_${a}_${b}"
         }
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
-            val elem = t.typeArgs[0].name
-            return when (elem) {
+            return when (val elem = t.typeArgs[0].name) {
                 "Int"     -> "IntArray"
                 "Long"    -> "LongArray"
                 "Float"   -> "FloatArray"

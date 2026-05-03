@@ -44,19 +44,19 @@ uint32_t ktc_rand_range(uint32_t bound);
 /* ═══════════════════════════ Array Trampoline ════════════════════════ */
 /* Pass-by-value semantics for variable-size arrays.
  * Functions receive this struct, then copy data to a local stack buffer. */
-typedef struct { int32_t size; void* data; } Ktc_ArrayTrampoline;
+typedef struct { int32_t size; void* data; } ktc_ArrayTrampoline;
 
 /* ═══════════════════════════ Optional ════════════════════════════════ */
 typedef enum { NONE = 0, SOME = 1 } ktc_OptionalTag;
 
-typedef struct { ktc_OptionalTag tag; int32_t   value; } ktc_OptionalInt32;
-typedef struct { ktc_OptionalTag tag; int64_t   value; } ktc_OptionalInt64;
-typedef struct { ktc_OptionalTag tag; float     value; } ktc_OptionalFloat;
-typedef struct { ktc_OptionalTag tag; double    value; } ktc_OptionalDouble;
-typedef struct { ktc_OptionalTag tag; bool      value; } ktc_OptionalBool;
-typedef struct { ktc_OptionalTag tag; char      value; } ktc_OptionalChar;
-typedef struct { ktc_OptionalTag tag; void*     value; } ktc_OptionalPtr;
-typedef struct { ktc_OptionalTag tag; int32_t   size; void* data; } ktc_OptionalArray;
+typedef struct { ktc_OptionalTag tag; int32_t   value; } ktc_Int32_Optional;
+typedef struct { ktc_OptionalTag tag; int64_t   value; } ktc_Int64_Optional;
+typedef struct { ktc_OptionalTag tag; float     value; } ktc_Float_Optional;
+typedef struct { ktc_OptionalTag tag; double    value; } ktc_Double_Optional;
+typedef struct { ktc_OptionalTag tag; bool      value; } ktc_Bool_Optional;
+typedef struct { ktc_OptionalTag tag; char      value; } ktc_Char_Optional;
+typedef struct { ktc_OptionalTag tag; void*     value; } ktc_Ptr_Optional;
+typedef struct { ktc_OptionalTag tag; int32_t   size; void* data; } ktc_Array_Optional;
 
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*
@@ -177,7 +177,7 @@ typedef struct {
     int32_t     len;
 } kt_String;
 
-typedef struct { ktc_OptionalTag tag; kt_String value; } ktc_OptionalString;
+typedef struct { ktc_OptionalTag tag; kt_String value; } ktc_String_Optional;
 
 /* String from literal — zero-cost, points into static storage. */
 #define kt_str(s) ((kt_String){(s), (int32_t)(sizeof(s) - 1)})
