@@ -86,7 +86,7 @@ java -jar KotlinToC.jar <file.kt...> [-o <output_dir>] [--mem-track] [--ast]
 - C interop via `c.` prefix: `c.printf(...)`, `c.memcpy(...)`
 - String methods: `length`, `substring()`, `startsWith()`, `endsWith()`, `contains()`
 
-## Standard Library (`package ktc`)
+## Standard Library (`package ktc.std`)
 
 | Type                           | Description                                 |
 |--------------------------------|---------------------------------------------|
