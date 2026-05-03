@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for function pointers: ::ref, function pointer types, passing as arguments.
  */
-class FunctionPointerTest : TranspilerTestBase() {
+class FunctionPointerUnitTest : TranspilerTestBase() {
 
     private val funPtrDecls = """
         fun addTwo(a: Int, b: Int): Int {

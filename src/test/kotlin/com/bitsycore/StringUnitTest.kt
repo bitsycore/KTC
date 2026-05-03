@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for string templates and string operations.
  */
-class StringTest : TranspilerTestBase() {
+class StringUnitTest : TranspilerTestBase() {
 
     // ── Simple string template ───────────────────────────────────────
 

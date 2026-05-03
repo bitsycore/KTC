@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for intrinsic Pair<A,B> type, vararg parameters, and spread operator.
  */
-class PairVarargTest : TranspilerTestBase() {
+class PairVarargUnitTest : TranspilerTestBase() {
 
     // ── Pair: to infix ──────────────────────────────────────────────
 

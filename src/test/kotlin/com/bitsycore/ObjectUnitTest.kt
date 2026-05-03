@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for object declarations (singletons).
  */
-class ObjectTest : TranspilerTestBase() {
+class ObjectUnitTest : TranspilerTestBase() {
 
     private val configDecl = """
         object Config {

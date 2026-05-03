@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for arrays (arrayOf, intArrayOf).
  */
-class ArrayTest : TranspilerTestBase() {
+class ArrayUnitTest : TranspilerTestBase() {
 
     // ── intArrayOf ───────────────────────────────────────────────────
 

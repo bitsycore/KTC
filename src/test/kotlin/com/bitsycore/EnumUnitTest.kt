@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for enum classes.
  */
-class EnumTest : TranspilerTestBase() {
+class EnumUnitTest : TranspilerTestBase() {
 
     private val colorDecl = "enum class Color { RED, GREEN, BLUE }"
 

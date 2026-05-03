@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for interfaces: declaration, implementation, virtual dispatch.
  */
-class InterfaceTest : TranspilerTestBase() {
+class InterfaceUnitTest : TranspilerTestBase() {
 
     private val shapeDecls = """
         interface Shape {

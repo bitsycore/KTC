@@ -6,7 +6,7 @@ import kotlin.test.Test
  * Tests that raw Array<T> types are blocked as function return types and class/object properties,
  * because they translate to stack-allocated VLAs that cannot safely outlive their scope.
  */
-class ArrayTypeCheckTest : TranspilerTestBase() {
+class ArrayTypeCheckUnitTest : TranspilerTestBase() {
 
     // ── Function return type checks ──────────────────────────────────
 

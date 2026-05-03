@@ -7,7 +7,7 @@ Tests for companion object declarations.
 Companion objects are treated like named objects scoped inside their class,
 accessed via ClassName.member syntax.
 */
-class CompanionObjectTest : TranspilerTestBase() {
+class CompanionObjectUnitTest : TranspilerTestBase() {
 
 	private val kClassWithCompanion = """
 		class Foo {

@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for extension functions: on primitives, classes, nullable receivers.
  */
-class ExtensionFunctionTest : TranspilerTestBase() {
+class ExtensionFunctionUnitTest : TranspilerTestBase() {
 
     // ── Extension on primitive type ──────────────────────────────────
 

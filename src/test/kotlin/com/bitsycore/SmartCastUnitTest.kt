@@ -6,7 +6,7 @@ import kotlin.test.Test
  * Tests for smart casts: guard pattern, if-then narrowing, if-else narrowing,
  * val vs var exclusion.
  */
-class SmartCastTest : TranspilerTestBase() {
+class SmartCastUnitTest : TranspilerTestBase() {
 
     private val nullableFun = """
         fun findValue(flag: Boolean): Int? {

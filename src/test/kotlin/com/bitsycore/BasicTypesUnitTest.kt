@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for basic types, literals, and variable declarations.
  */
-class BasicTypesTest : TranspilerTestBase() {
+class BasicTypesUnitTest : TranspilerTestBase() {
 
     // ── Int ──────────────────────────────────────────────────────────
 

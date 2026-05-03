@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for classes with body properties, methods, constructors.
  */
-class ClassTest : TranspilerTestBase() {
+class ClassUnitTest : TranspilerTestBase() {
 
     // ── Class with ctor params and body props ────────────────────────
 

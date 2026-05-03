@@ -8,7 +8,7 @@ Tests for the stdlib Random object transpilation.
 Call-site tests use transpileMainWithStdlib so the ktc.Random object is in scope.
 Declaration tests use transpileStdlibFile to inspect the ktc package output directly.
 */
-class RandomTest : TranspilerTestBase() {
+class RandomUnitTest : TranspilerTestBase() {
 
 	// ── Struct / extern declarations (in ktc package output) ─────────
 

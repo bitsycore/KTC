@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
  * each unique instantiation (e.g. MyList<Int>, MyList<Float>) generates a concrete
  * C struct and functions with mangled names (MyList_Int, MyList_Float).
  */
-class GenericsTest : TranspilerTestBase() {
+class GenericsUnitTest : TranspilerTestBase() {
 
     // ── Basic generic class declaration + instantiation ──────────────
 

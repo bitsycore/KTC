@@ -12,7 +12,7 @@ import kotlin.test.Test
  *   - MutableList<Int> params are passed by value (struct copy)
  *   - Array $len companions must be emitted for val assignments from array constructors
  */
-class JsonParserTest : TranspilerTestBase() {
+class JsonParserUnitTest : TranspilerTestBase() {
 
     private fun transpileJsonParser(): TranspileResult {
         val src = java.io.File("tests/JsonParserTest/JsonParserTest.kt").readText()

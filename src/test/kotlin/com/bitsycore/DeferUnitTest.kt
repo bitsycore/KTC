@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for defer statement: basic, block, LIFO ordering, with return values.
  */
-class DeferTest : TranspilerTestBase() {
+class DeferUnitTest : TranspilerTestBase() {
 
     // ── Basic defer ──────────────────────────────────────────────────
 

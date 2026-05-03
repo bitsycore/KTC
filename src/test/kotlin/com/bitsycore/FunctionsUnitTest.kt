@@ -6,7 +6,7 @@ import kotlin.test.Test
  * Tests for functions: declarations, parameters, defaults, return types,
  * expression bodies, and calls.
  */
-class FunctionsTest : TranspilerTestBase() {
+class FunctionsUnitTest : TranspilerTestBase() {
 
     // ── Basic function ───────────────────────────────────────────────
 

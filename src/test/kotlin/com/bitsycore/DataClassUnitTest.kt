@@ -6,7 +6,7 @@ import kotlin.test.Test
  * Tests for data classes: declaration, construction, properties,
  * toString, equals, copy, toHeap.
  */
-class DataClassTest : TranspilerTestBase() {
+class DataClassUnitTest : TranspilerTestBase() {
 
     private val vec2Decl = """
         data class Vec2(val x: Float, val y: Float)

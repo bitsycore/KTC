@@ -6,7 +6,7 @@ import kotlin.test.Test
  * Tests for nullable types, null safety enforcement, safe calls,
  * elvis operator, not-null assertion.
  */
-class NullableTest : TranspilerTestBase() {
+class NullableUnitTest : TranspilerTestBase() {
 
     // ── Nullable variable declaration ────────────────────────────────
 

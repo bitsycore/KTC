@@ -6,7 +6,7 @@ import kotlin.test.Test
 /**
  * Tests for Heap<T> (heap-allocated objects), Ptr<T>, Value<T>, HeapAlloc, HeapFree.
  */
-class HeapTest : TranspilerTestBase() {
+class HeapUnitTest : TranspilerTestBase() {
 
     private val vec2Decl = "data class Vec2(val x: Float, val y: Float)"
 

@@ -5,7 +5,7 @@ import kotlin.test.Test
 /**
  * Tests for control flow: if/else, when, for, while, do-while, break, continue.
  */
-class ControlFlowTest : TranspilerTestBase() {
+class ControlFlowUnitTest : TranspilerTestBase() {
 
     // ── If/else statement ────────────────────────────────────────────
 

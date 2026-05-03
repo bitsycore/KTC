@@ -2,7 +2,7 @@ package com.bitsycore
 
 import kotlin.test.Test
 
-class PrivateTest : TranspilerTestBase() {
+class PrivateUnitTest : TranspilerTestBase() {
 
     // ── Private field ────────────────────────────────────────────
 

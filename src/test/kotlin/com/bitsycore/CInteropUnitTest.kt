@@ -6,7 +6,7 @@ import kotlin.test.Test
  * Tests for C interop via the `c.` package prefix.
  * C standard library functions and constants are accessed as c.printf(), c.EXIT_SUCCESS, etc.
  */
-class CInteropTest : TranspilerTestBase() {
+class CInteropUnitTest : TranspilerTestBase() {
 
     // ── C function calls ─────────────────────────────────────────────
 

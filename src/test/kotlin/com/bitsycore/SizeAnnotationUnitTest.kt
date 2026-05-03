@@ -3,7 +3,7 @@ package com.bitsycore
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-class SizeAnnotationTest : TranspilerTestBase() {
+class SizeAnnotationUnitTest : TranspilerTestBase() {
 
     // ── Annotation parsing ────────────────────────────────────────────
 
