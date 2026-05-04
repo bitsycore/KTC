@@ -40,8 +40,7 @@
 
 ## Prefix expressions on calls
 
-- **`!functionCall(args)`** — Generates `(!name)(args)` instead of `!name(args)`. The C codegen incorrectly parenthesizes prefix expressions on function calls.
-  Workaround: Use `funCall(args) == false` or assign to temp variable first.
+- **`!functionCall(args)`** — **FIXED**: Parser now binds `!` around the entire call, generating `(!name(args))` correctly.
 
 ## For-Loop
 

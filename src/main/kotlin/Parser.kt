@@ -529,7 +529,12 @@ class Parser(private val tokens: List<Token>) {
                     val args = parseArgList()
                     expect(TokenType.RPAREN); nesting--
                     val allArgs = if (at(TokenType.LBRACE)) args + Arg(null, parseLambdaExpr()) else args
-                    CallExpr(e, allArgs)
+                    // !helper() → PrefixExpr(!, CallExpr(helper, ())) not CallExpr(PrefixExpr(!,helper), ())
+                    if (e is PrefixExpr) {
+                        PrefixExpr(e.op, CallExpr(e.expr, allArgs))
+                    } else {
+                        CallExpr(e, allArgs)
+                    }
                 }
                 // Type-parameterized call: malloc<Int>(n)
                 at(TokenType.LT) && e is NameExpr && looksLikeTypeArgs() -> {
