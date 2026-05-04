@@ -8,7 +8,7 @@ import kotlin.test.Test
  */
 class HeapUnitTest : TranspilerTestBase() {
 
-    private val vec2Decl = "data class Vec2(val x: Float, val y: Float)"
+    private val vec2Decl = "data class Vec2(var x: Float, var y: Float)"
 
     // ── HeapAlloc<Class> → heap constructor ─────────────────────────────
 

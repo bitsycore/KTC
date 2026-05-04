@@ -45,7 +45,7 @@ class DeferUnitTest : TranspilerTestBase() {
     // ── Defer with return value ──────────────────────────────────────
 
     @Test fun deferWithReturn() {
-        val decls = "data class Vec2(val x: Float, val y: Float)"
+        val decls = "data class Vec2(var x: Float, var y: Float)"
         val r = transpile("""
             package test.Main
             $decls

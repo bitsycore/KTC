@@ -23,10 +23,10 @@ class JsonParserUnitTest : TranspilerTestBase() {
 
     @Test fun topLevelConstantsDefinedWithPrefix() {
         val r = transpileJsonParser()
-        r.sourceContains("const ktc_Int JsonParserTest_TOK_LBRACE = 0;")
-        r.sourceContains("const ktc_Int JsonParserTest_TOK_EOF = 11;")
-        r.sourceContains("const ktc_Int JsonParserTest_JSON_STRING = 0;")
-        r.sourceContains("const ktc_Int JsonParserTest_JSON_OBJECT = 5;")
+        r.sourceContains("const /*VAL*/ ktc_Int JsonParserTest_TOK_LBRACE = 0;")
+        r.sourceContains("const /*VAL*/ ktc_Int JsonParserTest_TOK_EOF = 11;")
+        r.sourceContains("const /*VAL*/ ktc_Int JsonParserTest_JSON_STRING = 0;")
+        r.sourceContains("const /*VAL*/ ktc_Int JsonParserTest_JSON_OBJECT = 5;")
     }
 
     @Test fun topLevelConstantsReferencedWithPrefix() {

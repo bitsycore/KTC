@@ -27,7 +27,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     // ── Symbol tables (populated by collectDecls) ────────────────────
-    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false)
+    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false, val mutable: Boolean = true)
 
     private data class ClassInfo(
         val name: String, val isData: Boolean,
@@ -37,11 +37,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val methods: MutableList<FunDecl> = mutableListOf(),
         val initBlocks: List<Block> = emptyList(),
         val typeParams: List<String> = emptyList(),
-        val privateProps: Set<String> = emptySet()
+        val privateProps: Set<String> = emptySet(),
+        val valCtorProps: Set<String> = emptySet()
     ) {
         val props: List<Pair<String, TypeRef>>
             get() = ctorProps + bodyProps.map { it.name to it.type }
         val isGeneric get() = typeParams.isNotEmpty()
+        fun isValProp(name: String): Boolean = name in valCtorProps || bodyProps.any { it.name == name && !it.mutable }
     }
 
     private data class EnumInfo(val name: String, val entries: List<String>)
@@ -71,6 +73,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private var currentInd: String = "    "  // current emit indentation, kept in sync by emitStmt
     private var inlineCounter: Int = 0  // counter for unique inline temp variable names and end labels
     private val topProps = mutableSetOf<String>()  // top-level property names (need pfx)
+    private val valTopProps = mutableSetOf<String>()  // top-level val properties (cannot be reassigned)
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
     private val interfaces = mutableMapOf<String, IfaceInfo>()
     // Maps class name → synthetic companion object name (e.g. "Foo" → "Foo_Companion")
@@ -133,8 +136,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // ── Per-scope variable → type mapping ────────────────────────────
     private val scopes = ArrayDeque<MutableMap<String, String>>()
-    private fun pushScope() { scopes.addLast(mutableMapOf()); optValVarNames.addLast(mutableSetOf()) }
-    private fun popScope()  { scopes.removeLast(); optValVarNames.removeLast() }
+    private fun pushScope() { scopes.addLast(mutableMapOf()); optValVarNames.addLast(mutableSetOf()); mutableVarScopes.addLast(mutableSetOf()) }
+    private fun popScope()  { scopes.removeLast(); optValVarNames.removeLast(); mutableVarScopes.removeLast() }
     private fun defineVar(name: String, type: String) { scopes.last()[name] = type }
     private fun lookupVar(name: String): String? { for (i in scopes.indices.reversed()) { scopes[i][name]?.let { return it } }; return preScanVarTypes?.get(name) }
 
@@ -142,10 +145,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // (allows inferExprType to resolve variable types before codegen defineVar runs)
     private var preScanVarTypes: MutableMap<String, String>? = null
 
-    // Track mutable (var) variables — smart casts are only valid on val
-    private val mutableVars = mutableSetOf<String>()
-    private fun markMutable(name: String) { mutableVars.add(name) }
-    private fun isMutable(name: String): Boolean = name in mutableVars
+    // Track mutable (var) variables — smart casts are only valid on val, val reassignment is an error.
+    // Scoped: each pushScope() adds a new set, popScope() removes it.
+    private val mutableVarScopes = ArrayDeque<MutableSet<String>>()
+    private fun markMutable(name: String) { mutableVarScopes.lastOrNull()?.add(name) }
+    private fun isMutable(name: String): Boolean = mutableVarScopes.any { name in it }
 
     // Track variables stored as Optional structs (value-nullable T? → OptT in C).
     // When a variable is in this set but its current scope type is non-nullable (smart cast),
@@ -572,12 +576,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     }
                 }
                 val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
+                val valCtorPropNames = d.ctorParams.filter { it.isVal }.map { it.name }.toSet()
                 val ctorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { it.name to it.type }
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
-                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line, p.isPrivate)
+                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line, p.isPrivate, p.mutable)
                 }
                 val privateProps = bodyProps.filter { it.isPrivate }.map { it.name }.toSet()
-                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams, privateProps = privateProps)
+                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams, privateProps = privateProps, valCtorProps = valCtorPropNames)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
                 for (m in d.members) if (m is FunDecl && m.receiver == null) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
@@ -646,7 +651,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (d.isInline) inlineFunDecls[d.name] = d
                 }
             }
-            is PropDecl  -> { topProps.add(d.name) }
+            is PropDecl  -> { topProps.add(d.name); if (!d.mutable) valTopProps.add(d.name) }
         }
     }
 
@@ -1382,21 +1387,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for ((name, type) in ci.props) {
             val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val resolved = resolveTypeName(type)
+            val mutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
             if (isFuncType(resolved)) {
-                hdr.appendLine("    ${cFuncPtrDecl(resolved, fieldName)};")
+                hdr.appendLine("    $mutComment${cFuncPtrDecl(resolved, fieldName)};")
             } else if (isArrayType(resolved)) {
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    hdr.appendLine("    $elemType $fieldName[${sizeAnn}];")
+                    hdr.appendLine("    $mutComment$elemType $fieldName[${sizeAnn}];")
                 } else {
-                    hdr.appendLine("    ${cTypeStr(resolved)} $fieldName;")
+                    hdr.appendLine("    $mutComment${cTypeStr(resolved)} $fieldName;")
                     hdr.appendLine("    int32_t ${fieldName}\$len;")
                 }
             } else if (type.nullable) {
-                hdr.appendLine("    ${optCTypeName(resolved)} $fieldName;")
+                hdr.appendLine("    $mutComment${optCTypeName(resolved)} $fieldName;")
             } else {
-                hdr.appendLine("    ${cType(type)} $fieldName;${ptrNullComment(resolved)}")
+                hdr.appendLine("    $mutComment${cType(type)} $fieldName;${ptrNullComment(resolved)}")
             }
         }
         hdr.appendLine("} $cName;")
@@ -1457,7 +1463,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         currentClass = d.name
         selfIsPointer = true
         pushScope()
-        for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+        for ((name, type) in ci.props) {
+            defineVar(name, resolveTypeName(type))
+            if (!ci.isValProp(name)) markMutable(name)
+        }
         for (m in d.members) {
             if (m is FunDecl && m.receiver == null) emitMethod(d.name, m)
         }
@@ -1484,21 +1493,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for ((name, type) in ci.props) {
             val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val resolved = resolveTypeName(type)
+            val mutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
             if (isFuncType(resolved)) {
-                hdr.appendLine("    ${cFuncPtrDecl(resolved, fieldName)};")
+                hdr.appendLine("    $mutComment${cFuncPtrDecl(resolved, fieldName)};")
             } else if (isArrayType(resolved)) {
                 val sizeAnn = getSizeAnnotation(type)
                 if (sizeAnn != null) {
                     val elemType = arrayElementCType(resolved)
-                    hdr.appendLine("    $elemType $fieldName[${sizeAnn}];")
+                    hdr.appendLine("    $mutComment$elemType $fieldName[${sizeAnn}];")
                 } else {
-                    hdr.appendLine("    ${cTypeStr(resolved)} $fieldName;")
+                    hdr.appendLine("    $mutComment${cTypeStr(resolved)} $fieldName;")
                     hdr.appendLine("    int32_t ${fieldName}\$len;")
                 }
             } else if (type.nullable) {
-                hdr.appendLine("    ${optCTypeName(resolved)} $fieldName;")
+                hdr.appendLine("    $mutComment${optCTypeName(resolved)} $fieldName;")
             } else {
-                hdr.appendLine("    ${cType(type)} $fieldName;${ptrNullComment(resolved)}")
+                hdr.appendLine("    $mutComment${cType(type)} $fieldName;${ptrNullComment(resolved)}")
             }
         }
         hdr.appendLine("};")
@@ -1553,7 +1563,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         currentClass = mangledName
         selfIsPointer = true
         pushScope()
-        for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+        for ((name, type) in ci.props) {
+            defineVar(name, resolveTypeName(type))
+            if (!ci.isValProp(name)) markMutable(name)
+        }
         for (m in templateDecl.members) {
             if (m is FunDecl && m.receiver == null) emitMethod(mangledName, m)
         }
@@ -1790,7 +1803,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         if (isClassType) {
             val ci = classes[recvTypeName]!!
-            for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+            for ((name, type) in ci.props) {
+                defineVar(name, resolveTypeName(type))
+                if (!ci.isValProp(name)) markMutable(name)
+            }
         }
         val savedTrampolined2 = trampolinedParams.toHashSet(); trampolinedParams.clear()
         emitArrayParamCopies(f.params, "    ")
@@ -2543,12 +2559,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val ct = cTypeStr(t)
         val cName = pfx(d.name)
         val qual = if (!d.mutable) "const " else ""
+        val mutComment = if (d.mutable) "/*VAR*/ " else "/*VAL*/ "
         if (d.init != null) {
             hdr.appendLine("extern $qual$ct $cName;")
-            impl.appendLine("$qual$ct $cName = ${genExpr(d.init)};")
+            impl.appendLine("$qual$mutComment$ct $cName = ${genExpr(d.init)};")
         } else {
             hdr.appendLine("extern $ct $cName;")
-            impl.appendLine("$ct $cName = ${defaultVal(t)};")
+            impl.appendLine("$mutComment$ct $cName = ${defaultVal(t)};")
         }
         impl.appendLine()
     }
@@ -2628,15 +2645,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else -> t
         })
         if (s.mutable) markMutable(s.name)
+        val mutComment = if (s.mutable) "/*VAR*/ " else "/*VAL*/ "
 
         // ── Function pointer type: special declaration syntax ──
         if (isFuncType(t)) {
             if (s.init != null) {
                 val expr = genExpr(s.init)
                 flushPreStmts(ind)
-                impl.appendLine("$ind${cFuncPtrDecl(t, s.name)} = $expr;")
+                impl.appendLine("$ind$mutComment${cFuncPtrDecl(t, s.name)} = $expr;")
             } else {
-                impl.appendLine("$ind${cFuncPtrDecl(t, s.name)} = NULL;")
+                impl.appendLine("$ind$mutComment${cFuncPtrDecl(t, s.name)} = NULL;")
             }
             return
         }
@@ -2664,11 +2682,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // ── Nullable pointer (@Ptr T?): can be NULL ──
                 isPtrNullable -> {
                     if (s.init is NullLit) {
-                        impl.appendLine("$ind$ct ${s.name} /* nullable */ = NULL;")
+                        impl.appendLine("$ind$mutComment$ct ${s.name} /* nullable */ = NULL;")
                     } else {
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
-                        impl.appendLine("$ind$ct ${s.name} /* nullable */ = $expr;")
+                        impl.appendLine("$ind$mutComment$ct ${s.name} /* nullable */ = $expr;")
                     }
                     // Emit $len companion for array pointer types
                     if (isAllocArrayCall(s.init)) {
@@ -2686,16 +2704,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val optType = optCTypeName("${t}?")
                     markOptional(s.name)
                     if (s.init is NullLit) {
-                        impl.appendLine("$ind$optType ${s.name} = ${optNone(optType)};")
+                        impl.appendLine("$ind$mutComment$optType ${s.name} = ${optNone(optType)};")
                     } else {
                         val srcType = inferExprType(s.init)
                         val alreadyOpt = srcType != null && srcType.endsWith("?") && isValueNullableType(srcType)
                         val expr = genExpr(s.init!!)
                         flushPreStmts(ind)
                         if (alreadyOpt) {
-                            impl.appendLine("$ind$optType ${s.name} = $expr;")
+                            impl.appendLine("$ind$mutComment$optType ${s.name} = $expr;")
                         } else {
-                            impl.appendLine("$ind$optType ${s.name} = ${optSome(optType, expr)};")
+                            impl.appendLine("$ind$mutComment$optType ${s.name} = ${optSome(optType, expr)};")
                         }
                     }
                 }
@@ -2703,13 +2721,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 isNullableArray -> {
                     val elemCType = arrayElementCType(t)
                     if (s.init is NullLit) {
-                        impl.appendLine("$ind$elemCType* ${s.name} = NULL;")
+                        impl.appendLine("$ind$mutComment$elemCType* ${s.name} = NULL;")
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
                     } else {
                         val expr = genExpr(s.init!!)
                         flushPreStmts(ind)
                         val lenExpr = if (s.init is NameExpr) "${(s.init as NameExpr).name}\$len" else "${expr}\$len"
-                        impl.appendLine("$ind$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
                     }
@@ -2757,7 +2775,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
                     } else {
-                        impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
+                        impl.appendLine("$ind$mutComment$qual$ct ${s.name} = $expr;")
                         if (isArrayType(t) && !t.endsWith("*?") && (t.endsWith("*") || isArrayType(t))) {
                             val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
                             impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
@@ -2768,19 +2786,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         } else {
             when {
                 isPtrNullable -> {
-                    impl.appendLine("$ind$ct ${s.name} = NULL;")
+                    impl.appendLine("$ind$mutComment$ct ${s.name} = NULL;")
                 }
                 isNullableArray -> {
-                    impl.appendLine("$ind${arrayElementCType(t)}* ${s.name} = NULL;")
+                    impl.appendLine("$ind$mutComment${arrayElementCType(t)}* ${s.name} = NULL;")
                     impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
                 }
                 else -> {
                     if (isValueNullable) {
                         val optType = optCTypeName("${t}?")
                         markOptional(s.name)
-                        impl.appendLine("$ind$optType ${s.name} = ${optNone(optType)};")
+                        impl.appendLine("$ind$mutComment$optType ${s.name} = ${optNone(optType)};")
                     } else {
-                        impl.appendLine("$ind$ct ${s.name} = ${defaultVal(t)};")
+                        impl.appendLine("$ind$mutComment$ct ${s.name} = ${defaultVal(t)};")
                     }
                 }
             }
@@ -3044,6 +3062,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val varType = if (varName != null) lookupVar(varName) else null
         val isAnyValNullVar = false
         val isAnyPtrNullVar = varType != null && varType.endsWith("*?")
+
+        // Val reassignment check
+        if (varName != null) {
+            // Local variable
+            if (lookupVar(varName) != null && !isMutable(varName)) {
+                codegenError("Val cannot be reassigned: '$varName'")
+            }
+            // Top-level property
+            if (varName in valTopProps) {
+                codegenError("Val cannot be reassigned: '$varName'")
+            }
+        }
+        // Class property via obj.field
+        if (s.target is DotExpr) {
+            val dotTarget = s.target as DotExpr
+            val recvType = inferExprType(dotTarget.obj)
+            val className = if (recvType != null) {
+                classes[recvType]?.let { recvType } ?: anyIndirectClassName(recvType)
+            } else null
+            if (className != null && classes[className]?.isValProp(dotTarget.name) == true) {
+                codegenError("Val cannot be reassigned: '${dotTarget.name}'")
+            }
+        }
 
         when {
             // value-nullable (*<T?> / ^<T?> / &<T?>) = null → clear value, keep pointer

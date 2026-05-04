@@ -94,6 +94,34 @@ class BasicTypesUnitTest : TranspilerTestBase() {
         r.sourceContains("x += 5;")
     }
 
+    @Test fun valReassignError() {
+        transpileMainExpectError("val x = 10\nx = 20", "Val cannot be reassigned: 'x'")
+    }
+
+    @Test fun valCompoundAssignError() {
+        transpileMainExpectError("val x = 10\nx += 5", "Val cannot be reassigned: 'x'")
+    }
+
+    @Test fun valReassignClassFieldError() {
+        val decls = "data class Vec2(val x: Float, val y: Float)"
+        transpileMainExpectError("val v = Vec2(1.0f, 2.0f)\nv.x = 99.0f", "Val cannot be reassigned: 'x'", decls = decls)
+    }
+
+    @Test fun valReassignClassFieldViaThisError() {
+        val decls = """
+            class Foo(val x: Int) {
+                fun mutate() { x = 42 }
+            }
+        """.trimIndent()
+        transpileExpectError("package test.Main\n$decls\nfun main() {}", "Val cannot be reassigned: 'x'")
+    }
+
+    @Test fun varReassignClassFieldOk() {
+        val decls = "data class Vec2(var x: Float, var y: Float)"
+        val r = transpileMain("val v = Vec2(1.0f, 2.0f)\nv.x = 99.0f", decls = decls)
+        r.sourceContains("v.x = 99.0f;")
+    }
+
     // ── Type conversions ─────────────────────────────────────────────
 
     @Test fun toFloat() {

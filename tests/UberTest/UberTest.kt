@@ -1,7 +1,7 @@
 package UberTest
 
 // ── Data classes ─────────────────────────────────────────────────────
-data class Vec2(val x: Float, val y: Float)
+data class Vec2(var x: Float, var y: Float)
 data class Rect(val origin: Vec2, val size: Vec2)
 
 //// ── Class with body properties ───────────────────────────────────────
