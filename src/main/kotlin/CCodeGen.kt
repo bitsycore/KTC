@@ -61,6 +61,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private val classes  = mutableMapOf<String, ClassInfo>()
     private val enums    = mutableMapOf<String, EnumInfo>()
+    private val enumValuesCalled  = mutableSetOf<String>()
+    private val enumValueOfCalled = mutableSetOf<String>()
     private val objects  = mutableMapOf<String, ObjInfo>()
     private val funSigs  = mutableMapOf<String, FunSig>()
     private val inlineFunDecls = mutableMapOf<String, FunDecl>()
@@ -492,6 +494,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Emit star-projection extension functions (one per known instantiation)
         for (f in starExtFunDecls) emitStarExtFunInstantiations(f)
+
+        // Emit enum values arrays and valueOf functions (only for enums referenced via enumValues/enumValueOf)
+        emitEnumValuesData()
 
         val srcName = prefix.trimEnd('_').ifEmpty {
             sourceFileName.removeSuffix(".kt").ifEmpty { "main" }
@@ -2132,7 +2137,45 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             hdr.appendLine()
         }
         hdr.appendLine("} $cName;")
+        val n = d.entries.size
+        val nameInits = d.entries.joinToString(", ") { "ktc_str(\"$it\")" }
+        hdr.appendLine("extern const ktc_String ${cName}_names[$n];")
         hdr.appendLine()
+        impl.appendLine("const ktc_String ${cName}_names[$n] = {$nameInits};")
+        impl.appendLine()
+    }
+
+    private fun emitEnumValuesData() {
+        for (enumName in enumValuesCalled) {
+            val info = enums[enumName] ?: continue
+            val cName = pfx(enumName)
+            val entryNames = info.entries.joinToString(", ") { "${cName}_${it}" }
+            val n = info.entries.size
+            // extern declarations in header
+            hdr.appendLine("extern const $cName ${cName}_values[$n];")
+            hdr.appendLine("extern const int32_t ${cName}_values\$len;")
+            // definitions in source
+            impl.appendLine("const $cName ${cName}_values[] = {$entryNames};")
+            impl.appendLine("const int32_t ${cName}_values\$len = $n;")
+        }
+        for (enumName in enumValueOfCalled) {
+            val info = enums[enumName] ?: continue
+            val cName = pfx(enumName)
+            // valueOf function forward declaration in header
+            hdr.appendLine("$cName ${cName}_valueOf(ktc_String name);")
+            // valueOf function body in source
+            val body = StringBuilder()
+            body.appendLine("$cName ${cName}_valueOf(ktc_String name) {")
+            for (entry in info.entries) {
+                body.appendLine("    if (ktc_string_eq(name, ktc_str(\"$entry\"))) return ${cName}_$entry;")
+            }
+            body.appendLine("    return ${cName}_${info.entries.first()};")
+            body.append("}")
+            impl.appendLine(body.toString())
+            impl.appendLine()
+        }
+        enumValuesCalled.clear()
+        enumValueOfCalled.clear()
     }
 
     // ── object ───────────────────────────────────────────────────────
@@ -4202,7 +4245,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             // C package passthrough: c.printf(...) → printf(...)
             // String literals are emitted as raw C strings (not ktc_str wrapped)
-            if (e.callee.obj is NameExpr && (e.callee.obj as NameExpr).name == "c") {
+            if (e.callee.obj is NameExpr && (e.callee.obj as NameExpr).name == "c" && lookupVar((e.callee.obj as NameExpr).name) == null) {
                 val cFnName = e.callee.name
                 val argStr = e.args.joinToString(", ") { genCArg(it.expr) }
                 return "$cFnName($argStr)"
@@ -4369,6 +4412,26 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val elemName = typeSubst[typeArg?.name ?: "Int"] ?: (typeArg?.name ?: "Int")
                 val optCType = optCTypeName("${elemName}?")
                 return genNewArray(optCType, args)
+            }
+            "enumValues" -> {
+                if (e.typeArgs.isNotEmpty()) {
+                    val enumName = e.typeArgs[0].name
+                    val resolved = typeSubst[enumName] ?: enumName
+                    enumValuesCalled.add(resolved)
+                    return "${pfx(resolved)}_values"
+                }
+                error("enumValues requires a type argument")
+            }
+            "enumValueOf" -> {
+                if (e.typeArgs.isNotEmpty() && e.args.isNotEmpty()) {
+                    val enumName = e.typeArgs[0].name
+                    val resolved = typeSubst[enumName] ?: enumName
+                    enumValuesCalled.add(resolved)
+                    enumValueOfCalled.add(resolved)
+                    val nameExpr = genExpr(e.args[0].expr)
+                    return "${pfx(resolved)}_valueOf($nameExpr)"
+                }
+                error("enumValueOf requires a type argument and a name")
             }
             "ByteArray"    -> return genNewArray("ktc_Byte", args)
             "ShortArray"   -> return genNewArray("ktc_Short", args)
@@ -4878,9 +4941,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val vCompArgStr = vCompArgs.joinToString(", ") { genExpr(it.expr) }
             return "${pfx(vCompanionName)}_$method($vCompArgStr)"
         }
-        // Enum → field access
+        // Enum → static method/field access
         if (recvType != null && enums.containsKey(recvType)) {
-            return "${pfx(recvType)}_$method"
+            when (method) {
+                "values" -> {
+                    enumValuesCalled.add(recvType)
+                    return "${pfx(recvType)}_values"
+                }
+                "valueOf" -> {
+                    val argStr = args.joinToString(", ") { genExpr(it.expr) }
+                    enumValuesCalled.add(recvType)
+                    enumValueOfCalled.add(recvType)
+                    return "${pfx(recvType)}_valueOf($argStr)"
+                }
+                else -> return "${pfx(recvType)}_$method"
+            }
         }
 
         // Extension function on non-class type (Int, String, etc.)
@@ -4999,7 +5074,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun genDot(e: DotExpr): String {
         // C package passthrough: c.EXIT_SUCCESS → EXIT_SUCCESS, c.NULL → NULL
-        if (e.obj is NameExpr && e.obj.name == "c") {
+        if (e.obj is NameExpr && e.obj.name == "c" && lookupVar("c") == null) {
             return e.name
         }
 
@@ -5037,6 +5112,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
         if (e.name == "size" && recvType != null && isArrayType(recvType)) return "${recv}\$len"
         if (e.name == "length" && recvType == "String") return "$recv.len"
+        // Enum .ordinal → the int value itself
+        if (e.name == "ordinal" && recvType != null && recvType in enums) return recv
+        // Enum .name → lookup in names array
+        if (e.name == "name" && recvType != null && recvType in enums) return "${pfx(recvType)}_names[($recv)]"
 
         // Heap<T> / Ptr<T> / Value<T>: p->field (auto-deref through pointer)
         if (pointerClassName(recvType) != null) {
@@ -5774,6 +5853,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 return "IntOptArray"
             }
+            if (name == "enumValues") {
+                if (e.typeArgs.isNotEmpty()) {
+                    val enumName = e.typeArgs[0].name
+                    val resolved = typeSubst[enumName] ?: enumName
+                    return "${resolved}Array"
+                }
+                return "IntArray"
+            }
+            if (name == "enumValueOf") {
+                if (e.typeArgs.isNotEmpty()) {
+                    val enumName = e.typeArgs[0].name
+                    return typeSubst[enumName] ?: enumName
+                }
+                return "Int"
+            }
             // Generic Array<T>(size) constructor
             if (name == "Array" && e.typeArgs.isNotEmpty()) {
                 val elemName = resolveTypeName(e.typeArgs[0])
@@ -5840,7 +5934,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun inferMethodReturnType(dot: DotExpr, args: List<Arg>): String? {
         // C package: can't infer return type of C functions
-        if (dot.obj is NameExpr && dot.obj.name == "c") return null
+        if (dot.obj is NameExpr && dot.obj.name == "c" && lookupVar(dot.obj.name) == null) return null
         // Companion object method return type
         val vDotObjName = (dot.obj as? NameExpr)?.name
         val vCompanionName = vDotObjName?.let { classCompanions[it] }
@@ -5914,12 +6008,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Extension function on non-class type
         val extFun = extensionFuns[recvType]?.find { it.name == method }
         if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
+        // Enum static methods
+        if (recvType in enums) {
+            when (method) {
+                "values" -> return "${recvType}Array"
+                "valueOf" -> return recvType
+            }
+        }
         return null
     }
 
     private fun inferDotType(e: DotExpr): String? {
         // C package: can't infer type of C constants/macros
-        if (e.obj is NameExpr && e.obj.name == "c") return null
+        if (e.obj is NameExpr && e.obj.name == "c" && lookupVar("c") == null) return null
         if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return e.obj.name
         if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
             val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
@@ -5944,6 +6045,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         if (e.name == "size" && recvType.endsWith("Array")) return "Int"
         if (e.name == "length" && recvType == "String") return "Int"
+        // Enum value .name / .ordinal
+        if (e.name == "name" && recvType in enums) return "String"
+        if (e.name == "ordinal" && recvType in enums) return "Int"
         // Heap/Ptr/Value pointer field access → look up in base class
         val indirectBase = anyIndirectClassName(recvType)
         if (indirectBase != null) {
@@ -6161,7 +6265,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // Class array types: "Vec2Array" → "game_Vec2*" (pointer to element)
             if (t.endsWith("Array") && t.length > 5) {
                 val elem = t.removeSuffix("Array")
-                if (classArrayTypes.contains(elem)) return "${pfx(elem)}*"
+                if (classArrayTypes.contains(elem) || enums.containsKey(elem)) return "${pfx(elem)}*"
                 if (elem.startsWith("Pair_")) return "ktc_${elem}*"
             }
             // Pair types: "Pair_Int_String" → "ktc_Pair_Int_String"
@@ -6414,7 +6518,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // Class array: "Vec2Array" → element type "game_Vec2"
                 if (arrType.endsWith("Array") && arrType.length > 5) {
                     val elem = arrType.removeSuffix("Array")
-                    if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return pfx(elem)
+                    if (classArrayTypes.contains(elem) || classes.containsKey(elem) || enums.containsKey(elem)) return pfx(elem)
                     if (elem.startsWith("Pair_")) return cTypeStr(elem)
                 }
                 // Nullable-element class array: "Vec2OptArray" → "pkg_Vec2_Optional"
@@ -6489,12 +6593,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "ULong"   -> "%\" PRIu64 \""
         t == "String"  -> "%.*s"
         t.endsWith("*") || t.endsWith("*?") -> "%p"
+        t in enums    -> "%.*s"
         else           -> "%.*s"       // assume toString → ktc_String
     }
 
-    private fun printfArg(expr: String, t: String): String = when (t) {
-        "Boolean" -> "($expr) ? \"true\" : \"false\""
-        "String"  -> "(int)($expr).len, ($expr).ptr"
+    private fun printfArg(expr: String, t: String): String = when {
+        t == "Boolean" -> "($expr) ? \"true\" : \"false\""
+        t == "String"  -> "(int)($expr).len, ($expr).ptr"
+        t in enums -> {
+            val cName = pfx(t)
+            "(int)${cName}_names[($expr)].len, ${cName}_names[($expr)].ptr"
+        }
         else -> expr
     }
 
