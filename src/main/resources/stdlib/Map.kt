@@ -46,6 +46,7 @@ interface MutableMap<K, V> : Map<K, V> {
 class HashMap<K, V>(private var capacity: Int) : MutableMap<K, V> {
 
 	override var size: Int = 0
+		private set
 
 	private @Ptr var keys: Array<K> = HeapAlloc<Array<K>>(capacity)!!
 	private @Ptr var vals: Array<V> = HeapAlloc<Array<V>>(capacity)!!
