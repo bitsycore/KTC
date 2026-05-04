@@ -16,14 +16,14 @@ Kotlin source → Lexer → Parser → AST → CCodeGen → .c/.h files
 
 All stages are in `src/main/kotlin/`:
 
-| File          | Role                                                                                                                                                        |
-|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `Lexer.kt`    | Tokenizer. Converts source text to token stream.                                                                                                            |
-| `Token.kt`    | Token enum and type definitions.                                                                                                                            |
-| `Parser.kt`   | Recursive-descent parser. Produces AST from tokens.                                                                                                         |
-| `Ast.kt`      | AST node definitions (Decl, Stmt, Expr, TypeRef).                                                                                                           |
-| `CCodeGen.kt` | The bulk of the project (~6000 lines). All C code generation, generic monomorphization, type resolution, interface vtable emission, operator dispatch, etc. |
-| `Main.kt`     | CLI entry point. Loads stdlib, lexes/parses inputs, groups by package, invokes CCodeGen, writes output.                                                     |
+| File          | Role                                                                                                                                                         |
+|---------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Lexer.kt`    | Tokenizer. Converts source text to token stream.                                                                                                             |
+| `Token.kt`    | Token enum and type definitions.                                                                                                                             |
+| `Parser.kt`   | Recursive-descent parser. Produces AST from tokens.                                                                                                          |
+| `Ast.kt`      | AST node definitions (Decl, Stmt, Expr, TypeRef).                                                                                                            |
+| `CCodeGen.kt` | The bulk of the project (~6400 lines). All C code generation, generic monomorphization, type resolution, interface vtable emission, operator dispatch, etc.  |
+| `Main.kt`     | CLI entry point. Loads stdlib, lexes/parses inputs, groups by package, invokes CCodeGen, writes output.                                                      |
 
 ### CCodeGen Internal Structure
 
@@ -37,27 +37,43 @@ CCodeGen emits section comments in the generated `.c` file:
 
 ### Type System
 
+**Value semantics:** Unlike Kotlin, all types in KotlinToC are by value by default. A class instance is a C struct held directly on the stack; assignment copies the struct. `@Ptr T` is the only way to introduce pointer/reference semantics.
+
 Types are tracked as strings internally with suffix markers:
 - `T` — value type (stack)
-- `T*` — pointer type (@Ptr annotation)
-- `T?` — value-nullable (uses Optional< tag struct)
+- `T*` — pointer type (`@Ptr` annotation)
+- `T?` — value-nullable (uses Optional struct)
 - `T*?` — nullable pointer (uses NULL)
 
-The `@Ptr` annotation on a TypeRef adds `*` suffix. There is no more `@Heap`, `@Value`, `^`, `&`, or `#` marker.
+The `@Ptr` annotation on a TypeRef adds `*` suffix. There is no `Ptr<T>` generic wrapper, no `@Heap`, `@Value`, `^`, `&`, or `#` marker.
+
+**Primitive types:** `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`, `UByte`, `UShort`, `UInt`, `ULong`. All have Optional and hash support.
 
 ### Pointer Semantics
 
-Only `@Ptr T` exists as a pointer annotation. Access is implicit:
-- `p.x` on `@Ptr Vec2` → `p->x` (auto-deref)
-- `.value()` → `(*p)` (deref to stack copy)
-- `.toPtr()` → identity
-- `.deref()` → `(*p)` (stack copy)
+Only `@Ptr T` exists as a pointer annotation. `Ptr<T>` generic wrapper has been removed.
+
+- `p.x` on `@Ptr Vec2` → `p->x` (auto-deref on member access)
+- `v.ptr()` → `&v` (take address of a plain value, yields `@Ptr T`)
+- `p.value()` → `(*p)` (dereference to a stack copy of `T`)
+
+### Array Types
+
+- `Array<T>` — dynamic-size stack array, represented as `ktc_ArrayTrampoline`. Cannot be returned from a function.
+- `@Size(N) Array<T>` — fixed-size stack array with size known at compile time. Passed and returned as a raw C pointer (out-parameter ABI). Can be returned from functions.
 
 ### Nullable Pattern
 
-- **Value types** (`Vec2?`): Optional struct with `tag` (SOME/NONE) and `value`
+- **Value types** (`Vec2?`): Optional struct with `tag` (`ktc_SOME`/`ktc_NONE`) and `value`
 - **Pointer types** (`@Ptr Vec2?`): nullable pointer, NULL for null
 - **Arrays** (`Array<Int>?`): `ktc_ArrayTrampoline` with `data == NULL`
+
+### Inline Functions & Lambdas
+
+- `inline fun` functions are expanded at the call site; no C function is emitted for them.
+- Lambda expressions (`{ params -> body }` or trailing `{ }`) are **only valid as arguments to `inline` functions**. There is no closure support — lambdas cannot be stored in variables or passed to non-inline functions.
+- Inside an inline expansion, lambda call sites are themselves expanded inline.
+- `::funRef` (function pointer references) are separate from lambdas and work with regular functions, producing a raw C function pointer.
 
 ### Private Visibility
 
@@ -78,7 +94,7 @@ class Foo {
 
 The stdlib lives in `src/main/resources/stdlib/` as Kotlin source files transpiled alongside user code. Uses `@Ptr` annotation for heap-allocated arrays.
 
-Stdlib files belong to `package ktc` and get the `ktc_` C prefix.
+Stdlib files belong to `package ktc.std` and get the `ktc_std_` C prefix.
 
 ## Testing
 
@@ -100,13 +116,14 @@ Each subdirectory under `tests/` is one integration test. All `.kt` files in the
 
 ```
 tests/
-  HashMapTest/      — HashMap/ArrayList operators, for-in iteration
-  JsonParserTest/   — MutableList, safe-call extensions
-  ListTest/         — List, ArrayList, ListIterator, newArray
-  MultiFileTest/    — Multi-file/multi-package test
-  PairVararg/       — Pair intrinsic, to infix, vararg, spread
-  PointerTest/      — @Ptr Array<T>, nullable pointers, vec, data classes
-  UberTest/         — Comprehensive: classes, data classes, generics, interfaces, defer, @Ptr, HeapAlloc
+  HashMapTest/        — HashMap/ArrayList operators, for-in iteration
+  JsonParserTest/     — MutableList, safe-call extensions
+  LambdaInlineTest/   — Inline functions, lambda parameters, array .let()
+  ListTest/           — List, ArrayList, ListIterator, newArray
+  MultiFileTest/      — Multi-file/multi-package test
+  PairVarargTest/     — Pair intrinsic, to infix, vararg, spread
+  PointerTest/        — @Ptr Array<T>, nullable pointers, vec, data classes
+  UberTest/           — Comprehensive: classes, data classes, generics, interfaces, defer, @Ptr, HeapAlloc
 ```
 
 Run scripts: `run_tests.ps1` (Windows) / `run_tests.sh` (Unix)
@@ -133,7 +150,7 @@ Requires JDK 21+ and a C11 compiler (GCC, Clang, or MSVC) on PATH.
 
 ## Key Conventions
 
-- `@Ptr T` annotation for pointer types (not `Ptr<T>`, `Heap<T>`, `Value<T>`)
+- `@Ptr T` annotation for pointer types (not `Ptr<T>`)
 - `$self` is the receiver parameter name for methods
 - Mangled generic names use `_` separator: `HashMap_Int_String`
 - Package prefix uses `_` separator: `package game.Main` → `game_Main_`

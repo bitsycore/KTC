@@ -15,7 +15,7 @@ A transpiler that converts a subset of Kotlin to portable C11. Stack-first alloc
 java -jar build/libs/KotlinToC-1.0-SNAPSHOT.jar myfile.kt
 
 # Compile the generated C
-cc -std=c11 -o myfile ktc_std.c myfile.c
+cc -std=c11 -o myfile ktc_intrinsic.c ktc_std.c myfile.c
 ```
 
 ## Usage
@@ -36,7 +36,9 @@ java -jar KotlinToC.jar <file.kt...> [-o <output_dir>] [--mem-track] [--ast]
 ### Types & Primitives
 
 - `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`
-- `Array<T>` (stack-allocated), `Array<T?>` (optional elements)
+- `UByte`, `UShort`, `UInt`, `ULong` (unsigned integers, map to `uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`)
+- `Array<T>` (stack-allocated trampoline), `Array<T?>` (optional elements)
+- `@Size(N) Array<T>` (fixed-size stack array, can be returned from functions)
 - `@Ptr T` annotation for pointer types
 - Nullable types with `?` suffix: value-nullable uses Optional, pointer-nullable uses NULL
 - Safe calls `?.`, elvis `?:`, not-null assertion `!!`
@@ -44,13 +46,22 @@ java -jar KotlinToC.jar <file.kt...> [-o <output_dir>] [--mem-track] [--ast]
 
 ### Memory Model
 
-| Kotlin Type | C Representation      | Semantics                       |
-|-------------|-----------------------|---------------------------------|
-| `T`         | `T` (value)           | Stack-allocated, by value       |
-| `@Ptr T`    | `T*`                  | Pointer, `p.x` → `p->x`         |
-| `@Ptr T?`   | `T*` (nullable)       | Nullable pointer, NULL for null |
-| `Array<T>`  | `ktc_ArrayTrampoline` | Stack array, pass-by-value      |
+Unlike Kotlin, **all types are by value by default**. A class instance is a C struct held directly on the stack — assignment copies the struct. `@Ptr T` is the only way to get reference/pointer semantics.
 
+| Kotlin Type         | C Representation      | Semantics                       |
+|---------------------|-----------------------|---------------------------------|
+| `T`                 | `T` (value)           | Stack-allocated, by value       |
+| `@Ptr T`            | `T*`                  | Pointer, `p.x` → `p->x`        |
+| `@Ptr T?`           | `T*` (nullable)       | Nullable pointer, NULL for null |
+| `Array<T>`          | `ktc_ArrayTrampoline` | Stack array, pass-by-value      |
+| `@Size(N) Array<T>` | `T[N]` (out-pointer)  | Fixed-size, returnable          |
+
+**@Ptr operations:**
+- `v.ptr()` — take address of a value, yields `@Ptr T` (`&v` in C)
+- `p.value()` — dereference a pointer to a stack copy (`*p` in C)
+- `p.x` on `@Ptr T` auto-derefs to `p->x`
+
+**Heap allocation:**
 - `HeapAlloc<T>(args)` / `HeapArrayZero<T>(n)` / `HeapArrayResize<T>(ptr, n)` for heap allocation
 - `HeapFree(ptr)` releases heap memory
 - `Array<T>(size)` uses stack allocation; `HeapAlloc<Array<T>>(size)` for heap arrays
@@ -62,7 +73,9 @@ java -jar KotlinToC.jar <file.kt...> [-o <output_dir>] [--mem-track] [--ast]
 - Extension functions (including generic and star-projection receivers)
 - Generic functions (monomorphized at call sites)
 - `vararg` parameters with spread operator `*`
-- Function pointers via `::`
+- Function pointers via `::` (produces a raw C function pointer)
+- `inline fun` — expanded at the call site, no C function emitted
+- Lambda expressions `{ params -> body }` — only valid as arguments to `inline` functions (no closures)
 
 ### Classes & Data Classes
 
@@ -106,26 +119,27 @@ Convenience functions: `listOf(...)`, `mutableListOf(...)`, `mapOf(...)`, `mutab
 src/
   main/kotlin/
     Main.kt         # CLI entry point
-    Lexer.kt         # Tokenizer
-    Token.kt         # Token type definitions
-    Parser.kt        # Recursive-descent parser
-    Ast.kt           # AST node definitions
-    CCodeGen.kt      # C code generator (~6000 lines)
+    Lexer.kt        # Tokenizer
+    Token.kt        # Token type definitions
+    Parser.kt       # Recursive-descent parser
+    Ast.kt          # AST node definitions
+    CCodeGen.kt     # C code generator (~6400 lines)
   main/resources/
-    ktc_intrinsic.h  # C runtime intrinsics
-    ktc_intrinsic.c  # C runtime implementations
-    stdlib/          # Kotlin stdlib (transpiled alongside user code)
+    ktc_intrinsic.h # C runtime intrinsics
+    ktc_intrinsic.c # C runtime implementations
+    stdlib/         # Kotlin stdlib (transpiled alongside user code)
       Collections.kt
       Map.kt
       ...
   test/kotlin/com/bitsycore/
-    *UnitTest.kt     # ~330 unit tests
+    *UnitTest.kt    # ~330 unit tests
 tests/
-  HashMapTest/       # Integration tests (each is a directory with .kt files)
+  HashMapTest/      # Integration tests (each is a directory with .kt files)
   JsonParserTest/
+  LambdaInlineTest/
   ListTest/
   MultiFileTest/
-  PairVararg/
+  PairVarargTest/
   PointerTest/
   UberTest/
 ```
