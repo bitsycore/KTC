@@ -28,7 +28,7 @@ class MapIterator<K, V>(
 
 }
 
-interface Map<K, V> : Disposable {
+interface Map<K, V> {
 	val size: Int
 	operator fun get(key: K): V?
 	operator fun containsKey(key: K): Boolean

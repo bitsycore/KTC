@@ -90,6 +90,18 @@ fun main() {
     val array = arrayOf(1, 2, 3)
     val arrayNullable: Array<Int>? = arrayOf(1, 2, 3)
 
+    if (array is Array<Int>) {
+        println("THIS IS A INT ARRAY !")
+    } else {
+        println("THIS IS NOT AN INT ARRAY!")
+    }
+
+    if (array is Array<Float>) {
+        println("THIS IS A FLOAT ARRAY !")
+    } else {
+        println("THIS IS NOT A FLOAT ARRAY!")
+    }
+
     // ARRAY PTR
 
     passArrayPtr(array.ptr())

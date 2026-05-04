@@ -15,7 +15,7 @@ class ListIterator<T>(@Ptr val buf: Array<T>) : Iterator<T> {
 	}
 }
 
-interface List<T> : Disposable {
+interface List<T> {
 	val size: Int
 	operator fun get(index: Int): T
 	operator fun contains(value: T): Boolean

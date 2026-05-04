@@ -1001,6 +1001,28 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return null
         }
 
+        fun inferTypeArgsFromReceiver(f: FunDecl, recvType: String, callArgs: List<Arg>, explicitTypeArgs: List<TypeRef>): List<String>? {
+            if (explicitTypeArgs.isNotEmpty()) {
+                return explicitTypeArgs.map { it.name }
+            }
+            val subst = mutableMapOf<String, String>()
+            // Match receiver type
+            if (f.receiver != null) {
+                matchTypeParam(f.receiver, recvType, f.typeParams.toSet(), subst)
+            }
+            // Match regular params
+            for ((i, param) in f.params.withIndex()) {
+                if (i >= callArgs.size) break
+                val argExpr = callArgs[i].expr
+                val argType = inferExprType(argExpr) ?: continue
+                matchTypeParam(param.type, argType, f.typeParams.toSet(), subst)
+            }
+            if (subst.size == f.typeParams.size) {
+                return f.typeParams.map { subst[it]!! }
+            }
+            return null
+        }
+
         // Use member functions to avoid Kotlin forward-reference issues with local functions
         val scanner = object {
             fun scanExpr(e: Expr?) {
@@ -1013,6 +1035,26 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                             val typeArgs = inferTypeArgsFromCall(f, e.args, e.typeArgs)
                             if (typeArgs != null) {
                                 genericFunInstantiations.getOrPut(name) { mutableSetOf() }.add(typeArgs)
+                            }
+                        }
+                        // Generic extension call: map.tryDispose() where tryDispose is generic
+                        if (e.callee is DotExpr) {
+                            val dotName = e.callee.name
+                            if (genFunsByName.containsKey(dotName)) {
+                                val f = genFunsByName[dotName]!!
+                                val recvType = inferExprType(e.callee.obj)
+                                val typeArgs = if (f.receiver != null && recvType != null) {
+                                    // Infer type args from receiver type
+                                    inferTypeArgsFromReceiver(f, recvType, e.args, e.typeArgs)
+                                } else null
+                                if (typeArgs != null) {
+                                    genericFunInstantiations.getOrPut(dotName) { mutableSetOf() }.add(typeArgs)
+                                    // Also register in extensionFuns for method dispatch
+                                    val mangledRecvName = substituteTypeRef(f.receiver!!, f.typeParams.zip(typeArgs).toMap()).let {
+                                        resolveTypeName(it)
+                                    }
+                                    extensionFuns.getOrPut(mangledRecvName) { mutableListOf() }.add(f)
+                                }
                             }
                         }
                         for (a in e.args) scanExpr(a.expr)
@@ -1502,6 +1544,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for (m in d.members) {
             if (m is FunDecl && m.receiver == null) emitMethod(d.name, m)
         }
+        // Implicit no-op dispose if not overridden
+        if (d.members.none { it is FunDecl && it.name == "dispose" }) {
+            hdr.appendLine("void ${cName}_dispose($cName* \$self);")
+            impl.appendLine("void ${cName}_dispose($cName* \$self) { (void)\$self; }")
+            impl.appendLine()
+        }
         popScope()
         currentClass = null
     }
@@ -1604,6 +1652,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         for (m in templateDecl.members) {
             if (m is FunDecl && m.receiver == null) emitMethod(mangledName, m)
+        }
+        // Implicit no-op dispose if not overridden
+        if (templateDecl.members.none { it is FunDecl && it.name == "dispose" }) {
+            hdr.appendLine("void ${cName}_dispose($cName* \$self);")
+            impl.appendLine("void ${cName}_dispose($cName* \$self) { (void)\$self; }")
+            impl.appendLine()
         }
         popScope()
         currentClass = null
@@ -1903,16 +1957,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             val cName = pfx(mangledName)
             val baseParams = expandParams(f.params)
+            // Prepend receiver as $self parameter for generic extensions
+            val hasReceiver = f.receiver != null
+            val selfParam = if (hasReceiver) "${cType(f.receiver!!)} \$self" else null
             val params = when {
                 returnsSizedArray -> {
                     val elemCType = arrayElementCType(resolveTypeName(f.returnType))
                     val extra = "$elemCType* \$out"
-                    if (baseParams.isEmpty()) extra else "$baseParams, $extra"
+                    val p = if (selfParam != null && baseParams.isNotEmpty()) "$selfParam, $baseParams" else selfParam ?: baseParams
+                    if (p.isNotEmpty()) "$p, $extra" else extra
                 }
                 returnsArray -> {
-                    if (baseParams.isEmpty()) "int32_t* \$len_out" else "$baseParams, int32_t* \$len_out"
+                    val extra = "int32_t* \$len_out"
+                    val p = if (selfParam != null && baseParams.isNotEmpty()) "$selfParam, $baseParams" else selfParam ?: baseParams
+                    if (p.isNotEmpty()) "$p, $extra" else extra
                 }
-                else -> baseParams
+                else -> if (selfParam != null && baseParams.isNotEmpty()) "$selfParam, $baseParams" else selfParam ?: baseParams
             }
 
             hdr.appendLine("$cRet $cName($params);")
@@ -4986,11 +5046,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Extension function on non-class type (Int, String, etc.)
         if (recvType != null) {
-            val extFun = extensionFuns[recvType]?.find { it.name == method }
+            var extFun = extensionFuns[recvType]?.find { it.name == method }
+            // Also check implemented interfaces for class receiver types
+            if (extFun == null && classes.containsKey(recvType)) {
+                val ifaces = classInterfaces[recvType] ?: emptyList()
+                for (ifaceName in ifaces) {
+                    extFun = extensionFuns[ifaceName]?.find { it.name == method }
+                    if (extFun != null) break
+                }
+            }
             if (extFun != null) {
                 val nullableRecv = extFun.receiver?.nullable == true
                 val recvArg = if (nullableRecv) {
-                    // Pass receiver as Optional struct for nullable-receiver extensions
                     val recvName = (dot.obj as? NameExpr)?.name
                     val recvVarType = if (recvName != null) lookupVar(recvName) else null
                     val optSelfType = optCTypeName("${recvType}?")
@@ -5001,8 +5068,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         else -> optSome(optSelfType, recv)
                     }
                 } else recv
+                // Use the receiver's actual interface type for the call
+                val callRecvType = if (classes.containsKey(recvType) && extFun.receiver != null) {
+                    // Extension is on an interface — wrap in interface vtable
+                    val ifaceName = extFun.receiver.name
+                    if (ifaceName in (classInterfaces[recvType] ?: emptyList())) {
+                        // recvType implements this interface — use direct call for now
+                        recvType
+                    } else recvType
+                } else recvType
                 val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
                 return "${pfx(recvType)}_$method($allArgs)"
+            }
+            // Implicit dispose — always emitted as no-op
+            if (method == "dispose" && (classes.containsKey(recvType) || enums.containsKey(recvType) || objects.containsKey(recvType))) {
+                val selfExpr = if (recvType.endsWith("*") || recvType.endsWith("*?")) recv else "&$recv"
+                val base = anyIndirectClassName(recvType) ?: recvType
+                return "${pfx(base)}_dispose($selfExpr)"
             }
         }
 
