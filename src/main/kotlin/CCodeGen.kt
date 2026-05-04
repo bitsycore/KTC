@@ -493,6 +493,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // Skip generic function templates and star-projection extensions — handled below
                 if (d.typeParams.isNotEmpty()) continue
                 if (d.receiver != null && d.receiver.typeArgs.any { it.name == "*" }) continue
+                // Skip extensions on generic types (expanded per class by emitStarExtFunInstantiations)
+                if (d.receiver != null && d.receiver.typeArgs.isNotEmpty()
+                    && (genericIfaceDecls.containsKey(d.receiver.name) || genericClassDecls.containsKey(d.receiver.name))) continue
                 if (d.receiver != null) emitExtensionFun(d) else emitFun(d)
             }
             is PropDecl -> emitTopProp(d)
@@ -662,6 +665,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (d.isInline && d.receiver != null) inlineExtFunDecls[d.name] = d
                 } else if (d.receiver != null && d.receiver.typeArgs.any { it.name == "*" }) {
                     // Star-projection extension function — store for expansion
+                    if (starExtFunDecls.none { it === d }) starExtFunDecls += d
+                } else if (d.receiver != null && d.receiver.typeArgs.isNotEmpty()
+                    && (genericIfaceDecls.containsKey(d.receiver.name) || genericClassDecls.containsKey(d.receiver.name))) {
+                    // Extension on generic type e.g. fun Map<K,V>.tryDispose() — expand per concrete type
                     if (starExtFunDecls.none { it === d }) starExtFunDecls += d
                 } else if (d.receiver != null) {
                     val recvName = d.receiver.name
@@ -4664,6 +4671,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Value-nullable functions now return Optional directly; no hoisting needed.
         // The variable declaration code handles wrapping for already-Opt values.
 
+        // Inside a class method or extension: bare method call resolves to $self.method()
+        if (currentClass != null) {
+            val ci = classes[currentClass]
+            val hasMethod = ci?.methods?.any { it.name == name } == true
+            if (hasMethod) {
+                val selfArg = if (selfIsPointer) "\$self" else "&\$self"
+                val allArgs = if (expandedArgs.isEmpty()) selfArg else "$selfArg, $expandedArgs"
+                return "${pfx(currentClass!!)}_$name($allArgs)"
+            }
+        }
+
         return "${pfx(name)}($expandedArgs)"
     }
 
@@ -5085,6 +5103,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val selfExpr = if (recvType.endsWith("*") || recvType.endsWith("*?")) recv else "&$recv"
                 val base = anyIndirectClassName(recvType) ?: recvType
                 return "${pfx(base)}_dispose($selfExpr)"
+            }
+            // Per-class star-projection extension (e.g. fun Map<K,V>.tryDispose())
+            if (classes.containsKey(recvType) && starExtFunDecls.any { it.name == method }) {
+                val selfExpr = if (recvType.endsWith("*") || recvType.endsWith("*?")) recv else "&$recv"
+                val base = anyIndirectClassName(recvType) ?: recvType
+                val allArgs = if (argStr.isEmpty()) selfExpr else "$selfExpr, $argStr"
+                return "${pfx(base)}_$method($allArgs)"
             }
         }
 
