@@ -5,7 +5,7 @@ class MapIterator<K, V>(
 	private val vals: @Ptr Array<V>,
 	private val occ: @Ptr Array<Boolean>,
 	private val cap: Int
-) {
+) : Iterator<Pair<K, V>> {
 
 	private var idx: Int = 0
 
@@ -153,7 +153,7 @@ class HashMap<K, V>(private var capacity: Int) : MutableMap<K, V> {
 		HeapFree(oldOcc)
 	}
 
-	override operator fun iterator(): MapIterator<K, V> {
+	override operator fun iterator(): Iterator<Pair<K, V>> {
 		return MapIterator<K, V>(keys, vals, occ, capacity)
 	}
 

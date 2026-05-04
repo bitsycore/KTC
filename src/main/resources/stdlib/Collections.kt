@@ -1,6 +1,6 @@
 package ktc.std
 
-class ListIterator<T>(@Ptr val buf: Array<T>) {
+class ListIterator<T>(@Ptr val buf: Array<T>) : Iterator<T> {
 
 	var idx: Int = 0
 

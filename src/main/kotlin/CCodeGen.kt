@@ -414,6 +414,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 hdr.appendLine("typedef struct $cName $cName;")
             }
         }
+        // Forward typedefs for monomorphized generic interfaces used as return types later
+        for ((name, info) in interfaces) {
+            if (info.typeParams.isEmpty()) {
+                val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
+                if (isMonomorphized) {
+                    val cName = pfx(name)
+                    hdr.appendLine("typedef struct $cName $cName;")
+                }
+            }
+        }
         hdr.appendLine()
 
         // Emit monomorphized generic class instantiations BEFORE generic interfaces,
@@ -918,7 +928,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     /** Resolve an interface TypeRef to its concrete name (e.g. MutableList<Int> → "MutableList_Int"). */
     private fun resolveIfaceName(t: TypeRef): String {
         if (t.typeArgs.isEmpty()) return t.name
-        return mangledGenericName(t.name, t.typeArgs.map { it.name })
+        return mangledGenericName(t.name, t.typeArgs.map { resolveTypeName(it) })
     }
 
     /**
@@ -930,7 +940,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val baseName = t.name
         val template = interfaces[baseName] ?: return
         if (template.typeParams.isEmpty()) return  // non-generic template
-        val typeArgs = t.typeArgs.map { it.name }
+        val typeArgs = t.typeArgs.map { resolveTypeName(it) }
         val mangledName = mangledGenericName(baseName, typeArgs)
         if (interfaces.containsKey(mangledName)) return  // already materialized
         val subst = template.typeParams.zip(typeArgs).toMap()
@@ -2308,8 +2318,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Collect all methods/properties including inherited from super interfaces
         val allMethods = collectAllIfaceMethods(info)
         val allProps = collectAllIfaceProperties(info)
-        // vtable struct
-        hdr.appendLine("typedef struct {")
+        // vtable struct (named so it can be forward-declared)
+        hdr.appendLine("typedef struct ${cName}_vt {")
         // Properties → getter function pointers
         for (p in allProps) {
             val ct = if (p.type != null) cType(p.type) else "int32_t"
@@ -2328,8 +2338,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         hdr.appendLine("} ${cName}_vt;")
         hdr.appendLine()
-        // fat pointer struct
-        hdr.appendLine("typedef struct {")
+        // fat pointer struct (named so it can be forward-declared)
+        hdr.appendLine("typedef struct $cName {")
         hdr.appendLine("    void* obj;")
         hdr.appendLine("    const ${cName}_vt* vt;")
         hdr.appendLine("} $cName;")
@@ -3848,9 +3858,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         val baseClass = if (isPointer) anyIndirectClassName(arrType)!! else arrType!!
                         impl.appendLine("$ind$iterCType $iterVar = ${pfx(baseClass)}_iterator($selfArg);")
                     }
-                    impl.appendLine("${ind}while (${pfx(iterClass)}_hasNext(&$iterVar)) {")
-                    val elemCType = cTypeStr(elemKtType)
-                    impl.appendLine("$ind    $elemCType ${s.varName} = ${pfx(iterClass)}_next(&$iterVar);")
+                    val isIfaceIter = interfaces.containsKey(iterClass)
+                    if (isIfaceIter) {
+                        impl.appendLine("${ind}while (${iterVar}.vt->hasNext(${iterVar}.obj)) {")
+                        val elemCType = cTypeStr(elemKtType)
+                        impl.appendLine("$ind    $elemCType ${s.varName} = ${iterVar}.vt->next(${iterVar}.obj);")
+                    } else {
+                        impl.appendLine("${ind}while (${pfx(iterClass)}_hasNext(&$iterVar)) {")
+                        val elemCType = cTypeStr(elemKtType)
+                        impl.appendLine("$ind    $elemCType ${s.varName} = ${pfx(iterClass)}_next(&$iterVar);")
+                    }
                     pushScope(); defineVar(s.varName, elemKtType)
                     emitBlock(s.body, ind, method)
                     popScope()
@@ -3889,6 +3906,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val iterType = resolveMethodReturnType(type, iterMethod.returnType)
                 if (classes.containsKey(iterType)) {
                     val nextMethod = classes[iterType]?.methods?.find { it.name == "next" }
+                    if (nextMethod?.returnType != null) {
+                        val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
+                        return IteratorInfo(iterType, pfx(iterType), elemType, false)
+                    }
+                } else if (interfaces.containsKey(iterType)) {
+                    // Iterator returns an interface — use interface type with vtable dispatch
+                    val iface = interfaces[iterType]!!
+                    val allMethods = collectAllIfaceMethods(iface)
+                    val nextMethod = allMethods.find { it.name == "next" && it.isOperator }
                     if (nextMethod?.returnType != null) {
                         val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
                         return IteratorInfo(iterType, pfx(iterType), elemType, false)
