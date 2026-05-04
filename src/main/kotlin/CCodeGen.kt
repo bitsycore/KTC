@@ -1408,7 +1408,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
         hdr.appendLine("} $cName;")
-        hdr.appendLine("typedef struct { ktc_OptionalTag tag; $cName value; } ${cName}_Optional;")
+        hdr.appendLine("KTC_OPTIONAL($cName);")
         hdr.appendLine()
 
         // --- constructor (only takes ctor params, initializes all fields) ---
@@ -1514,7 +1514,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
         hdr.appendLine("};")
-        hdr.appendLine("typedef struct { ktc_OptionalTag tag; $cName value; } ${cName}_Optional;")
+        hdr.appendLine("KTC_OPTIONAL($cName);")
         hdr.appendLine()
 
         // --- constructor ---

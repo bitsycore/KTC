@@ -33,17 +33,17 @@ typedef uint32_t ktc_UInt;
 typedef uint64_t ktc_ULong;
 
 /* ═══════════════════════════ time ═══════════════════════════ */
-uint64_t ktc_time_ms(void);
-double ktc_time_seconds(void);
-void ktc_time_sleep_seconds(double seconds);
-void ktc_time_sleep_ms(uint32_t ms);
+ktc_ULong ktc_time_ms(void);
+ktc_Double ktc_time_seconds(void);
+void ktc_time_sleep_seconds(ktc_Double seconds);
+void ktc_time_sleep_ms(ktc_UInt ms);
 
 /* ═══════════════════════════ random ═══════════════════════════ */
 #define KTC_RAND_MAX UINT32_MAX  // 4294967295
 
-void ktc_srand(uint64_t seed);
-uint32_t ktc_rand(void);
-uint32_t ktc_rand_range(uint32_t bound);
+void ktc_srand(ktc_ULong seed);
+ktc_UInt ktc_rand(void);
+ktc_UInt ktc_rand_range(ktc_UInt bound);
 
 /* ═══════════════════════════ alloca compat ═══════════════════════════ */
 #if defined(_MSC_VER)
@@ -68,23 +68,25 @@ uint32_t ktc_rand_range(uint32_t bound);
 /* ═══════════════════════════ Array Trampoline ════════════════════════ */
 /* Pass-by-value semantics for variable-size arrays.
  * Functions receive this struct, then copy data to a local stack buffer. */
-typedef struct { int32_t size; void* data; } ktc_ArrayTrampoline;
+typedef struct { ktc_Int size; void* data; } ktc_ArrayTrampoline;
 
 /* ═══════════════════════════ Optional ════════════════════════════════ */
 typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 
-typedef struct { ktc_OptionalTag tag; ktc_Byte   value; } ktc_Byte_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Short  value; } ktc_Short_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Int    value; } ktc_Int_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Long   value; } ktc_Long_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Float  value; } ktc_Float_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Double value; } ktc_Double_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Bool   value; } ktc_Bool_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_Char   value; } ktc_Char_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_UByte  value; } ktc_UByte_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_UShort value; } ktc_UShort_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_UInt   value; } ktc_UInt_Optional;
-typedef struct { ktc_OptionalTag tag; ktc_ULong  value; } ktc_ULong_Optional;
+#define KTC_OPTIONAL(T) typedef struct { ktc_OptionalTag tag; T value; } T##_Optional
+
+KTC_OPTIONAL(ktc_Byte);
+KTC_OPTIONAL(ktc_Short);
+KTC_OPTIONAL(ktc_Int);
+KTC_OPTIONAL(ktc_Long);
+KTC_OPTIONAL(ktc_Float);
+KTC_OPTIONAL(ktc_Double);
+KTC_OPTIONAL(ktc_Bool);
+KTC_OPTIONAL(ktc_Char);
+KTC_OPTIONAL(ktc_UByte);
+KTC_OPTIONAL(ktc_UShort);
+KTC_OPTIONAL(ktc_UInt);
+KTC_OPTIONAL(ktc_ULong);
 
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*
@@ -100,20 +102,20 @@ typedef struct { ktc_OptionalTag tag; ktc_ULong  value; } ktc_ULong_Optional;
 #endif
 
 typedef struct {
-    void*       ptr;
-    size_t      size;
-    const char* file;
-    int         line;
-    bool        active;   /* true = still allocated */
+    void*           ptr;
+    ktc_ULong       size;
+    const ktc_Char* file;
+    ktc_Int         line;
+    ktc_Bool        active;   /* true = still allocated */
 } ktc_MemRecord;
 
 static ktc_MemRecord ktc_mem_records[KTC_MEM_MAX];
-static int32_t ktc_mem_count    = 0;
-static int32_t ktc_mem_allocs   = 0;
-static int32_t ktc_mem_frees    = 0;
-static size_t  ktc_mem_bytes    = 0;   /* current live bytes */
+static ktc_Int ktc_mem_count    = 0;
+static ktc_Int ktc_mem_allocs   = 0;
+static ktc_Int ktc_mem_frees    = 0;
+static ktc_ULong  ktc_mem_bytes = 0;   /* current live bytes */
 
-static inline void ktc_mem_record_alloc(void* p, size_t sz, const char* file, int line) {
+static inline void ktc_mem_record_alloc(void* p, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
     ktc_mem_allocs++;
     ktc_mem_bytes += sz;
     if (ktc_mem_count < KTC_MEM_MAX) {
@@ -121,21 +123,21 @@ static inline void ktc_mem_record_alloc(void* p, size_t sz, const char* file, in
     }
 }
 
-static inline void* ktc_malloc(size_t sz, const char* file, int line) {
+static inline void* ktc_malloc(ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
     void* p = (malloc)(sz);
     ktc_mem_record_alloc(p, sz, file, line);
     return p;
 }
 
-static inline void* ktc_calloc(size_t n, size_t sz, const char* file, int line) {
+static inline void* ktc_calloc(ktc_ULong n, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
     void* p = (calloc)(n, sz);
     ktc_mem_record_alloc(p, n * sz, file, line);
     return p;
 }
 
-static inline void* ktc_realloc(void* old, size_t sz, const char* file, int line) {
+static inline void* ktc_realloc(void* old, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
     /* mark old allocation as freed */
-    for (int i = ktc_mem_count - 1; i >= 0; i--) {
+    for (ktc_Int i = ktc_mem_count - 1; i >= 0; i--) {
         if (ktc_mem_records[i].ptr == old && ktc_mem_records[i].active) {
             ktc_mem_records[i].active = false;
             ktc_mem_bytes -= ktc_mem_records[i].size;
@@ -148,9 +150,9 @@ static inline void* ktc_realloc(void* old, size_t sz, const char* file, int line
     return p;
 }
 
-static inline void ktc_free(void* p, const char* file, int line) {
+static inline void ktc_free(void* p, const ktc_Char* file, ktc_Int line) {
     if (!p) return;
-    for (int i = ktc_mem_count - 1; i >= 0; i--) {
+    for (ktc_Int i = ktc_mem_count - 1; i >= 0; i--) {
         if (ktc_mem_records[i].ptr == p && ktc_mem_records[i].active) {
             ktc_mem_records[i].active = false;
             ktc_mem_bytes -= ktc_mem_records[i].size;
@@ -166,13 +168,13 @@ static inline void ktc_free(void* p, const char* file, int line) {
 }
 
 static inline void ktc_mem_report(void) {
-    int leaks = 0;
-    size_t leaked_bytes = 0;
+    ktc_Int leaks = 0;
+    ktc_ULong leaked_bytes = 0;
     printf("\n====== ktc memory report ======\n");
     printf("  total allocs : %d\n", ktc_mem_allocs);
     printf("  total frees  : %d\n", ktc_mem_frees);
     printf("  balance      : %d\n", ktc_mem_allocs - ktc_mem_frees);
-    for (int i = 0; i < ktc_mem_count; i++) {
+    for (ktc_Int i = 0; i < ktc_mem_count; i++) {
         if (ktc_mem_records[i].active) {
             if (leaks == 0) printf("\n  LEAKS:\n");
             printf("    %p  %6zu bytes  %s:%d\n",
@@ -201,49 +203,49 @@ static inline void ktc_mem_report(void) {
 /* ═══════════════════════════ String ══════════════════════════════════ */
 
 typedef struct {
-    const char* ptr;
-    int32_t     len;
+    const ktc_Char* ptr;
+    ktc_Int     len;
 } ktc_String;
 
 typedef struct { ktc_OptionalTag tag; ktc_String value; } ktc_String_Optional;
 
 /* String from literal — zero-cost, points into static storage. */
-#define ktc_str(s) ((ktc_String){(s), (int32_t)(sizeof(s) - 1)})
+#define ktc_str(s) ((ktc_String){(s), (ktc_Int)(sizeof(s) - 1)})
 
 /* String from pointer + length (no copy). */
-static inline ktc_String ktc_string_wrap(const char* p, int32_t n) {
+static inline ktc_String ktc_string_wrap(const ktc_Char* p, ktc_Int n) {
     return (ktc_String){p, n};
 }
 
 /* String equality. */
-static inline bool ktc_string_eq(ktc_String a, ktc_String b) {
-    return a.len == b.len && memcmp(a.ptr, b.ptr, (size_t)a.len) == 0;
+static inline ktc_Bool ktc_string_eq(ktc_String a, ktc_String b) {
+    return a.len == b.len && memcmp(a.ptr, b.ptr, (ktc_ULong)a.len) == 0;
 }
 
 /* String comparison (lexicographic). Returns <0, 0, or >0. */
-static inline int ktc_string_cmp(ktc_String a, ktc_String b) {
-    int32_t minlen = (a.len < b.len) ? a.len : b.len;
-    int r = memcmp(a.ptr, b.ptr, (size_t)minlen);
+static inline ktc_Int ktc_string_cmp(ktc_String a, ktc_String b) {
+    ktc_Int minlen = (a.len < b.len) ? a.len : b.len;
+    ktc_Int r = memcmp(a.ptr, b.ptr, (ktc_ULong)minlen);
     if (r != 0) return r;
     return (a.len > b.len) - (a.len < b.len);
 }
 
 /* Concatenate two strings into a caller-provided buffer.
- * Usage:  char buf[256]; ktc_String s = ktc_string_cat(buf, sizeof(buf), a, b);
+ * Usage:  ktc_Char buf[256]; ktc_String s = ktc_string_cat(buf, sizeof(buf), a, b);
  */
-static inline ktc_String ktc_string_cat(char* buf, int bufsz, ktc_String a, ktc_String b) {
-    int32_t total = a.len + b.len;
+static inline ktc_String ktc_string_cat(ktc_Char* buf, ktc_Int bufsz, ktc_String a, ktc_String b) {
+    ktc_Int total = a.len + b.len;
     if (total >= bufsz) total = bufsz - 1;
-    memcpy(buf, a.ptr, (size_t)a.len);
-    int32_t rest = total - a.len;
-    memcpy(buf + a.len, b.ptr, (size_t)rest);
+    memcpy(buf, a.ptr, (ktc_ULong)a.len);
+    ktc_Int rest = total - a.len;
+    memcpy(buf + a.len, b.ptr, (ktc_ULong)rest);
     buf[total] = '\0';
     return (ktc_String){buf, total};
 }
 
 /* Substring — returns a view into the original string (no copy).
  * substring(from) and substring(from, to) Kotlin semantics. */
-static inline ktc_String ktc_string_substring(ktc_String s, int32_t from, int32_t to) {
+static inline ktc_String ktc_string_substring(ktc_String s, ktc_Int from, ktc_Int to) {
     if (from < 0) from = 0;
     if (to > s.len) to = s.len;
     if (from >= to) return (ktc_String){"", 0};
@@ -253,209 +255,209 @@ static inline ktc_String ktc_string_substring(ktc_String s, int32_t from, int32_
 /* ═══════════════════════════ String Builder ══════════════════════════ */
 
 typedef struct {
-    char*   ptr;
-    int32_t len;
-    int32_t cap;
+    ktc_Char*   ptr;
+    ktc_Int len;
+    ktc_Int cap;
 } ktc_StrBuf;
 
-/* Stack-backed string builder: char buf[256]; ktc_StrBuf sb = {buf, 0, 256}; */
+/* Stack-backed string builder: ktc_Char buf[256]; ktc_StrBuf sb = {buf, 0, 256}; */
 
 static inline ktc_String ktc_sb_to_string(ktc_StrBuf* sb) {
     return (ktc_String){sb->ptr, sb->len};
 }
 
 static inline void ktc_sb_append_str(ktc_StrBuf* sb, ktc_String s) {
-    int32_t n = s.len;
+    ktc_Int n = s.len;
     if (sb->len + n > sb->cap) n = sb->cap - sb->len;
     if (n <= 0) return;
-    memcpy(sb->ptr + sb->len, s.ptr, (size_t)n);
+    memcpy(sb->ptr + sb->len, s.ptr, (ktc_ULong)n);
     sb->len += n;
 }
 
-static inline void ktc_sb_append_cstr(ktc_StrBuf* sb, const char* s) {
-    ktc_sb_append_str(sb, (ktc_String){s, (int32_t)strlen(s)});
+static inline void ktc_sb_append_cstr(ktc_StrBuf* sb, const ktc_Char* s) {
+    ktc_sb_append_str(sb, (ktc_String){s, (ktc_Int)strlen(s)});
 }
 
-static inline void ktc_sb_append_char(ktc_StrBuf* sb, char c) {
+static inline void ktc_sb_append_char(ktc_StrBuf* sb, ktc_Char c) {
     if (sb->len < sb->cap) sb->ptr[sb->len++] = c;
 }
 
-static inline void ktc_sb_append_int(ktc_StrBuf* sb, int32_t v) {
-    int32_t rem = sb->cap - sb->len;
+static inline void ktc_sb_append_int(ktc_StrBuf* sb, ktc_Int v) {
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId32, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId32, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
-static inline void ktc_sb_append_long(ktc_StrBuf* sb, int64_t v) {
-    int32_t rem = sb->cap - sb->len;
+static inline void ktc_sb_append_long(ktc_StrBuf* sb, ktc_Long v) {
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId64, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId64, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
-static inline void ktc_sb_append_double(ktc_StrBuf* sb, double v) {
-    int32_t rem = sb->cap - sb->len;
+static inline void ktc_sb_append_double(ktc_StrBuf* sb, ktc_Double v) {
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%f", v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%f", v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
-static inline void ktc_sb_append_bool(ktc_StrBuf* sb, bool v) {
+static inline void ktc_sb_append_bool(ktc_StrBuf* sb, ktc_Bool v) {
     ktc_sb_append_cstr(sb, v ? "true" : "false");
 }
 
 static inline void ktc_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v) {
-    int32_t rem = sb->cap - sb->len;
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId8, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId8, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
 static inline void ktc_sb_append_short(ktc_StrBuf* sb, ktc_Short v) {
-    int32_t rem = sb->cap - sb->len;
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRId16, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId16, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
 static inline void ktc_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v) {
-    int32_t rem = sb->cap - sb->len;
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu8, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu8, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
 static inline void ktc_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v) {
-    int32_t rem = sb->cap - sb->len;
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu16, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu16, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
 static inline void ktc_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v) {
-    int32_t rem = sb->cap - sb->len;
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu32, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu32, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
 static inline void ktc_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v) {
-    int32_t rem = sb->cap - sb->len;
+    ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
-    int n = snprintf(sb->ptr + sb->len, (size_t)rem, "%" PRIu64, v);
-    if (n > 0) sb->len += ((int32_t)n < rem) ? (int32_t)n : rem - 1;
+    ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu64, v);
+    if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
 }
 
 /* ═══════════════════════════ Hash helpers (for monomorphized HashMap) */
 
-static inline int32_t ktc_hash_i8(int8_t v)    { return (int32_t)v; }
-static inline int32_t ktc_hash_i16(int16_t v)  { return (int32_t)v; }
-static inline int32_t ktc_hash_i32(int32_t v)  { return (int32_t)(uint32_t)v; }
-static inline int32_t ktc_hash_i64(int64_t v)  { uint64_t u = (uint64_t)v; return (int32_t)(uint32_t)(u ^ (u >> 32)); }
-static inline int32_t ktc_hash_f32(float v)    { uint32_t b; memcpy(&b, &v, 4); return (int32_t)b; }
-static inline int32_t ktc_hash_f64(double v)   { uint64_t b; memcpy(&b, &v, 8); return (int32_t)(uint32_t)(b ^ (b >> 32)); }
-static inline int32_t ktc_hash_bool(bool v)    { return v ? 1 : 0; }
-static inline int32_t ktc_hash_char(char v)    { return (int32_t)(unsigned char)v; }
-static inline int32_t ktc_hash_u8(uint8_t v)   { return (int32_t)(uint32_t)v; }
-static inline int32_t ktc_hash_u16(uint16_t v) { return (int32_t)(uint32_t)v; }
-static inline int32_t ktc_hash_u32(uint32_t v) { return (int32_t)v; }
-static inline int32_t ktc_hash_u64(uint64_t v) { return (int32_t)(uint32_t)(v ^ (v >> 32)); }
-static inline int32_t ktc_hash_str(ktc_String s) {
-    uint32_t h = 2166136261u;
-    for (int32_t i = 0; i < s.len; i++) { h ^= (uint8_t)s.ptr[i]; h *= 16777619u; }
-    return (int32_t)h;
+static inline ktc_Int ktc_hash_i8(ktc_Byte v)    { return (ktc_Int)v; }
+static inline ktc_Int ktc_hash_i16(ktc_Short v)  { return (ktc_Int)v; }
+static inline ktc_Int ktc_hash_i32(ktc_Int v)  { return (ktc_Int)(ktc_UInt)v; }
+static inline ktc_Int ktc_hash_i64(ktc_Long v)  { ktc_ULong u = (ktc_ULong)v; return (ktc_Int)(ktc_UInt)(u ^ (u >> 32)); }
+static inline ktc_Int ktc_hash_f32(ktc_Float v)    { ktc_UInt b; memcpy(&b, &v, 4); return (ktc_Int)b; }
+static inline ktc_Int ktc_hash_f64(ktc_Double v)   { ktc_ULong b; memcpy(&b, &v, 8); return (ktc_Int)(ktc_UInt)(b ^ (b >> 32)); }
+static inline ktc_Int ktc_hash_bool(ktc_Bool v)    { return v ? 1 : 0; }
+static inline ktc_Int ktc_hash_char(ktc_Char v)    { return (ktc_Int)(unsigned char)v; }
+static inline ktc_Int ktc_hash_u8(ktc_UByte v)   { return (ktc_Int)(ktc_UInt)v; }
+static inline ktc_Int ktc_hash_u16(ktc_UShort v) { return (ktc_Int)(ktc_UInt)v; }
+static inline ktc_Int ktc_hash_u32(ktc_UInt v) { return (ktc_Int)v; }
+static inline ktc_Int ktc_hash_u64(ktc_ULong v) { return (ktc_Int)(ktc_UInt)(v ^ (v >> 32)); }
+static inline ktc_Int ktc_hash_str(ktc_String s) {
+    ktc_UInt h = 2166136261u;
+    for (ktc_Int i = 0; i < s.len; i++) { h ^= (ktc_UByte)s.ptr[i]; h *= 16777619u; }
+    return (ktc_Int)h;
 }
 
 /* ═══════════════════════════ Conversion helpers ═════════════════════ */
 
-static inline ktc_String ktc_int_to_string(char* buf, int bufsz, int32_t v) {
-    int n = snprintf(buf, (size_t)bufsz, "%" PRId32, v);
+static inline ktc_String ktc_int_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Int v) {
+    ktc_Int n = snprintf(buf, (ktc_ULong)bufsz, "%" PRId32, v);
     return (ktc_String){buf, n};
 }
 
-static inline ktc_String ktc_long_to_string(char* buf, int bufsz, int64_t v) {
-    int n = snprintf(buf, (size_t)bufsz, "%" PRId64, v);
+static inline ktc_String ktc_long_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Long v) {
+    ktc_Int n = snprintf(buf, (ktc_ULong)bufsz, "%" PRId64, v);
     return (ktc_String){buf, n};
 }
 
-static inline ktc_String ktc_double_to_string(char* buf, int bufsz, double v) {
-    int n = snprintf(buf, (size_t)bufsz, "%f", v);
+static inline ktc_String ktc_double_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Double v) {
+    ktc_Int n = snprintf(buf, (ktc_ULong)bufsz, "%f", v);
     return (ktc_String){buf, n};
 }
 
-static inline ktc_String ktc_bool_to_string(bool v) {
+static inline ktc_String ktc_bool_to_string(ktc_Bool v) {
     return v ? ktc_str("true") : ktc_str("false");
 }
 
 /* ═══════════════════════════ String → Number parsing ═════════════════ */
 
-/* Parse ktc_String to int32_t (simple atoi-like, stops at non-digit). */
-static inline int32_t ktc_str_toInt(ktc_String s) {
-    char buf[32];
-    int32_t n = s.len < 31 ? s.len : 31;
-    memcpy(buf, s.ptr, (size_t)n);
+/* Parse ktc_String to ktc_Int (simple atoi-like, stops at non-digit). */
+static inline ktc_Int ktc_str_toInt(ktc_String s) {
+    ktc_Char buf[32];
+    ktc_Int n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
-    return (int32_t)atoi(buf);
+    return (ktc_Int)atoi(buf);
 }
 
-/* Parse ktc_String to int64_t. */
-static inline int64_t ktc_str_toLong(ktc_String s) {
-    char buf[32];
-    int32_t n = s.len < 31 ? s.len : 31;
-    memcpy(buf, s.ptr, (size_t)n);
+/* Parse ktc_String to ktc_Long. */
+static inline ktc_Long ktc_str_toLong(ktc_String s) {
+    ktc_Char buf[32];
+    ktc_Int n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
-    return (int64_t)atoll(buf);
+    return (ktc_Long)atoll(buf);
 }
 
 /* Parse ktc_String to double. */
-static inline double ktc_str_toDouble(ktc_String s) {
-    char buf[64];
-    int32_t n = s.len < 63 ? s.len : 63;
-    memcpy(buf, s.ptr, (size_t)n);
+static inline ktc_Double ktc_str_toDouble(ktc_String s) {
+    ktc_Char buf[64];
+    ktc_Int n = s.len < 63 ? s.len : 63;
+    memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
     return strtod(buf, NULL);
 }
 
 /* ═══════════════════ String → Number nullable parsing ════════════════ */
 
-/* Parse ktc_String to int32_t, returning false on failure. */
-static inline bool ktc_str_toIntOrNull(ktc_String s, int32_t* out) {
+/* Parse ktc_String to ktc_Int, returning false on failure. */
+static inline ktc_Bool ktc_str_toIntOrNull(ktc_String s, ktc_Int* out) {
     if (s.len == 0) return false;
-    char buf[32];
-    int32_t n = s.len < 31 ? s.len : 31;
-    memcpy(buf, s.ptr, (size_t)n);
+    ktc_Char buf[32];
+    ktc_Int n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
-    char* end;
+    ktc_Char* end;
     long v = strtol(buf, &end, 10);
     if (end == buf || *end != '\0') return false;
-    *out = (int32_t)v;
+    *out = (ktc_Int)v;
     return true;
 }
 
-/* Parse ktc_String to int64_t, returning false on failure. */
-static inline bool ktc_str_toLongOrNull(ktc_String s, int64_t* out) {
+/* Parse ktc_String to ktc_Long, returning false on failure. */
+static inline ktc_Bool ktc_str_toLongOrNull(ktc_String s, ktc_Long* out) {
     if (s.len == 0) return false;
-    char buf[32];
-    int32_t n = s.len < 31 ? s.len : 31;
-    memcpy(buf, s.ptr, (size_t)n);
+    ktc_Char buf[32];
+    ktc_Int n = s.len < 31 ? s.len : 31;
+    memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
-    char* end;
+    ktc_Char* end;
     long long v = strtoll(buf, &end, 10);
     if (end == buf || *end != '\0') return false;
-    *out = (int64_t)v;
+    *out = (ktc_Long)v;
     return true;
 }
 
 /* Parse ktc_String to double, returning false on failure. */
-static inline bool ktc_str_toDoubleOrNull(ktc_String s, double* out) {
+static inline ktc_Bool ktc_str_toDoubleOrNull(ktc_String s, ktc_Double* out) {
     if (s.len == 0) return false;
-    char buf[64];
-    int32_t n = s.len < 63 ? s.len : 63;
-    memcpy(buf, s.ptr, (size_t)n);
+    ktc_Char buf[64];
+    ktc_Int n = s.len < 63 ? s.len : 63;
+    memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
-    char* end;
-    double v = strtod(buf, &end);
+    ktc_Char* end;
+    ktc_Double v = strtod(buf, &end);
     if (end == buf || *end != '\0') return false;
     *out = v;
     return true;

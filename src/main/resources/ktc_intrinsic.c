@@ -1,9 +1,9 @@
 #include "ktc_intrinsic.h"
 
-static uint64_t state = 0x853c49e6748fea9bULL;
-static uint64_t inc   = 0xda3e39cb94b95bdbULL;
+static ktc_ULong state = 0x853c49e6748fea9bULL;
+static ktc_ULong inc   = 0xda3e39cb94b95bdbULL;
 
-void ktc_srand(uint64_t seed) {
+void ktc_srand(ktc_ULong seed) {
     state = 0;
     inc = (seed << 1u) | 1u;
     ktc_rand();
@@ -11,27 +11,27 @@ void ktc_srand(uint64_t seed) {
     ktc_rand();
 }
 
-uint32_t ktc_rand(void) {
-    uint64_t oldstate = state;
+ktc_UInt ktc_rand(void) {
+    ktc_ULong oldstate = state;
     state = oldstate * 6364136223846793005ULL + inc;
 
-    uint32_t xorshifted = (uint32_t)(((oldstate >> 18u) ^ oldstate) >> 27u);
-    uint32_t rot = oldstate >> 59u;
+    ktc_UInt xorshifted = (ktc_UInt)(((oldstate >> 18u) ^ oldstate) >> 27u);
+    ktc_UInt rot = oldstate >> 59u;
 
     return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
 }
 
-uint32_t ktc_rand_range(uint32_t bound) {
-    uint32_t threshold = -bound % bound;
+ktc_UInt ktc_rand_range(ktc_UInt bound) {
+    ktc_UInt threshold = -bound % bound;
 
     for (;;) {
-        uint32_t r = ktc_rand();
+        ktc_UInt r = ktc_rand();
         if (r >= threshold)
             return r % bound;
     }
 }
 
-double ktc_time_seconds(void)
+ktc_Double ktc_time_seconds(void)
 {
 #if defined(_WIN32)
     static LARGE_INTEGER freq;
@@ -45,17 +45,17 @@ double ktc_time_seconds(void)
     LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
 
-    return (double)counter.QuadPart / (double)freq.QuadPart;
+    return (ktc_Double)counter.QuadPart / (ktc_Double)freq.QuadPart;
 
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+    return (ktc_Double)ts.tv_sec + (ktc_Double)ts.tv_nsec / 1e9;
 #endif
 }
 
-uint64_t ktc_time_ms(void)
+ktc_ULong ktc_time_ms(void)
 {
 #if defined(_WIN32)
     static LARGE_INTEGER freq;
@@ -69,18 +69,18 @@ uint64_t ktc_time_ms(void)
     LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
 
-    return (uint64_t)((counter.QuadPart * 1000ULL) / freq.QuadPart);
+    return (ktc_ULong)((counter.QuadPart * 1000ULL) / freq.QuadPart);
 
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
-    return (uint64_t)ts.tv_sec * 1000ULL +
-           (uint64_t)ts.tv_nsec / 1000000ULL;
+    return (ktc_ULong)ts.tv_sec * 1000ULL +
+           (ktc_ULong)ts.tv_nsec / 1000000ULL;
 #endif
 }
 
-void ktc_time_sleep_ms(uint32_t ms)
+void ktc_time_sleep_ms(ktc_UInt ms)
 {
 #if defined(_WIN32)
 
@@ -96,7 +96,7 @@ void ktc_time_sleep_ms(uint32_t ms)
 #endif
 }
 
-void ktc_time_sleep_seconds(double seconds)
+void ktc_time_sleep_seconds(ktc_Double seconds)
 {
-    ktc_time_sleep_ms((uint32_t)(seconds * 1000.0));
+    ktc_time_sleep_ms((ktc_UInt)(seconds * 1000.0));
 }
