@@ -30,6 +30,8 @@ param(
     [string]$Build = "Jar"
 )
 
+$BuildMode = $Build.ToLowerInvariant()
+
 if ($Help) {
     $inUsage = $false
     Get-Content $PSCommandPath | ForEach-Object {
@@ -99,34 +101,32 @@ function Invoke-Test {
 
     # ── Transpile ───────────────────────────────────────────────
     if ($Verbose) { Write-Section "Transpile" }
-    if ($Build -ne "Gradle") {
-        $activeJar = if ($Build -eq "Proguard") { $releaseJar } else { $jar }
-        $transpileArgs = @("-jar", $activeJar) + $ktFiles + @("-o", $TestOutDir)
-    } else {
+    if ($BuildMode -eq "gradle") {
         # gradle run handles classpath, kotlin stdlib, and resources automatically
         $ktArgs = ($ktFiles -join " ") + " -o $TestOutDir"
         if ($ExtraArgs -ne "") { $ktArgs += " $ExtraArgs" }
         $transpileArgs = @("run", "--quiet", "--args=$ktArgs")
-    }
-    if ($ExtraArgs -ne "" -and $Build -ne "Gradle") {
-        $transpileArgs += ($ExtraArgs -split '\s+')
+    } else {
+        $activeJar = if ($BuildMode -eq "proguard") { $releaseJar } else { $jar }
+        $transpileArgs = @("-jar", $activeJar) + $ktFiles + @("-o", $TestOutDir)
+        if ($ExtraArgs -ne "") { $transpileArgs += ($ExtraArgs -split '\s+') }
     }
     if ($Verbose) {
         $ktNames = ($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
-        if ($Build -ne "Gradle") {
-            $jarLabel = if ($Build -eq "Proguard") { "KotlinToC-release.jar" } else { "KotlinToC.jar" }
-            $cmdLine = "java -jar $jarLabel $ktNames -o $TestOutDir"
-        } else {
+        if ($BuildMode -eq "gradle") {
             $cmdLine = "gradlew run --args=`"$ktNames -o $TestOutDir`""
+        } else {
+            $jarLabel = if ($BuildMode -eq "proguard") { "KotlinToC-release.jar" } else { "KotlinToC.jar" }
+            $cmdLine = "java -jar $jarLabel $ktNames -o $TestOutDir"
         }
         if ($ExtraArgs -ne "") { $cmdLine += " $ExtraArgs" }
         Write-Cmd $cmdLine
         Write-Host ""
     }
-    if ($Build -ne "Gradle") {
-        $transpileOutput = & java @transpileArgs 2>&1
-    } else {
+    if ($BuildMode -eq "gradle") {
         $transpileOutput = & "$root\gradlew.bat" @transpileArgs 2>&1
+    } else {
+        $transpileOutput = & java @transpileArgs 2>&1
     }
     $transpileExit = $LASTEXITCODE
     if ($Verbose) {
@@ -224,11 +224,11 @@ if ($Run -ne "") {
     Write-Info "Using C compiler: $CC"
 
     # ── Build only if -Build ───────────────────────────────────
-    if ($Build -ne "") {
+    if ($BuildMode -ne "gradle") {
         Write-Section "Build"
-        if ($Build -eq "Proguard") {
+        if ($BuildMode -eq "proguard") {
             Write-Cmd "gradlew proguard"
-            & "$root\gradlew.bat" proguard --quiet 2>&1 | Out-Null
+            & "$root\gradlew.bat" proguard 2>&1
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
                 Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
                 exit 1
@@ -236,7 +236,7 @@ if ($Run -ne "") {
             Write-Pass "Built $releaseJar"
         } else {
             Write-Cmd "gradlew jar"
-            & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+            & "$root\gradlew.bat" jar 2>&1
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
                 Write-Host "ERROR: JAR build failed" -ForegroundColor Red
                 exit 1
@@ -295,11 +295,11 @@ if ($Skip -ne "unit") {
     }
 }
 
-# ── 2. Build JAR only if -Build ──────────────────────────────
-if ($Build -ne "Gradle") {
-    if ($Build -eq "Proguard") {
+# ── 2. Build transpiler if needed ────────────────────────────
+if ($BuildMode -ne "gradle") {
+    if ($BuildMode -eq "proguard") {
         Write-Section "Building ProGuard release JAR"
-        & "$root\gradlew.bat" proguard --quiet 2>&1 | Out-Null
+        & "$root\gradlew.bat" proguard 2>&1
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
             Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
             exit 1
@@ -307,7 +307,7 @@ if ($Build -ne "Gradle") {
         Write-Pass "Built $releaseJar"
     } else {
         Write-Section "Building transpiler JAR"
-        & "$root\gradlew.bat" jar --quiet 2>&1 | Out-Null
+        & "$root\gradlew.bat" jar 2>&1
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
             Write-Host "ERROR: JAR build failed" -ForegroundColor Red
             exit 1
@@ -334,14 +334,96 @@ if ($testDirs.Count -eq 0) {
     if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
     $allArgs = $allArgs.Trim()
 
-    foreach ($dir in $testDirs) {
+    $throttle = [Math]::Max(1, [Environment]::ProcessorCount)
+    $results = $testDirs | ForEach-Object -Parallel {
+        $dir = $_
+        $dirName = Split-Path $dir -Leaf
+        $testOutDir = "$using:outDir\$dirName"
+
+        # Collect .kt files
+        $ktFiles = @(Get-ChildItem "$dir\*.kt" -ErrorAction SilentlyContinue)
+        if ($ktFiles.Count -eq 0) {
+            Write-Host "  FAIL $dirName (no .kt files)" -ForegroundColor Red
+            return @{ Name = $dirName; Passed = $false; Reason = "no .kt files" }
+        }
+        $ktPaths = $ktFiles | ForEach-Object FullName
+
+        # Create output dir
+        if (Test-Path $testOutDir) { Remove-Item $testOutDir -Recurse -Force -ErrorAction SilentlyContinue }
+        New-Item $testOutDir -ItemType Directory -Force | Out-Null
+
+        # Transpile
+        $transpileExit = 0
+        try {
+            if ($using:BuildMode -eq "gradle") {
+                $argsStr = "$ktPaths -o $testOutDir"
+                if ($using:allArgs) { $argsStr += " $using:allArgs" }
+                & "$using:root\gradlew.bat" run --quiet --args="$argsStr" 2>&1 | Out-Null
+                $transpileExit = $LASTEXITCODE
+            } else {
+                $activeJar = if ($using:BuildMode -eq "proguard") { $using:releaseJar } else { $using:jar }
+                $cmdArgs = @("-jar", $activeJar) + $ktPaths + @("-o", $testOutDir)
+                if ($using:allArgs) { $cmdArgs += $using:allArgs -split '\s+' }
+                & java @cmdArgs 2>&1 | Out-Null
+                $transpileExit = $LASTEXITCODE
+            }
+        } catch {
+            Write-Host "  FAIL $dirName (transpile: $_)" -ForegroundColor Red
+            return @{ Name = $dirName; Passed = $false; Reason = "transpile: $_" }
+        }
+        if ($transpileExit -ne 0) {
+            Write-Host "  FAIL $dirName (transpile failed)" -ForegroundColor Red
+            return @{ Name = $dirName; Passed = $false; Reason = "transpile failed" }
+        }
+
+        # Discover .c files
+        $cFiles = @(Get-ChildItem "$testOutDir\*.c" -ErrorAction SilentlyContinue)
+        if ($cFiles.Count -eq 0) {
+            Write-Host "  FAIL $dirName (no .c files generated)" -ForegroundColor Red
+            return @{ Name = $dirName; Passed = $false; Reason = "no .c files" }
+        }
+        $cFiles = $cFiles | Sort-Object { if ($_.Name -eq "ktc_std.c") { 0 } else { 1 } }, { $_.Name }
+        $cSources = $cFiles | ForEach-Object FullName
+
+        # Compile
+        $exePath = "$testOutDir\$dirName.exe"
+        $compileArgs = @("-std=c11", "-o", $exePath)
+        if ($using:CCArgs) { $compileArgs += $using:CCArgs -split '\s+' }
+        $compileArgs += $cSources
+        try {
+            & $using:CC @compileArgs 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  FAIL $dirName (compile failed)" -ForegroundColor Red
+                return @{ Name = $dirName; Passed = $false; Reason = "compile failed" }
+            }
+        } catch {
+            Write-Host "  FAIL $dirName (compile: $_)" -ForegroundColor Red
+            return @{ Name = $dirName; Passed = $false; Reason = "compile: $_" }
+        }
+
+        # Run
+        try {
+            & $exePath 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  FAIL $dirName (runtime error, exit $LASTEXITCODE)" -ForegroundColor Red
+                return @{ Name = $dirName; Passed = $false; Reason = "runtime error, exit $LASTEXITCODE" }
+            }
+        } catch {
+            Write-Host "  FAIL $dirName (run: $_)" -ForegroundColor Red
+            return @{ Name = $dirName; Passed = $false; Reason = "run: $_" }
+        }
+
+        Write-Host "  PASS $dirName" -ForegroundColor Green
+        return @{ Name = $dirName; Passed = $true; Reason = "" }
+    } -ThrottleLimit $throttle
+
+    foreach ($r in $results) {
         $totalTests++
-        $result = Invoke-Test -Name $dir.Name -TestSrcDir $dir.FullName -TestOutDir "$outDir\$($dir.Name)" -ExtraArgs $allArgs
-        if ($result) {
+        if ($r.Passed) {
             $passedTests++
         } else {
             $failedTests++
-            $failedNames += $dir.Name
+            $failedNames += $r.Name
         }
     }
 }

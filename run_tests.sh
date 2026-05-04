@@ -53,6 +53,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+BUILD="$(echo "$BUILD" | tr '[:upper:]' '[:lower:]')"
+
 # ── Colors ──────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -125,31 +127,35 @@ invoke_test() {
         for f in "${kt_files[@]}"; do kt_names+="$(basename "$f") "; done
         local extra_display=""
         [[ -n "$extra_args" ]] && extra_display=" $extra_args"
-        if [[ "$BUILD" != "gradle" ]]; then
-            local jar_label
-            case "$BUILD" in
-                proguard) jar_label="KotlinToC-release.jar" ;;
-                *)        jar_label="KotlinToC.jar" ;;
-            esac
-            showcmd "java -jar $jar_label $kt_names -o $test_out_dir$extra_display"
-        else
-            showcmd "gradlew run --args=\"$kt_names -o $test_out_dir$extra_display\""
-        fi
+        case "$BUILD" in
+            gradle) showcmd "gradlew run --args=\"$kt_names -o $test_out_dir$extra_display\"" ;;
+            *)
+                local jar_label
+                case "$BUILD" in
+                    proguard) jar_label="KotlinToC-release.jar" ;;
+                    *)        jar_label="KotlinToC.jar" ;;
+                esac
+                showcmd "java -jar $jar_label $kt_names -o $test_out_dir$extra_display"
+                ;;
+        esac
         echo ""
     fi
     set +e
     local output
-    if [[ "$BUILD" != "gradle" ]]; then
-        local active_jar
-        case "$BUILD" in
-            proguard) active_jar="$RELEASE_JAR" ;;
-            *)        active_jar="$JAR" ;;
-        esac
-        output=$(java -jar "$active_jar" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
-    else
-        local app_args="${kt_files[*]} -o $test_out_dir $extra_args"
-        output=$("$ROOT/gradlew" run --quiet --args="$app_args" 2>&1)
-    fi
+    case "$BUILD" in
+        gradle)
+            local app_args="${kt_files[*]} -o $test_out_dir $extra_args"
+            output=$("$ROOT/gradlew" run --quiet --args="$app_args" 2>&1)
+            ;;
+        *)
+            local active_jar
+            case "$BUILD" in
+                proguard) active_jar="$RELEASE_JAR" ;;
+                *)        active_jar="$JAR" ;;
+            esac
+            output=$(java -jar "$active_jar" "${kt_files[@]}" -o "$test_out_dir" $extra_args 2>&1)
+            ;;
+    esac
     local transpile_exit=$?
     set -e
     if [[ "$verbose" == "true" ]]; then
@@ -389,10 +395,26 @@ if [[ ${#test_dirs[@]} -eq 0 ]]; then
 else
     IFS=$'\n' test_dirs=($(printf '%s\n' "${test_dirs[@]}" | sort)); unset IFS
 
+    pids=()
     for dir in "${test_dirs[@]}"; do
         dir_name="$(basename "$dir")"
+        (
+            invoke_test "$dir_name" "$dir" "$OUT_DIR/$dir_name" "false" "$EXTRA_ARGS" > "$OUT_DIR/${dir_name}.out" 2>&1
+            echo $? > "$OUT_DIR/${dir_name}.code"
+        ) &
+        pids+=($!)
+    done
+
+    for pid in "${pids[@]}"; do
+        wait "$pid"
+    done
+
+    for dir in "${test_dirs[@]}"; do
+        dir_name="$(basename "$dir")"
+        exit_code=$(cat "$OUT_DIR/${dir_name}.code" 2>/dev/null || echo 1)
+        cat "$OUT_DIR/${dir_name}.out" 2>/dev/null
         ((TOTAL++)) || true
-        if invoke_test "$dir_name" "$dir" "$OUT_DIR/$dir_name" "false" "$EXTRA_ARGS"; then
+        if [[ "$exit_code" == "0" ]]; then
             ((PASSED++)) || true
         else
             ((FAILED++)) || true
