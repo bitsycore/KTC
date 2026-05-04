@@ -1309,7 +1309,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         for (s in body.stmts) {
             if (s is ReturnStmt && s.value is NameExpr) {
-                val varName = (s.value as NameExpr).name
+                val varName = s.value.name
                 val init = varInits[varName]
                 if (init is CallExpr) {
                     val calleeName = (init.callee as? NameExpr)?.name
@@ -2511,8 +2511,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         currentFnReturnsSizedArray = returnsSizedArray
         currentFnOptReturnCTypeName = optRetCType
         if (returnsSizedArray) {
-            currentFnSizedArraySize = getSizeAnnotation(f.returnType!!)!!
-            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType!!))
+            currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
+            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
         }
         currentFnReturnType = retResolved
         currentFnIsMain = isMain
@@ -2729,7 +2729,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     } else {
                         val srcType = inferExprType(s.init)
                         val alreadyOpt = srcType != null && srcType.endsWith("?") && isValueNullableType(srcType)
-                        val expr = genExpr(s.init!!)
+                        val expr = genExpr(s.init)
                         flushPreStmts(ind)
                         if (alreadyOpt) {
                             impl.appendLine("$ind$mutComment$optType ${s.name} = $expr;")
@@ -2745,7 +2745,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         impl.appendLine("$ind$mutComment$elemCType* ${s.name} = NULL;")
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
                     } else {
-                        val expr = genExpr(s.init!!)
+                        val expr = genExpr(s.init)
                         flushPreStmts(ind)
                         val lenExpr = if (s.init is NameExpr) "${(s.init as NameExpr).name}\$len" else "${expr}\$len"
                         impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
@@ -2756,7 +2756,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // ── Non-nullable ──
                 else -> {
                     // Interface variable initialized from implementing class → auto-wrap
-                    if (interfaces.containsKey(t) && s.init != null) {
+                    if (interfaces.containsKey(t)) {
                         val initType = inferExprType(s.init)
                         if (initType != null && classes.containsKey(initType) && classInterfaces[initType]?.contains(t) == true) {
                             val backing = tmp()
