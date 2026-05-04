@@ -38,9 +38,10 @@
 
 - **Vararg in string templates** — `"${sum(1, 2, 3)}"` generates undeclared temp variables for the inline array.
 
-## JsonTest
+## Prefix expressions on calls
 
-- **Broken by interface/Iterator changes** — `MutableList` type mismatch in `parseValue`, `printJsonValue`, `.dispose()` on int. Needs investigation.
+- **`!functionCall(args)`** — Generates `(!name)(args)` instead of `!name(args)`. The C codegen incorrectly parenthesizes prefix expressions on function calls.
+  Workaround: Use `funCall(args) == false` or assign to temp variable first.
 
 ## For-Loop
 
