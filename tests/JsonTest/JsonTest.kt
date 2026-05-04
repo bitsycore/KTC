@@ -1,4 +1,4 @@
-package JsonParserTest
+package JsonTest
 
 // ═══════════════════════════════════════════════════════════════════════
 // JSON Parser — Showcase for KotlinToC transpiler
@@ -17,34 +17,6 @@ package JsonParserTest
 //   - Helper functions, default parameters
 //   - Nullable types and !! assertion
 // ═══════════════════════════════════════════════════════════════════════
-
-// ── Generic MutableList ──────────────────────────────────────────────
-
-class MutableList<T>(capacity: Int) {
-    var size: Int = 0
-    var buf: @Ptr Array<T> = HeapAlloc<Array<T>>(capacity)!!
-
-    fun add(value: T) {
-        if (size >= buf.size) {
-            val newCap = buf.size * 2
-            buf = HeapArrayResize<Array<T>>(buf, newCap)!!
-        }
-        buf[size] = value
-        size = size + 1
-    }
-
-    fun get(index: Int): T {
-        return buf[index]
-    }
-
-    fun set(index: Int, value: T) {
-        buf[index] = value
-    }
-
-    fun dispose() {
-        HeapFree(buf)
-    }
-}
 
 // ── Token type constants ─────────────────────────────────────────────
 
@@ -79,7 +51,7 @@ fun isDigit(ch: Char): Boolean {
 data class Lexer(val input: String, val len: Int)
 
 fun lexJson(input: String): MutableList<Int> {
-    val tokens = MutableList<Int>(256)
+    val tokens = ArrayList<Int>(256)
     var i = 0
     val len = input.length
 

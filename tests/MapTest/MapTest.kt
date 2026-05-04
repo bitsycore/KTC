@@ -1,4 +1,4 @@
-package HashMapTest
+package MapTest
 
 fun main() {
     // Setup
