@@ -71,7 +71,8 @@ data class PropDecl(
     val init: Expr?,
     val mutable: Boolean,
     val line: Int = 0,
-    val isPrivate: Boolean = false
+    val isPrivate: Boolean = false,
+    val isPrivateSet: Boolean = false
 ) : Decl()
 
 // ═══════════════════════════ Parameters ═══════════════════════════

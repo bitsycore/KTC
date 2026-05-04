@@ -6,7 +6,7 @@ data class Rect(val origin: Vec2, val size: Vec2)
 
 //// ── Class with body properties ───────────────────────────────────────
 class Player(val name: String) {
-    var health: Int = 100
+    var health: Int = 100 private set
     var score: Int = 0
 
     fun takeDamage(amount: Int) {

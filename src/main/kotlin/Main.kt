@@ -141,12 +141,13 @@ fun main(args: Array<String>) {
         val mergedFile = KtFile(group.first().ast.pkg, mergedImports, mergedDecls)
         val mergedSourceLines = group.flatMap { it.sourceLines }
 
+        val srcName = if (group.size == 1) group.first().file.name else "$pkg.kt"
+
         val output: CCodeGen.COutput
         try {
-            val srcName = if (group.size == 1) group.first().file.name else "$pkg.kt"
             output = CCodeGen(mergedFile, allAsts, mergedSourceLines, memTrack = memTrack, sourceFileName = srcName).generate()
         } catch (e: Exception) {
-            System.err.println("CodeGen error in package '$pkg': ${e.message}")
+            System.err.println("CodeGen error in '$srcName': ${e.message}")
             exitProcess(1)
         }
 

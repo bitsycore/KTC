@@ -122,6 +122,42 @@ class BasicTypesUnitTest : TranspilerTestBase() {
         r.sourceContains("v.x = 99.0f;")
     }
 
+    // ── private set ──────────────────────────────────────────────────
+
+    @Test fun privateSetInternalWrite() {
+        val decls = """
+            class Player(val name: String) {
+                var health: Int = 100
+                    private set
+                fun takeDamage(amount: Int) { health -= amount }
+            }
+        """.trimIndent()
+        val r = transpileMain("val p = Player(\"Alice\")\np.takeDamage(10)", decls = decls)
+        r.sourceContains("health -= amount;")
+    }
+
+    @Test fun privateSetExternalWriteError() {
+        val decls = """
+            class Player(val name: String) {
+                var health: Int = 100
+                    private set
+            }
+        """.trimIndent()
+        transpileMainExpectError("val p = Player(\"Alice\")\np.health = 50", "Var with private set cannot be reassigned outside its class: 'health'", decls = decls)
+    }
+
+    @Test fun privateSetOnValError() {
+        val src = """
+            package test.Main
+            class Foo {
+                val x: Int = 0
+                    private set
+            }
+            fun main() {}
+        """.trimIndent()
+        transpileExpectError(src, "'private set' is not allowed on 'val'")
+    }
+
     // ── Type conversions ─────────────────────────────────────────────
 
     @Test fun toFloat() {

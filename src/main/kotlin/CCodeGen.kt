@@ -27,7 +27,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     // ── Symbol tables (populated by collectDecls) ────────────────────
-    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false, val mutable: Boolean = true)
+    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false, val mutable: Boolean = true, val isPrivateSet: Boolean = false)
 
     private data class ClassInfo(
         val name: String, val isData: Boolean,
@@ -38,7 +38,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val initBlocks: List<Block> = emptyList(),
         val typeParams: List<String> = emptyList(),
         val privateProps: Set<String> = emptySet(),
-        val valCtorProps: Set<String> = emptySet()
+        val valCtorProps: Set<String> = emptySet(),
+        val privateSetProps: Set<String> = emptySet()
     ) {
         val props: List<Pair<String, TypeRef>>
             get() = ctorProps + bodyProps.map { it.name to it.type }
@@ -579,10 +580,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val valCtorPropNames = d.ctorParams.filter { it.isVal }.map { it.name }.toSet()
                 val ctorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { it.name to it.type }
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
-                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line, p.isPrivate, p.mutable)
+                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line, p.isPrivate, p.mutable, p.isPrivateSet)
                 }
                 val privateProps = bodyProps.filter { it.isPrivate }.map { it.name }.toSet()
-                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams, privateProps = privateProps, valCtorProps = valCtorPropNames)
+                val privateSetPropNames = bodyProps.filter { it.isPrivateSet }.map { it.name }.toSet()
+                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams, privateProps = privateProps, valCtorProps = valCtorPropNames, privateSetProps = privateSetPropNames)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
                 for (m in d.members) if (m is FunDecl && m.receiver == null) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
@@ -3081,8 +3083,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val className = if (recvType != null) {
                 classes[recvType]?.let { recvType } ?: anyIndirectClassName(recvType)
             } else null
-            if (className != null && classes[className]?.isValProp(dotTarget.name) == true) {
-                codegenError("Val cannot be reassigned: '${dotTarget.name}'")
+            if (className != null) {
+                val ci = classes[className]
+                if (ci != null) {
+                    val propName = dotTarget.name
+                    if (propName in ci.privateSetProps) {
+                        codegenError("Var with private set cannot be reassigned outside its class: '$propName'")
+                    }
+                    if (ci.isValProp(propName)) {
+                        codegenError("Val cannot be reassigned: '$propName'")
+                    }
+                }
             }
         }
 

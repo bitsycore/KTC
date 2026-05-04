@@ -18,7 +18,7 @@ enum class TokenType {
     RETURN, BREAK, CONTINUE, DEFER,
     IN, IS, AS,
     NULL, TRUE, FALSE,
-    THIS, INIT, INTERFACE, OVERRIDE, PRIVATE,
+    THIS, INIT, INTERFACE, OVERRIDE, PRIVATE, SET, GET,
 
     // Identifier
     IDENT,
