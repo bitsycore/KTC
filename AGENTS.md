@@ -47,7 +47,7 @@ Types are tracked as strings internally with suffix markers:
 
 The `@Ptr` annotation on a TypeRef adds `*` suffix. There is no `Ptr<T>` generic wrapper, no `@Heap`, `@Value`, `^`, `&`, or `#` marker.
 
-**Primitive types:** `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`, `UByte`, `UShort`, `UInt`, `ULong`. All have Optional and hash support.
+**Primitive types:** `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`, `UByte`, `UShort`, `UInt`, `ULong`. All have Optional and hash support.
 
 ### Pointer Semantics
 

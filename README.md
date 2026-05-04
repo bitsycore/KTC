@@ -35,8 +35,23 @@ java -jar KotlinToC.jar <file.kt...> [-o <output_dir>] [--mem-track] [--ast]
 
 ### Types & Primitives
 
-- `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`
-- `UByte`, `UShort`, `UInt`, `ULong` (unsigned integers, map to `uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`)
+| Kotlin    | C typedef    | Underlying C type | Notes                  |
+|-----------|--------------|-------------------|------------------------|
+| `Byte`    | `ktc_Byte`   | `int8_t`          | 8-bit signed           |
+| `Short`   | `ktc_Short`  | `int16_t`         | 16-bit signed          |
+| `Int`     | `ktc_Int`    | `int32_t`         | 32-bit signed          |
+| `Long`    | `ktc_Long`   | `int64_t`         | 64-bit signed          |
+| `Float`   | `ktc_Float`  | `float`           | 32-bit IEEE 754        |
+| `Double`  | `ktc_Double` | `double`          | 64-bit IEEE 754        |
+| `Boolean` | `ktc_Bool`   | `bool`            |                        |
+| `Char`    | `ktc_Char`   | `char`            |                        |
+| `UByte`   | `ktc_UByte`  | `uint8_t`         | 8-bit unsigned         |
+| `UShort`  | `ktc_UShort` | `uint16_t`        | 16-bit unsigned        |
+| `UInt`    | `ktc_UInt`   | `uint32_t`        | 32-bit unsigned        |
+| `ULong`   | `ktc_ULong`  | `uint64_t`        | 64-bit unsigned        |
+| `String`  | `ktc_String` | `{ const char* ptr; int32_t len; }` | Non-owning slice |
+| `Unit`    | `void`       | —                 | Return type only       |
+
 - `Array<T>` (stack-allocated trampoline), `Array<T?>` (optional elements)
 - `@Size(N) Array<T>` (fixed-size stack array, can be returned from functions)
 - `@Ptr T` annotation for pointer types
