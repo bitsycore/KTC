@@ -32,7 +32,7 @@ interface MutableList<T> : List<T> {
 
 class ArrayList<T>(capacity: Int) : MutableList<T> {
 
-	var buf: @Ptr Array<T> = HeapAlloc<Array<T>>(if (capacity > 0) capacity else 4)!!
+	private var buf: @Ptr Array<T> = HeapAlloc<Array<T>>(if (capacity > 0) capacity else 4)!!
 
 	override var size: Int = 0
 		private set
