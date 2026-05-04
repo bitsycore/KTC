@@ -77,6 +77,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val valTopProps = mutableSetOf<String>()  // top-level val properties (cannot be reassigned)
     private val extensionFuns = mutableMapOf<String, MutableList<FunDecl>>()
     private val interfaces = mutableMapOf<String, IfaceInfo>()
+    // Type ID registry: each class/interface gets an incrementing integer ID for is/as checks
+    private val typeIds = mutableMapOf<String, Int>()
+    private var nextTypeId = 0
+    private fun getTypeId(name: String): Int = typeIds.getOrPut(name) { nextTypeId++ }
     // Maps class name → synthetic companion object name (e.g. "Foo" → "Foo_Companion")
     private val classCompanions = mutableMapOf<String, String>()
 
@@ -593,6 +597,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     ci.methods += m
                 }
                 classes[d.name] = ci
+                getTypeId(d.name)
                 if (d.typeParams.isNotEmpty()) genericClassDecls[d.name] = d
                 if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces.map { it.name }
                 // Collect companion objects declared inside this class
@@ -605,6 +610,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             is EnumDecl  -> enums[d.name] = EnumInfo(d.name, d.entries)
             is InterfaceDecl -> {
                 interfaces[d.name] = IfaceInfo(d.name, d.methods, d.properties, d.typeParams, d.superInterfaces)
+                getTypeId(d.name)
                 if (d.typeParams.isNotEmpty()) {
                     genericIfaceDecls[d.name] = d
                     allGenericTypeParamNames += d.typeParams
@@ -877,6 +883,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // Copy methods from template
                 for (m in templateCi.methods) ci.methods += m
                 classes[mangledName] = ci
+                getTypeId(mangledName)
                 // Register symbol prefix for the mangled name (same as template's package)
                 symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
                 // Store type bindings for resolving method return types later
@@ -932,6 +939,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Resolve super interfaces
         val resolvedSupers = template.superInterfaces.map { substituteTypeRef(it, subst) }
         interfaces[mangledName] = IfaceInfo(mangledName, methods, properties, emptyList(), resolvedSupers)
+        getTypeId(mangledName)
         symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
         // Recursively monomorphize parent interfaces
         for (superRef in resolvedSupers) {
@@ -1385,7 +1393,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: typedef struct ---
+        hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[d.name]!!}")
         hdr.appendLine("typedef struct {")
+        hdr.appendLine("    ktc_Int __type_id;")
         for ((name, type) in ci.props) {
             val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val resolved = resolveTypeName(type)
@@ -1418,9 +1428,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName ${cName}_create($paramDecl);")
         impl.appendLine("$cName ${cName}_create($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
+            impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
+            impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
             for ((name, type) in ci.ctorProps) {
                 val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
                 val resolved = resolveTypeName(type)
@@ -1491,7 +1502,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: struct definition (forward typedef already emitted) ---
+        hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[ci.name]!!}")
         hdr.appendLine("struct $cName {")
+        hdr.appendLine("    ktc_Int __type_id;")
         for ((name, type) in ci.props) {
             val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
             val resolved = resolveTypeName(type)
@@ -1524,9 +1537,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName ${cName}_create($paramDecl);")
         impl.appendLine("$cName ${cName}_create($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-            impl.appendLine("    return ($cName){${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
+            impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
+            impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
             for ((name, type) in ci.ctorProps) {
                 val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
                 val resolved = resolveTypeName(type)
@@ -2243,6 +2257,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      */
     private fun emitIfaceInfo(info: IfaceInfo) {
         val cName = pfx(info.name)
+        hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[info.name]!!}")
         // Collect all methods/properties including inherited from super interfaces
         val allMethods = collectAllIfaceMethods(info)
         val allProps = collectAllIfaceProperties(info)
@@ -3700,7 +3715,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     "${neg}($subj >= ${genExpr(range.left)} && $subj <= ${genExpr(range.right)})"
                 } else "${neg}(/* in ${genExpr(range)} */)"   // fallback
             }
-            is IsCond   -> "/* is ${c.type.name} */"  // no RTTI in subset
+            is IsCond   -> {
+                val target = resolveTypeName(c.type)
+                val check = if (classes.containsKey(target)) {
+                    "$subj.__type_id == ${pfx(target)}_TYPE_ID"
+                } else if (interfaces.containsKey(target)) {
+                    val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
+                    if (impls.isEmpty()) "false"
+                    else impls.joinToString(" || ") { "$subj.__type_id == ${pfx(it)}_TYPE_ID" }
+                } else {
+                    "/* is ${c.type.name} */ true"
+                }
+                if (c.negated) "!($check)" else "($check)"
+            }
         }
     }
 
@@ -3958,8 +3985,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
         is StrTemplateExpr -> genStrTemplate(e)
-        is IsCheckExpr -> "/* is-check */ true"
-        is CastExpr    -> "(${cType(e.type)})(${genExpr(e.expr)})"
+        is IsCheckExpr -> {
+            val target = resolveTypeName(e.type)
+            val inner = genExpr(e.expr)
+            val check = if (classes.containsKey(target)) {
+                "${inner}.__type_id == ${pfx(target)}_TYPE_ID"
+            } else if (interfaces.containsKey(target)) {
+                val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
+                if (impls.isEmpty()) "false"  // no class implements this interface
+                else impls.joinToString(" || ") { "${inner}.__type_id == ${pfx(it)}_TYPE_ID" }
+            } else {
+                "/* is-check: unknown type '${target}' */ true"
+            }
+            if (e.negated) "!($check)" else "($check)"
+        }
+        is CastExpr    -> {
+            val target = resolveTypeName(e.type)
+            val inner = genExpr(e.expr)
+            if (interfaces.containsKey(target)) {
+                "${pfx(target)}_as_$target(&($inner))"
+            } else {
+                "(${cType(e.type)})($inner)"
+            }
+        }
         is FunRefExpr  -> pfx(e.name)    // ::functionName → C function pointer
         is LambdaExpr  -> error("Lambda can only be passed to an inline function, not used as a standalone expression")
     }

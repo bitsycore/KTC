@@ -89,4 +89,63 @@ class InterfaceUnitTest : TranspilerTestBase() {
         r.sourceContains("test_Main_Circle_as_Shape")
         r.sourceContains("test_Main_Square_as_Shape")
     }
+
+    // ── Type ID system ────────────────────────────────────────────────
+
+    @Test fun typeIdDefineInHeader() {
+        val r = transpileMain("val c = Circle(5.0f)", decls = shapeDecls)
+        r.headerContains("#define test_Main_Circle_TYPE_ID")
+        r.headerContains("#define test_Main_Square_TYPE_ID")
+        r.headerContains("#define test_Main_Shape_TYPE_ID")
+    }
+
+    @Test fun typeIdFieldInStruct() {
+        val r = transpileMain("val c = Circle(5.0f)", decls = shapeDecls)
+        r.headerContains("ktc_Int __type_id;")
+    }
+
+    @Test fun typeIdInConstructor() {
+        // Classes with all ctor props use compound literal: return (Circle){TYPE_ID, radius};
+        val r = transpileMain("val c = Circle(5.0f)", decls = shapeDecls) 
+        r.sourceContains("return (test_Main_Circle){")
+        r.sourceContains("test_Main_Circle_TYPE_ID")
+    }
+
+    @Test fun isCheckClass() {
+        val r = transpile("""
+            package test.Main
+            $shapeDecls
+            class Box(val w: Float)
+            fun main(args: Array<String>) {
+                val c = Circle(5.0f)
+                if (c is Circle) println("yes")
+            }
+        """)
+        r.sourceContains("c.__type_id == test_Main_Circle_TYPE_ID")
+    }
+
+    @Test fun isCheckInterface() {
+        val r = transpile("""
+            package test.Main
+            $shapeDecls
+            fun main(args: Array<String>) {
+                val s: Shape = Circle(5.0f)
+                if (s is Shape) println("yes")
+            }
+        """)
+        r.sourceContains("__type_id == test_Main_Circle_TYPE_ID ||")
+    }
+
+    @Test fun negatedIsCheck() {
+        val r = transpile("""
+            package test.Main
+            $shapeDecls
+            class Box(val w: Float)
+            fun main(args: Array<String>) {
+                val b = Box(3.0f)
+                if (b !is Circle) println("no")
+            }
+        """)
+        r.sourceContains("!(b.__type_id == test_Main_Circle_TYPE_ID)")
+    }
 }
