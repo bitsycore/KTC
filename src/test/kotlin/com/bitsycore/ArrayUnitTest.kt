@@ -68,12 +68,48 @@ class ArrayUnitTest : TranspilerTestBase() {
 
     // ── Array index write ────────────────────────────────────────────
 
-    @Test fun arrayIndexWrite() {
+    // ── arrayOfNulls ──────────────────────────────────────────────────
+
+    @Test fun arrayOfNullsInt() {
         val r = transpileMain("""
-            val arr = intArrayOf(10, 20, 30)
-            arr[1] = 99
+            val arr = arrayOfNulls<Int>(5)
+            println(arr.size)
         """)
-        r.sourceContains("arr[1] = 99;")
+        r.sourceContains("ktc_Int_Optional*")
+        r.sourceContains("ktc_alloca")
+        r.sourceContains("arr\$len")
+        r.sourceContainsXTime("ktc_alloca", 1)
+    }
+
+    @Test fun arrayOfNullsString() {
+        val r = transpileMain("""
+            val arr = arrayOfNulls<String>(3)
+            println(arr.size)
+        """)
+        r.sourceContains("ktc_String_Optional*")
+        r.sourceContains("arr\$len")
+        r.sourceContainsXTime("ktc_alloca", 1)
+    }
+
+    @Test fun arrayOfNullsAccess() {
+        val r = transpileMain("""
+            val arr = arrayOfNulls<Int>(3)
+            val v: Int? = arr[0]
+        """)
+        r.sourceContains("ktc_Int_Optional")
+        r.sourceContains("arr")
+        r.sourceContainsXTime("ktc_alloca", 1)
+    }
+
+    @Test fun arrayOfNullsWithVariableSize() {
+        val r = transpileMain("""
+            val n = 10
+            val arr = arrayOfNulls<Float>(n)
+            println(arr.size)
+        """)
+        r.sourceContains("ktc_Float_Optional*")
+        r.sourceContains("arr\$len")
+        r.sourceContainsXTime("ktc_alloca")
     }
 
 }

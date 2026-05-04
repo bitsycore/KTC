@@ -1,5 +1,6 @@
 package com.bitsycore
 
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -160,6 +161,16 @@ open class TranspilerTestBase {
         assertTrue(
             source.contains(text),
             message ?: "Expected C source to contain:\n  «$text»\n\nActual source:\n$source"
+        )
+    }
+
+    protected fun TranspileResult.sourceContainsXTime(text: String, time: Int = 1, message: String? = null) {
+        var count = 0
+        var pos = source.indexOf(text)
+        while (pos >= 0) { count++; pos = source.indexOf(text, pos + 1) }
+        assertEquals(
+            time, count,
+            message ?: "Expected C source to contain «$text» exactly once, but found $count times.\n\nActual source:\n$source"
         )
     }
 

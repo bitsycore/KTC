@@ -690,6 +690,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         }
                     }
                 }
+                if (name == "arrayOfNulls" && e.typeArgs.isNotEmpty()) {
+                    val elem = e.typeArgs[0].name
+                    if (elem !in primitives) classArrayTypes.add(elem)
+                }
                 // mutableListOf / arrayListOf: no longer built-in
                 // HashMap and mapOf use generic runtime — no per-type scanning needed
                 // Recurse into args
@@ -2826,6 +2830,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun tryArrayOfInit(varName: String, init: Expr, ct: String, t: String, ind: String): String? {
         if (init !is CallExpr) return null
         val callee = (init.callee as? NameExpr)?.name ?: return null
+        // arrayOfNulls<T>(size) — stack-allocate array of Optionals, all set to ktc_NONE
+        if (callee == "arrayOfNulls") {
+            val typeArg = init.typeArgs.getOrNull(0)
+            val elemName = typeSubst[typeArg?.name ?: "Int"] ?: (typeArg?.name ?: "Int")
+            val optCType = optCTypeName("${elemName}?")
+            val size = if (init.args.isNotEmpty()) genExpr(init.args[0].expr) else "0"
+            return "${ind}$optCType* ${varName} = ($optCType*)ktc_alloca(sizeof($optCType) * (size_t)($size));\n" +
+                   "${ind}memset($varName, 0, sizeof($optCType) * (size_t)($size));\n" +
+                   "${ind}const int32_t ${varName}\$len = $size;"
+        }
         // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
         if (callee == "arrayOf") {
             val vTypeArg = init.typeArgs.getOrNull(0)
@@ -4350,6 +4364,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "arrayOf" -> {
                 return genArrayOfExpr(name, args, e.typeArgs.getOrNull(0))
             }
+            "arrayOfNulls" -> {
+                val typeArg = e.typeArgs.getOrNull(0)
+                val elemName = typeSubst[typeArg?.name ?: "Int"] ?: (typeArg?.name ?: "Int")
+                val optCType = optCTypeName("${elemName}?")
+                return genNewArray(optCType, args)
+            }
             "ByteArray"    -> return genNewArray("ktc_Byte", args)
             "ShortArray"   -> return genNewArray("ktc_Short", args)
             "IntArray"     -> return genNewArray("ktc_Int", args)
@@ -5736,6 +5756,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     "String" -> "StringArray"
                     else -> { classArrayTypes.add(elemType); "${elemType}Array" }
                 }
+            }
+            if (name == "arrayOfNulls") {
+                if (e.typeArgs.isNotEmpty()) {
+                    val vTypeArg = e.typeArgs[0]
+                    val vElemName = typeSubst[vTypeArg.name] ?: vTypeArg.name
+                    return when (vElemName) {
+                        "Byte" -> "ByteOptArray"; "Short" -> "ShortOptArray"
+                        "Int" -> "IntOptArray";   "Long" -> "LongOptArray"
+                        "Float" -> "FloatOptArray"; "Double" -> "DoubleOptArray"
+                        "Boolean" -> "BooleanOptArray"; "Char" -> "CharOptArray"
+                        "UByte" -> "UByteOptArray"; "UShort" -> "UShortOptArray"
+                        "UInt" -> "UIntOptArray"; "ULong" -> "ULongOptArray"
+                        "String" -> "StringOptArray"
+                        else -> { classArrayTypes.add(vElemName); "${vElemName}OptArray" }
+                    }
+                }
+                return "IntOptArray"
             }
             // Generic Array<T>(size) constructor
             if (name == "Array" && e.typeArgs.isNotEmpty()) {
