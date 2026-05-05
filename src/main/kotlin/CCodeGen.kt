@@ -394,6 +394,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             emittedIfaceNames += d.name
         }
 
+        // Forward-declare all interface structs so class _as_ declarations
+        // can reference them before the tagged union is fully defined.
+        for ((name, _) in interfaces) {
+            val cName = pfx(name)
+            hdr.appendLine("typedef struct $cName $cName;")
+        }
+
         // Emit struct/enum/object declarations (defines the element types needed by generic interfaces)
         // Skip generic templates — they are emitted per concrete instantiation
         var firstClass = true
@@ -416,14 +423,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else -> {}
         }
 
-        // Forward-declare all interface structs so other types (function signatures,
-        // _as_ return types) can reference them before the tagged union is fully defined.
-        for ((name, _) in interfaces) {
-            val cName = pfx(name)
-            hdr.appendLine("typedef struct $cName $cName;")
-        }
-        hdr.appendLine()
-
         // Emit forward declarations for all monomorphized generic class types
         // so method signatures can reference them before their full definitions
         for ((baseName, instantiations) in genericInstantiations) {
@@ -434,7 +433,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 hdr.appendLine("typedef struct $cName $cName;")
             }
         }
-        hdr.appendLine()
+        if (genericInstantiations.isNotEmpty()) hdr.appendLine()
 
         // Emit monomorphized generic class instantiations BEFORE generic interfaces,
         // because interface vtable structs may reference generic class types as return types
@@ -442,14 +441,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Forward-declare all monomorphized generic interface vtable structs so that
         // class _as_ declarations can reference them before the full vtable definition.
+        var emittedMonoFwd = false
         for ((name, info) in interfaces) {
             val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
             if (isMonomorphized) {
                 val cName = pfx(name)
                 hdr.appendLine("typedef struct ${cName}_vt ${cName}_vt;")
+                emittedMonoFwd = true
             }
         }
-        hdr.appendLine()
+        if (emittedMonoFwd) hdr.appendLine()
 
         for ((baseName, instantiations) in genericInstantiations) {
             val templateDecl = genericClassDecls[baseName] ?: continue
@@ -531,6 +532,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit tagged-union struct for ALL interfaces (non-generic + monomorphized).
         // Must be AFTER class struct definitions so union members are complete types
         // and AFTER all vtables so transitive implementors are known.
+        val hasTaggedUnions = interfaces.keys.any { it in emittedIfaceNames || it in emittedMonoIfaceVtables }
+        if (hasTaggedUnions) hdr.appendLine()
         for ((name, info) in interfaces) {
             if (name in emittedIfaceNames) {
                 emitIfaceInfo(info)
