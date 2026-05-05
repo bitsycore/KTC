@@ -666,7 +666,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     }
                 }
                 for (p in d.members.filterIsInstance<PropDecl>()) {
-                    val propType = p.type ?: TypeRef(inferExprType(p.init) ?: "Int")
+                    val propType = p.type ?: inferInitType(p.init)
                     if (isRawArrayTypeRef(propType)) {
                         currentStmtLine = p.line
                         codegenError("Class property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
@@ -676,7 +676,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val valCtorPropNames = d.ctorParams.filter { it.isVal }.map { it.name }.toSet()
                 val ctorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { it.name to it.type }
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
-                    BodyProp(p.name, p.type ?: TypeRef(inferExprType(p.init) ?: "Int"), p.init, p.line, p.isPrivate, p.mutable, p.isPrivateSet)
+                    BodyProp(p.name, p.type ?: inferInitType(p.init), p.init, p.line, p.isPrivate, p.mutable, p.isPrivateSet)
                 }
                 val privateProps = bodyProps.filter { it.isPrivate }.map { it.name }.toSet()
                 val privateSetPropNames = bodyProps.filter { it.isPrivateSet }.map { it.name }.toSet()
@@ -744,7 +744,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             is ObjectDecl -> {
                 for (p in d.members.filterIsInstance<PropDecl>()) {
-                    val propType = p.type ?: TypeRef(inferExprType(p.init) ?: "Int")
+                    val propType = p.type ?: inferInitType(p.init)
                     if (isRawArrayTypeRef(propType)) {
                         currentStmtLine = p.line
                         codegenError("Object property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
@@ -3389,6 +3389,21 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "HeapArrayResize" -> inner.args.getOrNull(1)?.expr   // HeapArrayResize<Array<T>>(ptr, size)
             else      -> null
         }
+    }
+
+    /** Infer a TypeRef from an init expression, detecting @Ptr Array patterns from HeapAlloc. */
+    private fun inferInitType(init: Expr?): TypeRef {
+        val inner = if (init is NotNullExpr) init.expr else init
+        if (inner is CallExpr) {
+            val name = (inner.callee as? NameExpr)?.name
+            if (name in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize") && inner.typeArgs.isNotEmpty()) {
+                val ta = inner.typeArgs[0]
+                if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                    return ta.copy(annotations = ta.annotations + Annotation("Ptr"))
+                }
+            }
+        }
+        return TypeRef(inferExprType(init) ?: "Int")
     }
 
     /** If a body prop is an array type, emit $self.name$len = allocSize after the assignment. */
