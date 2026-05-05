@@ -25,11 +25,27 @@ class File(private var name: String) : Resource {
     override fun label(): String { return "File($name)" }
 }
 
+// TODO: This should return a Union of Circle and Square
+// Right now it's allocated memory
+fun shapeReturnerById(id: Int): Shape {
+    if (id % 2 == 0)
+        return Circle(1.0f)
+    else
+        return Square(1.0f)
+}
+
 fun main() {
     val c = Circle(2.0f)
     val s = Square(3.0f)
+
     println("${c.name()}: ${c.area()}")
     println("${s.name()}: ${s.area()}")
+
+    val shape1 = shapeReturnerById(0)
+    val shape2 = shapeReturnerById(1)
+
+    println("${shape1.name()}: ${shape1.area()}")
+    println("${shape2.name()}: ${shape2.area()}")
 
     // Interface as parameter (direct, not nullable)
     val shape: Shape = c
