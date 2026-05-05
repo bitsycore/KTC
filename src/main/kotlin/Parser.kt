@@ -43,11 +43,7 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.VAL)    -> parsePropDecl(mutable = false, isPrivate = isPrivate)
             at(TokenType.VAR)    -> parsePropDecl(mutable = true, isPrivate = isPrivate)
             at(TokenType.AT) -> {
-                // @Ptr val/var — parse annotations, then delegate
-                val anns = parseAnnotations()
-                if (at(TokenType.VAL)) parsePropDecl(mutable = false, preAnnotations = anns, isPrivate = isPrivate)
-                else if (at(TokenType.VAR)) parsePropDecl(mutable = true, preAnnotations = anns, isPrivate = isPrivate)
-                else error("Expected val/var after annotation at ${cur()}")
+                error("Annotations like @Ptr must be placed on the type (: @Ptr Type), not before val/var")
             }
             at(TokenType.INIT)   -> { advance(); FunDecl("init", emptyList(), null, parseBlock()) }
             else -> error("Expected declaration at ${cur()}")
