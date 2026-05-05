@@ -2612,6 +2612,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
             hdr.appendLine("    $cRet (*${m.name})(void* \$self$extraParams);")
         }
+        if (allMethods.none { it.name == "dispose" }) {
+            hdr.appendLine("    void (*dispose)(void* \$self);")
+        }
         hdr.appendLine("} ${cName}_vt;")
         hdr.appendLine()
     }
@@ -2795,6 +2798,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     else "${cClass}_${m.name}"
                     impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
                 }
+                if (allMethods.none { it.name == "dispose" }) {
+                    val fnDispose = if (classes[className]?.methods?.none { it.name == "dispose" } == true)
+                        "ktc_noop_dispose"
+                    else "${cClass}_dispose"
+                    impl.appendLine("    (void (*)(void*)) $fnDispose,")
+                }
                 impl.appendLine("};")
                 impl.appendLine()
             }
@@ -2874,6 +2883,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     "ktc_noop_dispose"
                 else "${cClass}_${m.name}"
                 impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
+            }
+            if (superMethods.none { it.name == "dispose" }) {
+                val fnDispose = if (classes[className]?.methods?.none { it.name == "dispose" } == true)
+                    "ktc_noop_dispose"
+                else "${cClass}_dispose"
+                impl.appendLine("    (void (*)(void*)) $fnDispose,")
             }
             impl.appendLine("};")
             impl.appendLine()

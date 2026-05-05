@@ -6,23 +6,22 @@ interface Shape {
 }
 
 class Circle(private var radius: Float) : Shape {
-    override fun area(): Float { return 3.14159f * radius * radius }
-    override fun name(): String { return "Circle" }
+    override fun area(): Float = 3.14159f * radius * radius
+    override fun name(): String = "Circle"
 }
 
 class Square(private var side: Float) : Shape {
-    override fun area(): Float { return side * side }
-    override fun name(): String { return "Square" }
+    override fun area(): Float = side * side
+    override fun name(): String = "Square"
 }
 
 interface Resource {
-    fun dispose()
     fun label(): String
 }
 
 class File(private var name: String) : Resource {
     override fun dispose() { println("closing file $name") }
-    override fun label(): String { return "File($name)" }
+    override fun label(): String = "File($name)"
 }
 
 // This should return a Union of Circle and Square
