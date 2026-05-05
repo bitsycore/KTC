@@ -1676,9 +1676,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         // Implicit no-op dispose if not overridden
         if (d.members.none { it is FunDecl && it.name == "dispose" }) {
-            hdr.appendLine("void ${cName}_dispose($cName* \$self);")
-            impl.appendLine("void ${cName}_dispose($cName* \$self) { (void)\$self; }")
-            impl.appendLine()
+            hdr.appendLine("#define ${cName}_dispose(self) ((void)(self))")
         }
         // Implicit hashCode — default returns __type_id, data classes hash all fields
         if (d.members.none { it is FunDecl && it.name == "hashCode" }) {
@@ -1855,9 +1853,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         // Implicit no-op dispose if not overridden
         if (templateDecl.members.none { it is FunDecl && it.name == "dispose" }) {
-            hdr.appendLine("void ${cName}_dispose($cName* \$self);")
-            impl.appendLine("void ${cName}_dispose($cName* \$self) { (void)\$self; }")
-            impl.appendLine()
+            hdr.appendLine("#define ${cName}_dispose(self) ((void)(self))")
         }
         // Implicit hashCode
         if (templateDecl.members.none { it is FunDecl && it.name == "hashCode" }) {
