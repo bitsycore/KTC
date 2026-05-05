@@ -9,6 +9,15 @@ object Config {
     }
 }
 
+object Config2 {
+    private val buffer: @Ptr Array<Int> = HeapAlloc<Array<Int>>(128)
+
+    override fun dispose() {
+        println("AutoFreeing Config2")
+        HeapFree(buffer)
+    }
+
+}
 object Greeter {
     fun greet(name: String) {
         println("Hello, $name!")

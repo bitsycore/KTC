@@ -174,6 +174,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private var currentClass: String? = null
     private var currentObject: String? = null
     private var selfIsPointer = true
+    // Objects with dispose methods — called on main() exit
+    private val objectsWithDispose = mutableListOf<String>()  // cName of objects with dispose
 
     // ── Trampolined array params (pass-by-value copy on stack) ────────
     // Names of array parameters whose data has been copied via alloca+memcpy.
@@ -584,6 +586,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ═══════════════════════════ Collect declarations (pre-pass) ═════
 
     private fun collectDecls() {
+        objectsWithDispose.clear()
         // Collect from all files for cross-reference resolution
         for (f in allFiles) {
             val fpfx = f.pkg?.replace('.', '_')?.plus("_") ?: ""
@@ -733,6 +736,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     oi.methods += m
                 }
                 objects[d.name] = oi
+                // Track objects with dispose for auto-call on main exit (current file only)
+                if (validate) {
+                    for (m in d.members) if (m is FunDecl && m.name == "dispose") {
+                        val cName = pfx(d.name)
+                        if (cName !in objectsWithDispose) objectsWithDispose.add(cName)
+                    }
+                }
             }
             is FunDecl -> {
                 if (d.returnType != null && isRawArrayTypeRef(d.returnType)) {
@@ -2848,6 +2858,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (isMain && memTrack) {
             impl.appendLine("    fflush(stdout);")
             impl.appendLine("    ktc_mem_report();")
+        }
+        if (isMain && objectsWithDispose.isNotEmpty()) {
+            for (cName in objectsWithDispose.distinct()) {
+                impl.appendLine("    ${cName}_dispose();")
+            }
         }
         if (isMain) impl.appendLine("    return 0;")
         else if (returnsNullable && lastStmt !is ReturnStmt) impl.appendLine("    return ${optNone(optRetCType)};")
