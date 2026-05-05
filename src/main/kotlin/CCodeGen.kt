@@ -26,6 +26,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return "$prefix$name"
     }
 
+    private fun inferredTypeRef(typeName: String?): TypeRef? {
+        if (typeName == null) return null
+        return TypeRef(typeName)
+    }
+
     // ── Symbol tables (populated by collectDecls) ────────────────────
     private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false, val mutable: Boolean = true, val isPrivateSet: Boolean = false)
 
@@ -772,11 +777,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (d.returnType != null && isRawArrayTypeRef(d.returnType)) {
                     codegenError("Function '${d.name}' cannot return raw array type '${d.returnType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
                 }
+                val effectiveReturnType = d.returnType ?: d.body?.let { inferredTypeRef(inferBlockType(it)) }
                 if (d.typeParams.isNotEmpty()) {
                     // Generic function template — store for monomorphization
                     // (dedup: overwrite funSig, but only add to list if not already present)
                     if (genericFunDecls.none { it === d }) genericFunDecls += d
-                    funSigs[d.name] = FunSig(d.params, d.returnType)
+                    funSigs[d.name] = FunSig(d.params, effectiveReturnType)
                     allGenericTypeParamNames += d.typeParams
                     if (d.isInline && d.receiver != null) inlineExtFunDecls[d.name] = d
                 } else if (d.receiver != null && d.receiver.typeArgs.any { it.name == "*" }) {
@@ -791,9 +797,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     extensionFuns.getOrPut(recvName) { mutableListOf() }.add(d)
                     // Register as method on the class for inference
                     classes[recvName]?.methods?.add(d)
-                    funSigs["${recvName}.${d.name}"] = FunSig(d.params, d.returnType)
+                    funSigs["${recvName}.${d.name}"] = FunSig(d.params, effectiveReturnType)
                 } else {
-                    funSigs[d.name] = FunSig(d.params, d.returnType)
+                    funSigs[d.name] = FunSig(d.params, effectiveReturnType)
                     if (d.isInline) inlineFunDecls[d.name] = d
                 }
             }
@@ -1942,12 +1948,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         val returnsNullable = f.returnType != null && f.returnType.nullable
         val returnsSizedArray = !returnsNullable && f.returnType != null && isSizedArrayTypeRef(f.returnType)
-        val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else ""
+        val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else f.body?.let { inferBlockType(it) } ?: ""
         val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
         val cRet = when {
             returnsSizedArray -> "void"
             returnsNullable -> optRetCType
-            f.returnType != null -> cType(f.returnType)
+            retResolved.isNotEmpty() -> cTypeStr(retResolved)
             else -> "void"
         }
         val selfParam = "$cClass* \$self"
@@ -2926,9 +2932,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val returnsNullable = !isMain && f.returnType != null && f.returnType.nullable
         val returnsSizedArray = !isMain && !returnsNullable && f.returnType != null && isSizedArrayTypeRef(f.returnType)
         val returnsArray = !isMain && !returnsNullable && !returnsSizedArray && f.returnType != null && isArrayType(resolveTypeName(f.returnType))
-        val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else ""
+        val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else f.body?.let { inferBlockType(it) } ?: ""
         val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
-        val cRet  = if (isMain) "int" else if (returnsSizedArray) "void" else if (returnsNullable) optRetCType else if (f.returnType != null) cType(f.returnType) else "void"
+        val cRet  = if (isMain) "int" else if (returnsSizedArray) "void" else if (returnsNullable) optRetCType else if (retResolved.isNotEmpty()) cTypeStr(retResolved) else "void"
         val cName = if (isMain) "main" else pfx(f.name)
         val params = when {
             isMainWithArgs -> "int argc, char** argv"
@@ -5721,9 +5727,66 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return inner
     }
 
+    /** Find a common interface implemented by both types, or null. */
+    private fun findCommonInterface(type1: String?, type2: String?): String? {
+        if (type1 == null || type2 == null || type1 == type2) return null
+        val ifaces1 = classInterfaces[type1]?.toSet() ?: return null
+        val ifaces2 = classInterfaces[type2]?.toSet() ?: return null
+        val common = ifaces1.intersect(ifaces2)
+        return common.firstOrNull()
+    }
+
+    /** Emit block statements into preStmts, wrapping the last expression into an interface struct. */
+    private fun emitBlockIntoTempIface(b: Block, tempVar: String, concreteType: String, ifaceName: String, indent: String) {
+        val cConcrete = pfx(concreteType)
+        val impls = interfaceImplementors[ifaceName] ?: emptyList()
+        val dataName = ifaceDataName(concreteType)
+        val fieldPath = when {
+            impls.size <= 1 -> ".$dataName"
+            else -> ".data.$dataName"
+        }
+        for ((i, s) in b.stmts.withIndex()) {
+            if (i == b.stmts.lastIndex) {
+                val expr = when (s) {
+                    is ExprStmt -> s.expr
+                    is ReturnStmt -> s.value
+                    else -> null
+                }
+                if (expr != null) {
+                    val valExpr = genExpr(expr)
+                    preStmts += "$indent$tempVar$fieldPath = $valExpr;"
+                    preStmts += "$indent$tempVar.vt = &${cConcrete}_${ifaceName}_vt;"
+                } else {
+                    emitStmtToPreStmts(s, indent)
+                }
+            } else {
+                emitStmtToPreStmts(s, indent)
+            }
+        }
+    }
+
     // ── if expression (as C ternary or temp) ─────────────────────────
 
     private fun genIfExpr(e: IfExpr): String {
+        val thenType = inferBlockType(e.then)
+        val elseType = if (e.els != null) inferBlockType(e.els) else null
+        val commonIface = findCommonInterface(thenType, elseType)
+
+        // Interface coercion: branches return different types sharing a common interface
+        if (commonIface != null) {
+            val t = tmp()
+            val cIface = pfx(commonIface)
+            preStmts += "$cIface $t;"
+            preStmts += "if (${genExpr(e.cond)}) {"
+            emitBlockIntoTempIface(e.then, t, thenType!!, commonIface, "    ")
+            if (e.els != null) {
+                preStmts += "} else {"
+                emitBlockIntoTempIface(e.els, t, elseType!!, commonIface, "    ")
+            }
+            preStmts += "}"
+            return t
+        }
+
         // Simple case: both branches are single expressions → ternary
         val thenExpr = blockAsSingleExpr(e.then)
         val elseExpr = if (e.els != null) blockAsSingleExpr(e.els) else null
@@ -5799,9 +5862,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     private fun inferIfExprType(e: IfExpr): String? {
         val thenType = inferBlockType(e.then)
-        if (thenType != null) return thenType
-        if (e.els != null) return inferBlockType(e.els)
-        return null
+        val elseType = if (e.els != null) inferBlockType(e.els) else null
+        val commonIface = findCommonInterface(thenType, elseType)
+        if (commonIface != null) return commonIface
+        return thenType ?: elseType
     }
 
     private fun inferBlockType(b: Block): String? {
@@ -5816,6 +5880,44 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // ── when expression (nested ternary or temp) ──────────────────────
 
     private fun genWhenExpr(e: WhenExpr): String {
+        // Check if branches need interface coercion (different types sharing a common interface)
+        val branchTypes = e.branches.map { inferBlockType(it.body) }
+        val distinctTypes = branchTypes.filterNotNull().distinct()
+        val commonIface = if (distinctTypes.size > 1) {
+            var common: Set<String>? = null
+            for (t in distinctTypes) {
+                val ifaces = classInterfaces[t]?.toSet() ?: break
+                if (common == null) common = ifaces
+                else common = common.intersect(ifaces)
+                if (common.isEmpty()) break
+            }
+            common?.firstOrNull()
+        } else null
+
+        if (commonIface != null) {
+            // Interface coercion: use temp with interface type, wrap each branch
+            val t = tmp()
+            val cIface = pfx(commonIface)
+            preStmts += "$cIface $t;"
+            for ((bi, br) in e.branches.withIndex()) {
+                if (br.conds == null) {
+                    preStmts += if (bi > 0) "} else {" else "{"
+                } else {
+                    val condStr = br.conds.joinToString(" || ") { genWhenCond(it, e.subject) }
+                    val keyword = if (bi == 0) "if" else "} else if"
+                    preStmts += "$keyword ($condStr) {"
+                }
+                val brType = branchTypes[bi]
+                if (brType != null && classes.containsKey(brType)) {
+                    emitBlockIntoTempIface(br.body, t, brType, commonIface, "    ")
+                } else {
+                    emitBlockIntoTemp(br.body, t, "    ")
+                }
+            }
+            preStmts += "}"
+            return t
+        }
+
         // Check if all branches are single-expression → nested ternary
         val allSimple = e.branches.all { blockAsSingleExpr(it.body) != null }
         if (allSimple) {
@@ -5853,11 +5955,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     private fun inferWhenExprType(e: WhenExpr): String? {
-        for (br in e.branches) {
-            val t = inferBlockType(br.body)
-            if (t != null) return t
+        val types = e.branches.mapNotNull { inferBlockType(it.body) }
+        if (types.isEmpty()) return null
+        if (types.distinct().size > 1) {
+            var common: Set<String>? = null
+            for (t in types) {
+                val ifaces = classInterfaces[t]?.toSet() ?: break
+                if (common == null) common = ifaces
+                else common = common.intersect(ifaces)
+                if (common.isEmpty()) break
+            }
+            if (common != null && common.isNotEmpty()) return common.first()
         }
-        return null
+        return types.first()
     }
 
     // ── println / print (expression context — rare) ──────────────────
@@ -6226,8 +6336,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is DotExpr  -> inferDotType(e)
         is SafeDotExpr -> inferDotTypeSafe(e)
         is IndexExpr -> inferIndexType(e)
-        is IfExpr   -> inferExprType(e.then.stmts.lastOrNull()?.let { (it as? ExprStmt)?.expr ?: (it as? ReturnStmt)?.value })
-        is WhenExpr -> e.branches.firstOrNull()?.body?.stmts?.lastOrNull()?.let { inferExprType((it as? ExprStmt)?.expr) }
+        is IfExpr   -> inferIfExprType(e)
+        is WhenExpr -> inferWhenExprType(e)
         is NotNullExpr -> inferExprType(e.expr)?.removeSuffix("?")
         is ElvisExpr -> (inferExprType(e.left) ?: inferExprType(e.right))?.removeSuffix("?")
         is IsCheckExpr -> "Boolean"
