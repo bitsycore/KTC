@@ -31,6 +31,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return TypeRef(typeName)
     }
 
+    /** Convert internal type name to Kotlin display name: "Wrapper_String" → "Wrapper<String>" */
+    private fun ktDisplayName(internal: String): String {
+        // Pair/Triple/Tuple intrinsics
+        pairTypeComponents[internal]?.let { return "Pair<${it.first}, ${it.second}>" }
+        tripleTypeComponents[internal]?.let { return "Triple<${it.first}, ${it.second}, ${it.third}>" }
+        tupleTypeComponents[internal]?.let { types -> return "Tuple<${types.joinToString(", ")}>" }
+        // Generic class instantiation: find base name and split by _
+        for (baseName in genericClassDecls.keys) {
+            if (internal.startsWith("${baseName}_")) {
+                val typeArgs = internal.removePrefix("${baseName}_").split("_")
+                return "$baseName<${typeArgs.joinToString(", ")}>"
+            }
+        }
+        return internal
+    }
+
     // ── Symbol tables (populated by collectDecls) ────────────────────
     private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false, val mutable: Boolean = true, val isPrivateSet: Boolean = false)
 
@@ -4093,6 +4109,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return
         }
 
+        // Non-data class/object/interface → use toString()
+        if (classes.containsKey(t) || objects.containsKey(t) || interfaces.containsKey(t)) {
+            val str = genToString(expr, t)
+            flushPreStmts(ind)
+            val tmpStr = tmp()
+            impl.appendLine("${ind}ktc_String $tmpStr = $str;")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${tmpStr}.len, ${tmpStr}.ptr);")
+            return
+        }
+
         val fmt = printfFmt(t) + nl
         val a = printfArg(expr, t)
         impl.appendLine("${ind}printf(\"$fmt\", $a);")
@@ -4119,8 +4145,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 is ExprPart -> {
                     val t = inferExprType(part.expr) ?: "Int"
                     val expr = genExpr(part.expr)
+                    val appendStmt = genSbAppend("&${buf}_sb", expr, t)
                     flushPreStmts(ind)
-                    impl.appendLine("$ind${genSbAppend("&${buf}_sb", expr, t)}")
+                    impl.appendLine("$ind$appendStmt")
                 }
             }
         }
@@ -6096,6 +6123,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             preStmts += "${pfx(t)}_toString(&$vTmp, &${buf}_sb);"
             return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
         }
+        // Non-data class/object/interface → use toString()
+        if (classes.containsKey(t) || objects.containsKey(t) || interfaces.containsKey(t)) {
+            val str = genToString(expr, t)
+            val tmpStr = tmp()
+            preStmts += "ktc_String $tmpStr = $str;"
+            return "printf(\"%.*s$nl\", (int)${tmpStr}.len, ${tmpStr}.ptr)"
+        }
         // Heap/Ptr/Value to data class → pass pointer directly (no dereference)
         val indirectBase = anyIndirectClassName(t)
         if (indirectBase != null && classes[indirectBase]?.isData == true) {
@@ -6217,8 +6251,52 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 preStmts += "ktc_sb_append_ulong(&${buf}_sb, $recv);"
                 "ktc_sb_to_string(&${buf}_sb)"
             }
+            "Float" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[32];"
+                preStmts += "snprintf($buf, 32, \"%g\", (double)($recv));"
+                "ktc_str($buf)"
+            }
+            "Double" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[32];"
+                preStmts += "snprintf($buf, 32, \"%g\", $recv);"
+                "ktc_str($buf)"
+            }
+            "Boolean" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[8];"
+                preStmts += "snprintf($buf, 8, \"%s\", ($recv) ? \"true\" : \"false\");"
+                "ktc_str($buf)"
+            }
+            "Char" -> {
+                val buf = tmp()
+                preStmts += "char ${buf}[8];"
+                preStmts += "snprintf($buf, 8, \"%c\", (char)($recv));"
+                "ktc_str($buf)"
+            }
             "String" -> recv
-            else -> "ktc_str(\"<$type>\")"
+            else -> {
+                // Default toString: ClassName@hexHashCode (Java-like)
+                val base = type.removeSuffix("*").removeSuffix("?")
+                val hasHash = classes.containsKey(base) || objects.containsKey(base)
+                val hasIface = interfaces.containsKey(base)
+                if (hasHash) {
+                    val cName = pfx(base)
+                    val buf = tmp()
+                    val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) recv else "&$recv"
+                    preStmts += "char ${buf}[64];"
+                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
+                    "ktc_str($buf)"
+                } else if (hasIface) {
+                    val buf = tmp()
+                    preStmts += "char ${buf}[64];"
+                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
+                    "ktc_str($buf)"
+                } else {
+                    "ktc_str(\"<$type>\")"
+                }
+            }
         }
     }
 
@@ -6257,7 +6335,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val vTmp = tmp()
                     "{ ${cTypeStr(type)} $vTmp = ($expr); ${pfx(type)}_toString(&$vTmp, $sbRef); }"
                 } else {
-                    "ktc_sb_append_cstr($sbRef, \"<$type>\");"
+                    val base = type.removeSuffix("*").removeSuffix("?")
+                    if (classes.containsKey(base) || objects.containsKey(base)) {
+                        val buf = tmp()
+                        val cName = pfx(base)
+                        val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) expr else "&$expr"
+                        preStmts += "char ${buf}[64];"
+                        preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
+                        "ktc_sb_append_cstr($sbRef, $buf);"
+                    } else if (interfaces.containsKey(base)) {
+                        val buf = tmp()
+                        preStmts += "char ${buf}[64];"
+                        preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $expr.vt->hashCode((void*)&$expr));"
+                        "ktc_sb_append_cstr($sbRef, $buf);"
+                    } else {
+                        "ktc_sb_append_cstr($sbRef, \"<$type>\");"
+                    }
                 }
             }
         }
