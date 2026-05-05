@@ -115,10 +115,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // Track class/enum types used in Array<T> so we emit KT_ARRAY_DEF for them
     private val classArrayTypes = mutableSetOf<String>()
 
-    // Intrinsic Pair<A,B> types: track unique (A, B) pairs used
+    // Intrinsic Pair<A,B> types: track unique pairs used
     private val pairTypes = mutableSetOf<Pair<String, String>>()
     private val emittedPairTypes = mutableSetOf<String>()
     private val pairTypeComponents = mutableMapOf<String, Pair<String, String>>()
+
+    // Intrinsic Triple<A,B,C> types
+    private val tripleTypeComponents = mutableMapOf<String, Triple<String, String, String>>()
+    private val emittedTripleTypes = mutableSetOf<String>()
+
+    // Intrinsic Tuple<...> types (indefinite arity)
+    private val tupleTypeComponents = mutableMapOf<String, List<String>>()
+    private val emittedTupleTypes = mutableSetOf<String>()
 
 
     // ── Generics (monomorphization) ──────────────────────────────────
@@ -1566,6 +1574,29 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val (first, second) = components
                 if (paramType.typeArgs[0].name in typeParams) subst[paramType.typeArgs[0].name] = first
                 if (paramType.typeArgs[1].name in typeParams) subst[paramType.typeArgs[1].name] = second
+            }
+        }
+        // Intrinsic Triple<A,B,C> param decomposition
+        if (paramType.name == "Triple" && paramType.typeArgs.size == 3
+            && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
+            val baseType = argType.trimEnd('*', '?')
+            val components = tripleTypeComponents[baseType]
+            if (components != null) {
+                val names = paramType.typeArgs.map { it.name }
+                if (names[0] in typeParams) subst[names[0]] = components.first
+                if (names[1] in typeParams) subst[names[1]] = components.second
+                if (names[2] in typeParams) subst[names[2]] = components.third
+            }
+        }
+        // Intrinsic Tuple<...> param decomposition
+        if (paramType.name == "Tuple" && paramType.typeArgs.isNotEmpty()
+            && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple")) {
+            val baseType = argType.trimEnd('*', '?')
+            val components = tupleTypeComponents[baseType]
+            if (components != null) {
+                for ((i, name) in paramType.typeArgs.map { it.name }.withIndex()) {
+                    if (name in typeParams && i < components.size) subst[name] = components[i]
+                }
             }
         }
     }
@@ -4922,6 +4953,27 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return "($pairCType){${genExpr(args[0].expr)}, ${genExpr(args[1].expr)}}"
         }
 
+        // Triple constructor (intrinsic)
+        if (name == "Triple" && args.size == 3 && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
+            val a = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[0]) else inferExprType(args[0].expr) ?: "Int"
+            val b = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[1]) else inferExprType(args[1].expr) ?: "Int"
+            val c = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[2]) else inferExprType(args[2].expr) ?: "Int"
+            tripleTypeComponents["Triple_${a}_${b}_${c}"] = Triple(a, b, c)
+            ensureTripleType(a, b, c)
+            return "(ktc_Triple_${a}_${b}_${c}){${genExpr(args[0].expr)}, ${genExpr(args[1].expr)}, ${genExpr(args[2].expr)}}"
+        }
+
+        // Tuple constructor (intrinsic, indefinite arity)
+        if (name == "Tuple" && args.isNotEmpty() && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple")) {
+            val types = if (e.typeArgs.size == args.size) e.typeArgs.map { resolveTypeName(it) }
+                else args.map { inferExprType(it.expr) ?: "Int" }
+            val key = "Tuple_${types.joinToString("_")}"
+            tupleTypeComponents[key] = types
+            ensureTupleType(types)
+            val fields = args.map { genExpr(it.expr) }.joinToString(", ")
+            return "(ktc_${key}){$fields}"
+        }
+
         // Function pointer call: variable with function type → just call it
         val varType = lookupVar(name)
         if (varType != null && isFuncType(varType)) {
@@ -6378,6 +6430,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val b = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[1]) else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
                 return "Pair_${a}_${b}"
             }
+            // Triple constructor (intrinsic)
+            if (name == "Triple" && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
+                val a = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[0]) else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
+                val b = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[1]) else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
+                val c = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[2]) else inferExprType(e.args.getOrNull(2)?.expr) ?: "Int"
+                return "Triple_${a}_${b}_${c}"
+            }
+            // Tuple constructor (intrinsic, indefinite arity)
+            if (name == "Tuple" && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple")) {
+                val types = if (e.typeArgs.size == e.args.size) e.typeArgs.map { resolveTypeName(it) }
+                    else e.args.map { inferExprType(it.expr) ?: "Int" }
+                return "Tuple_${types.joinToString("_")}"
+            }
             // Generic class constructor: MyList<Int>(8) → "MyList_Int"
             // Apply typeSubst so type params resolve inside generic function bodies
             if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
@@ -6653,6 +6718,25 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
             }
         }
+        if (recvType.startsWith("Triple_")) {
+            val components = tripleTypeComponents[recvType]
+            if (components != null) {
+                return when (e.name) {
+                    "first" -> components.first
+                    "second" -> components.second
+                    "third" -> components.third
+                    else -> null
+                }
+            }
+        }
+        if (recvType.startsWith("Tuple_")) {
+            val components = tupleTypeComponents[recvType]
+            if (components != null && e.name.startsWith("component")) {
+                val idx = e.name.removePrefix("component").toIntOrNull()
+                if (idx != null && idx in components.indices) return components[idx]
+            }
+            return null
+        }
         if (e.name == "size" && recvType.endsWith("Array")) return "Int"
         if (e.name == "length" && recvType == "String") return "Int"
         // Enum value .name / .ordinal
@@ -6877,9 +6961,13 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val elem = t.removeSuffix("Array")
                 if (classArrayTypes.contains(elem) || enums.containsKey(elem)) return "${pfx(elem)}*"
                 if (elem.startsWith("Pair_")) return "ktc_${elem}*"
+                if (elem.startsWith("Triple_")) return "ktc_${elem}*"
+                if (elem.startsWith("Tuple_")) return "ktc_${elem}*"
             }
             // Pair types: "Pair_Int_String" → "ktc_Pair_Int_String"
             if (t.startsWith("Pair_")) return "ktc_$t"
+            if (t.startsWith("Triple_")) return "ktc_$t"
+            if (t.startsWith("Tuple_")) return "ktc_$t"
             pfx(t)   // class/enum/object type
         }
     }
@@ -6889,6 +6977,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (key !in emittedPairTypes) {
             emittedPairTypes.add(key)
             hdr.appendLine("typedef struct { ${cTypeStr(a)} first; ${cTypeStr(b)} second; } ktc_Pair_${a}_${b};")
+        }
+    }
+
+    private fun ensureTripleType(a: String, b: String, c: String) {
+        val key = "${a}_${b}_${c}"
+        if (key !in emittedTripleTypes) {
+            emittedTripleTypes.add(key)
+            hdr.appendLine("typedef struct { ${cTypeStr(a)} first; ${cTypeStr(b)} second; ${cTypeStr(c)} third; } ktc_Triple_${a}_${b}_${c};")
+        }
+    }
+
+    private fun ensureTupleType(types: List<String>) {
+        val key = types.joinToString("_")
+        if (key !in emittedTupleTypes) {
+            emittedTupleTypes.add(key)
+            val fields = types.mapIndexed { i, t -> "${cTypeStr(t)} component$i;" }.joinToString(" ")
+            hdr.appendLine("typedef struct { $fields } ktc_Tuple_${key};")
         }
     }
 
@@ -6954,6 +7059,25 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             ensurePairType(a, b)
             return "Pair_${a}_${b}"
         }
+        // Intrinsic Triple<A,B,C>
+        if (t.name == "Triple" && t.typeArgs.size == 3
+            && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple") && !genericIfaceDecls.containsKey("Triple")) {
+            val a = resolveTypeName(t.typeArgs[0])
+            val b = resolveTypeName(t.typeArgs[1])
+            val c = resolveTypeName(t.typeArgs[2])
+            tripleTypeComponents["Triple_${a}_${b}_${c}"] = Triple(a, b, c)
+            ensureTripleType(a, b, c)
+            return "Triple_${a}_${b}_${c}"
+        }
+        // Intrinsic Tuple<...> — indefinite arity
+        if (t.name == "Tuple" && t.typeArgs.isNotEmpty()
+            && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple") && !genericIfaceDecls.containsKey("Tuple")) {
+            val types = t.typeArgs.map { resolveTypeName(it) }
+            val key = "Tuple_${types.joinToString("_")}"
+            tupleTypeComponents[key] = types
+            ensureTupleType(types)
+            return key
+        }
         if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
             val elemRef     = t.typeArgs[0] // element TypeRef
             val elem        = elemRef.name  // element Kotlin type name
@@ -6999,7 +7123,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             && !interfaces.containsKey(t.name)
             && !genericClassDecls.containsKey(t.name)
             && !genericIfaceDecls.containsKey(t.name)
-            && t.name !in setOf("Array", "Pair")) {
+            && t.name !in setOf("Array", "Pair", "Triple", "Tuple")) {
             codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
         }
         return t.name
