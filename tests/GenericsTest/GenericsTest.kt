@@ -43,8 +43,8 @@ fun main() {
     println("Tuple2: ${tu2.component0}, ${tu2.component1}")
 
     // Tuple with generic type args
-    val tu2 = Tuple(Wrapper("Hello"), Wrapper(true))
-    println("Tuple2: ${tu2.component0}, ${tu2.component1}")
+    val tu3 = Tuple(Wrapper("Hello"), Wrapper(true))
+    println("Tuple3: ${tu3.component0}, ${tu3.component1}")
 
     println("done")
 }
