@@ -2446,12 +2446,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             hdr.appendLine("    void* obj;")
         } else if (impls.size == 1) {
             // Single implementor: no union needed, use plain field
-            hdr.appendLine("    ${pfx(impls[0])} ${impls[0]};")
+            hdr.appendLine("    ${pfx(impls[0])} ${ifaceDataName(impls[0])};")
         } else {
             // Multiple implementors: tagged union
             hdr.appendLine("    union {")
             for (className in impls) {
-                hdr.appendLine("        ${pfx(className)} $className;")
+                hdr.appendLine("        ${pfx(className)} ${ifaceDataName(className)};")
             }
             hdr.appendLine("    } data;")
         }
@@ -2502,6 +2502,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         return result
     }
 
+    /** Data member name for a class inside a tagged union or single-field interface struct. */
+    private fun ifaceDataName(className: String): String = "${pfx(className)}_data"
+
     /**
      * Generate the designated-initializer return expression for ClassName_as_IfaceName().
      * Format depends on how many implementors the interface has:
@@ -2511,10 +2514,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      */
     private fun ifaceAsInit(cIface: String, cClass: String, className: String, ifaceName: String): String {
         val impls = interfaceImplementors[ifaceName]
+        val dataName = ifaceDataName(className)
         return when {
             impls == null || impls.isEmpty() -> "($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt}"
-            impls.size == 1 -> "($cIface){.$className = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
-            else -> "($cIface){.data.$className = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
+            impls.size == 1 -> "($cIface){.$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
+            else -> "($cIface){.data.$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
         }
     }
 
@@ -3261,7 +3265,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val idx = genExpr(s.target.index)
                     val value = genExpr(s.value)
                     flushPreStmts(ind)
-                    impl.appendLine("$ind$recv.vt->set($recv.obj, $idx, $value);")
+                    impl.appendLine("$ind$recv.vt->set((void*)&$recv, $idx, $value);")
                     return
                 }
             }
@@ -3458,12 +3462,19 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (retIface.isNotEmpty() && interfaces.containsKey(retIface)
                         && exprType != null && classes.containsKey(exprType)
                         && classInterfaces[exprType]?.contains(retIface) == true) {
-                        // Heap-allocate the class so the interface fat pointer outlives this scope
-                        val t = tmp()
                         val cExprType = pfx(exprType)
-                        impl.appendLine("$ind${cExprType}* $t = ${tMalloc("sizeof($cExprType)")};")
-                        impl.appendLine("$ind*$t = $expr;")
-                        impl.appendLine("${ind}return ${cExprType}_as_$retIface($t);")
+                        val cIface = pfx(retIface)
+                        val impls = interfaceImplementors[retIface] ?: emptyList()
+                        val dataName = ifaceDataName(exprType!!)
+                        val fieldPath = when {
+                            impls.size <= 1 -> ".$dataName"
+                            else -> ".data.$dataName"
+                        }
+                        val t = tmp()
+                        impl.appendLine("$ind${cIface} $t;")
+                        impl.appendLine("$ind$t$fieldPath = $expr;")
+                        impl.appendLine("$ind$t.vt = &${cExprType}_${retIface}_vt;")
+                        impl.appendLine("${ind}return $t;")
                     } else {
                         impl.appendLine("${ind}return $expr;")
                     }
@@ -3991,16 +4002,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val selfArg = if (isPointer) arrExpr else "&$arrExpr"
                     // For interface types, dispatch through vtable
                     if (arrType != null && interfaces.containsKey(arrType)) {
-                        impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator($arrExpr.obj);")
+                        impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator((void*)&$arrExpr);")
                     } else {
                         val baseClass = if (isPointer) anyIndirectClassName(arrType)!! else arrType!!
                         impl.appendLine("$ind$iterCType $iterVar = ${pfx(baseClass)}_iterator($selfArg);")
                     }
                     val isIfaceIter = interfaces.containsKey(iterClass)
                     if (isIfaceIter) {
-                        impl.appendLine("${ind}while (${iterVar}.vt->hasNext(${iterVar}.obj)) {")
+                        impl.appendLine("${ind}while (${iterVar}.vt->hasNext((void*)&${iterVar})) {")
                         val elemCType = cTypeStr(elemKtType)
-                        impl.appendLine("$ind    $elemCType ${s.varName} = ${iterVar}.vt->next(${iterVar}.obj);")
+                        impl.appendLine("$ind    $elemCType ${s.varName} = ${iterVar}.vt->next((void*)&${iterVar});")
                     } else {
                         impl.appendLine("${ind}while (${pfx(iterClass)}_hasNext(&$iterVar)) {")
                         val elemCType = cTypeStr(elemKtType)
@@ -4173,12 +4184,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         val retBase = resolveMethodReturnType(objType, ifaceMethod.returnType).removeSuffix("?")
                         val optType = optCTypeName("${retBase}?")
                         val t = tmp()
-                        preStmts += "$optType $t = $recv.vt->get($recv.obj, $idx);"
+                        preStmts += "$optType $t = $recv.vt->get((void*)&$recv, $idx);"
                         markOptional(t)
                         defineVar(t, "${retBase}?")
                         t
                     } else {
-                        "$recv.vt->get($recv.obj, $idx)"
+                        "$recv.vt->get((void*)&$recv, $idx)"
                     }
                 } else {
                     "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
@@ -4366,7 +4377,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (containsMethod != null) {
                     val recv = genExpr(e.right)
                     val elem = genExpr(e.left)
-                    val call = "$recv.vt->${containsMethod.name}($recv.obj, $elem)"
+                    val call = "$recv.vt->${containsMethod.name}((void*)&$recv, $elem)"
                     return if (negated) "!$call" else call
                 }
             }
@@ -5033,9 +5044,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             return "${pfx(pointerBase)}_$method($allArgs)"
         }
 
-        // Interface method dispatch → d.vt->method(d.obj, args)
+        // Interface method dispatch → d.vt->method((void*)&d, args)
         if (recvType != null && interfaces.containsKey(recvType)) {
-            val allArgs = if (argStr.isEmpty()) "$recv.obj" else "$recv.obj, $argStr"
+            val allArgs = if (argStr.isEmpty()) "(void*)&$recv" else "(void*)&$recv, $argStr"
             // Check if this interface method returns nullable
             val ifaceInfo = interfaces[recvType]
             val ifaceMethod = ifaceInfo?.methods?.find { it.name == method }
@@ -5335,7 +5346,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val iface = interfaces[recvType]!!
             val allProps = collectAllIfaceProperties(iface)
             if (allProps.any { it.name == e.name }) {
-                return "$recv.vt->${e.name}($recv.obj)"
+                return "$recv.vt->${e.name}((void*)&$recv)"
             }
         }
 

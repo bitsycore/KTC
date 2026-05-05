@@ -31,8 +31,8 @@ class InterfaceUnitTest : TranspilerTestBase() {
 
     @Test fun interfaceFatPointerStruct() {
         val r = transpileMain("val c = Circle(5.0f)", decls = shapeDecls)
-        // Fat pointer: { void* obj, const VT* vt }
-        r.headerContains("void* obj;")
+        // Tagged union: uses .data.ClassName for 2+ implementors, plain field for 1
+        r.headerContains("union {")
         r.headerContains("test_Main_Shape_vt*")
     }
 
@@ -50,8 +50,8 @@ class InterfaceUnitTest : TranspilerTestBase() {
                 printShape(c)
             }
         """)
-        // Virtual dispatch: s.vt->area(s.obj)
-        r.sourceContains("s.vt->area(s.obj)")
+        // Virtual dispatch: s.vt->area((void*)&s)
+        r.sourceContains("s.vt->area((void*)&s)")
     }
 
     // ── Auto-wrap class → interface ──────────────────────────────────
