@@ -102,6 +102,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     // Map class name → list of interface names it implements
     private val classInterfaces = mutableMapOf<String, List<String>>()
+    // Reverse map: interface name → list of class names that implement it
+    private val interfaceImplementors = mutableMapOf<String, MutableList<String>>()
 
     // Track class/enum types used in Array<T> so we emit KT_ARRAY_DEF for them
     private val classArrayTypes = mutableSetOf<String>()
@@ -381,7 +383,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // (enables returning concrete class by value on stack instead of heap-allocating)
         computeGenericFunConcreteReturns()
 
-        // Emit interface vtable struct + fat pointer type BEFORE classes
+        // Emit interface vtable struct BEFORE classes (TYPE_ID + vtable function pointers)
+        // The tagged-union struct is emitted later after all class vtables are processed.
         // Non-generic interfaces first (they only use primitive types in signatures)
         val emittedIfaceNames = mutableSetOf<String>()
         for (d in file.decls) if (d is InterfaceDecl && d.typeParams.isEmpty()) {
@@ -404,6 +407,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             else -> {}
         }
 
+        // Forward-declare all interface structs so other types (function signatures,
+        // _as_ return types) can reference them before the tagged union is fully defined.
+        for ((name, _) in interfaces) {
+            val cName = pfx(name)
+            hdr.appendLine("typedef struct $cName $cName;")
+        }
+        hdr.appendLine()
+
         // Emit forward declarations for all monomorphized generic class types
         // so method signatures can reference them before their full definitions
         for ((baseName, instantiations) in genericInstantiations) {
@@ -412,16 +423,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val mangledName = mangledGenericName(baseName, typeArgs)
                 val cName = pfx(mangledName)
                 hdr.appendLine("typedef struct $cName $cName;")
-            }
-        }
-        // Forward typedefs for monomorphized generic interfaces used as return types later
-        for ((name, info) in interfaces) {
-            if (info.typeParams.isEmpty()) {
-                val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
-                if (isMonomorphized) {
-                    val cName = pfx(name)
-                    hdr.appendLine("typedef struct $cName $cName;")
-                }
             }
         }
         hdr.appendLine()
@@ -446,6 +447,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         // Emit monomorphized generic interfaces AFTER generic class structs so types are available
+        // Only emit the VTABLE here; the tagged-union struct is emitted later after all class vtables.
+        val emittedMonoIfaceVtables = mutableSetOf<String>()
         for ((name, info) in interfaces) {
             // Emit only monomorphized copies (not already emitted above as non-generic AST decl)
             if (name !in emittedIfaceNames && info.typeParams.isEmpty()
@@ -455,13 +458,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 // emitted here because they may reference user-defined types.
                 val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
                 if (isMonomorphized) {
-                    emitIfaceInfo(info)
+                    emitInterfaceVtable(info)
+                    emittedMonoIfaceVtables += name
                 } else {
                     val isCrossPackage = symbolPrefix[name]?.let { it.isNotEmpty() && it != prefix } == true
                     if (!isCrossPackage) {
-                        emitIfaceInfo(info)
+                        emitInterfaceVtable(info)
+                        emittedMonoIfaceVtables += name
                     }
                 }
+            }
+        }
+
+        // Build initial reverse map: interface → list of implementing classes
+        // (from classInterfaces populated during collectDecl and materializeGenericClass).
+        // Updated incrementally by emitTransitiveInterfaceVtables for transitive parent interfaces.
+        for ((className, ifaces) in classInterfaces) {
+            for (iface in ifaces) {
+                interfaceImplementors.getOrPut(iface) { mutableListOf() }.add(className)
             }
         }
 
@@ -486,6 +500,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             }
         }
 
+        // Emit tagged-union struct for ALL interfaces (non-generic + monomorphized).
+        // Must be AFTER class struct definitions so union members are complete types
+        // and AFTER all vtables so transitive implementors are known.
+        for ((name, info) in interfaces) {
+            if (name in emittedIfaceNames) {
+                emitIfaceInfo(info)
+            } else if (name in emittedMonoIfaceVtables) {
+                emitIfaceInfo(info)
+            }
+        }
 
         // Emit top-level functions and properties
         for (d in file.decls) when (d) {
@@ -2370,16 +2394,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      *     const game_Drawable_vt* vt;
      * } game_Drawable;
      */
+    /** Emit only the vtable struct + TYPE_ID for an interface (used early, before class structs). */
     private fun emitInterface(d: InterfaceDecl) {
         val info = interfaces[d.name] ?: return
-        emitIfaceInfo(info)
+        emitInterfaceVtable(info)
     }
 
     /**
-     * Emit a concrete (non-generic) interface: vtable struct + fat pointer type.
+     * Emit interface vtable struct + TYPE_ID define.
      * Handles inherited methods/properties from super interfaces.
      */
-    private fun emitIfaceInfo(info: IfaceInfo) {
+    private fun emitInterfaceVtable(info: IfaceInfo) {
         val cName = pfx(info.name)
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[info.name]!!}")
         // Collect all methods/properties including inherited from super interfaces
@@ -2405,12 +2430,40 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         hdr.appendLine("} ${cName}_vt;")
         hdr.appendLine()
-        // fat pointer struct (named so it can be forward-declared)
+    }
+
+    /**
+     * Emit a concrete (non-generic) interface struct: tagged union containing all implementing classes.
+     * Falls back to void* obj only for interfaces with zero known implementors.
+     * Must be called after all class structs and vtables have been emitted.
+     */
+    private fun emitIfaceInfo(info: IfaceInfo) {
+        val cName = pfx(info.name)
+        val impls = interfaceImplementors[info.name] ?: emptyList()
         hdr.appendLine("typedef struct $cName {")
-        hdr.appendLine("    void* obj;")
+        if (impls.isEmpty()) {
+            // Fallback: no known implementors — keep void* obj
+            hdr.appendLine("    void* obj;")
+        } else if (impls.size == 1) {
+            // Single implementor: no union needed, use plain field
+            hdr.appendLine("    ${pfx(impls[0])} ${impls[0]};")
+        } else {
+            // Multiple implementors: tagged union
+            hdr.appendLine("    union {")
+            for (className in impls) {
+                hdr.appendLine("        ${pfx(className)} $className;")
+            }
+            hdr.appendLine("    } data;")
+        }
         hdr.appendLine("    const ${cName}_vt* vt;")
         hdr.appendLine("} $cName;")
         hdr.appendLine()
+    }
+
+    /** Legacy: emit both vtable and tagged-union struct. Used for monomorphized interfaces. */
+    private fun emitIfaceInfoFull(info: IfaceInfo) {
+        emitInterfaceVtable(info)
+        emitIfaceInfo(info)
     }
 
     /** Collect all methods for an interface, including inherited from super interfaces (depth-first). */
@@ -2447,6 +2500,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         collect(info)
         return result
+    }
+
+    /**
+     * Generate the designated-initializer return expression for ClassName_as_IfaceName().
+     * Format depends on how many implementors the interface has:
+     *   0: (void*) shallow pointer  (fallback, no union)
+     *   1: .ClassName = *$self     (single struct field, no data wrapper)
+     *   2+: .data.ClassName = *$self  (tagged union)
+     */
+    private fun ifaceAsInit(cIface: String, cClass: String, className: String, ifaceName: String): String {
+        val impls = interfaceImplementors[ifaceName]
+        return when {
+            impls == null || impls.isEmpty() -> "($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt}"
+            impls.size == 1 -> "($cIface){.$className = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
+            else -> "($cIface){.data.$className = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
+        }
     }
 
     /**
@@ -2505,7 +2574,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // wrapping function: ClassName_as_IfaceName
             hdr.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self);")
             impl.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self) {")
-            impl.appendLine("    return ($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt};")
+            impl.appendLine("    return ${ifaceAsInit(cIface, cClass, className, ifaceName)};")
             impl.appendLine("}")
             impl.appendLine()
 
@@ -2537,6 +2606,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (superName !in existing) {
                 existing += superName
                 classInterfaces[className] = existing
+                // Also update the reverse map for tagged-union emission
+                interfaceImplementors.getOrPut(superName) { mutableListOf() }.add(className)
             }
 
             // static vtable instance (same class methods, but only the parent's slots)
@@ -2562,7 +2633,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             // wrapping function
             hdr.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self);")
             impl.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self) {")
-            impl.appendLine("    return ($cSuper){(void*)\$self, &${cClass}_${superName}_vt};")
+            impl.appendLine("    return ${ifaceAsInit(cSuper, cClass, className, superName)};")
             impl.appendLine("}")
             impl.appendLine()
 
