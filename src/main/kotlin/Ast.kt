@@ -34,7 +34,8 @@ data class FunDecl(
     val typeParams: List<String> = emptyList(),
     val isOperator: Boolean = false,
     val isPrivate: Boolean = false,
-    val isInline: Boolean = false
+    val isInline: Boolean = false,
+    val isOverride: Boolean = false
 ) : Decl()
 
 data class ClassDecl(

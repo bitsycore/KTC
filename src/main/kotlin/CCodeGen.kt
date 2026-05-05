@@ -618,7 +618,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         // Current file's symbols use current prefix (overwrite any from allFiles)
         for (d in file.decls) {
-            collectDecl(d)
+            collectDecl(d, validate = true)
             when (d) {
                 is ClassDecl -> {
                     symbolPrefix[d.name] = prefix
@@ -638,7 +638,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
     }
 
-    private fun collectDecl(d: Decl) {
+    private fun collectDecl(d: Decl, validate: Boolean = false) {
         when (d) {
             is ClassDecl -> {
                 for (p in d.ctorParams) {
@@ -673,6 +673,33 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 getTypeId(d.name)
                 if (d.typeParams.isNotEmpty()) genericClassDecls[d.name] = d
                 if (d.superInterfaces.isNotEmpty()) classInterfaces[d.name] = d.superInterfaces.map { it.name }
+                // Verify all interface methods are implemented with override (current file, non-stdlib)
+                if (validate && file.pkg != "ktc.std") {
+                    val classMethodNames = ci.methods.associateBy { it.name }
+                    for (ifaceRef in d.superInterfaces) {
+                        val ifaceName = resolveIfaceName(ifaceRef)
+                        val iface = interfaces[ifaceName] ?: continue
+                        for (m in collectAllIfaceMethods(iface)) {
+                            val impl = classMethodNames[m.name]
+                            when {
+                                impl == null ->
+                                    codegenError("Class '${d.name}' must implement '${m.name}' from interface '$ifaceName'")
+                                !impl.isOverride ->
+                                    codegenError("Method '${m.name}' in class '${d.name}' must be marked 'override'")
+                            }
+                        }
+                    }
+                    // Check for bogus override on methods that don't match any interface
+                    val allIfaceMethodNames = d.superInterfaces.flatMap { ifaceRef ->
+                        val ifaceName = resolveIfaceName(ifaceRef)
+                        interfaces[ifaceName]?.let { collectAllIfaceMethods(it).map { m -> m.name } } ?: emptyList()
+                    }.toSet()
+                    for (m in ci.methods) {
+                        if (m.isOverride && m.name !in allIfaceMethodNames) {
+                            codegenError("Method '${m.name}' is marked 'override' but does not override any interface method")
+                        }
+                    }
+                }
                 // Collect companion objects declared inside this class
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
                     val vCompanionSynthName = "${d.name}_${vMember.name}" // e.g. "Foo_Companion"

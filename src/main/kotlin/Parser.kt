@@ -20,9 +20,9 @@ class Parser(private val tokens: List<Token>) {
 
     private fun parseDecl(): Decl {
         skipNL()
-        // skip 'override' modifier — we just note it and continue
-        if (at(TokenType.OVERRIDE)) advance()
-        // track 'operator' and 'private' modifiers
+        // track 'override', 'operator', 'inline' and 'private' modifiers
+        val isOverride = at(TokenType.OVERRIDE)
+        if (isOverride) advance()
         val isOperator = at(TokenType.IDENT) && cur().value == "operator"
         if (isOperator) advance()
         val isInline = at(TokenType.IDENT) && cur().value == "inline" && peek().type == TokenType.FUN
@@ -30,7 +30,7 @@ class Parser(private val tokens: List<Token>) {
         val isPrivate = at(TokenType.PRIVATE)
         if (isPrivate) advance()
         return when {
-            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate, isInline = isInline)
+            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate, isInline = isInline, isOverride = isOverride)
             at(TokenType.DATA)   -> { if (isPrivate) error("private with data not supported"); advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
@@ -56,7 +56,7 @@ class Parser(private val tokens: List<Token>) {
 
     // ── fun ──────────────────────────────────────────────────────────
 
-    private fun parseFunDecl(isOperator: Boolean = false, isPrivate: Boolean = false, isInline: Boolean = false): FunDecl {
+    private fun parseFunDecl(isOperator: Boolean = false, isPrivate: Boolean = false, isInline: Boolean = false, isOverride: Boolean = false): FunDecl {
         expect(TokenType.FUN)
         // Parse optional type parameters: fun <T, U> name(...)
         val typeParams = if (at(TokenType.LT)) {
@@ -102,7 +102,7 @@ class Parser(private val tokens: List<Token>) {
             else -> null
         }
         skipTerminator()
-        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator, isPrivate, isInline)
+        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator, isPrivate, isInline, isOverride)
     }
 
     private fun parseParamList(): List<Param> {

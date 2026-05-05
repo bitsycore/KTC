@@ -148,4 +148,66 @@ class InterfaceUnitTest : TranspilerTestBase() {
         """)
         r.sourceContains("!(b.__type_id == test_Main_Circle_TYPE_ID)")
     }
+
+    // ── Override enforcement ──────────────────────────────────────────
+
+    @Test fun validOverridePasses() {
+        val decls = """
+            interface Foo {
+                fun bar(): Int
+            }
+            class Impl : Foo {
+                override fun bar(): Int = 42
+            }
+        """.trimIndent()
+        val r = transpileMain("val f = Impl()", decls = decls)
+        r.sourceContains("Impl_bar")
+    }
+
+    @Test fun missingOverrideKeywordError() {
+        val decls = """
+            interface Foo {
+                fun bar(): Int
+            }
+            class Impl : Foo {
+                fun bar(): Int = 42
+            }
+        """.trimIndent()
+        transpileMainExpectError("val f = Impl()", "must be marked 'override'", decls = decls)
+    }
+
+    @Test fun missingInterfaceMethodError() {
+        val decls = """
+            interface Foo {
+                fun bar(): Int
+                fun baz(): String
+            }
+            class Impl : Foo {
+                override fun bar(): Int = 42
+            }
+        """.trimIndent()
+        transpileMainExpectError("val f = Impl()", "must implement 'baz'", decls = decls)
+    }
+
+    @Test fun bogusOverrideError() {
+        val decls = """
+            class Impl {
+                override fun bar(): Int = 42
+            }
+        """.trimIndent()
+        transpileMainExpectError("val f = Impl()", "does not override any interface method", decls = decls)
+    }
+
+    @Test fun overrideMethodNotInInterface() {
+        val decls = """
+            interface Foo {
+                fun bar(): Int
+            }
+            class Impl : Foo {
+                override fun bar(): Int = 42
+                override fun baz(): String = "hello"
+            }
+        """.trimIndent()
+        transpileMainExpectError("val f = Impl()", "does not override any interface method", decls = decls)
+    }
 }
