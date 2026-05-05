@@ -185,4 +185,4 @@ tests/
 
 ## License
 
-This project is proprietary. All rights reserved.
+This project is licenced under MIT licence, see LICENSE.md
