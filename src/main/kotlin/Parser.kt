@@ -151,12 +151,15 @@ class Parser(private val tokens: List<Token>) {
         skipNL()
         val members = mutableListOf<Decl>()
         val inits = mutableListOf<Block>()
+        val secondaryCtors = mutableListOf<SecondaryCtor>()
         if (at(TokenType.LBRACE)) {
             advance(); nesting++; skipNL()
             while (!at(TokenType.RBRACE) && !at(TokenType.EOF)) {
                 skipNL(); if (at(TokenType.RBRACE)) break
                 if (at(TokenType.INIT)) {
                     advance(); inits += parseBlock(); skipTerminator()
+                } else if (at(TokenType.IDENT) && cur().value == "constructor") {
+                    secondaryCtors += parseSecondaryCtor()
                 } else {
                     members += parseDecl()
                 }
@@ -165,7 +168,7 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RBRACE); nesting--
         }
         skipTerminator()
-        return ClassDecl(name, isData, ctorParams, members, inits, superInterfaces, typeParams)
+        return ClassDecl(name, isData, ctorParams, members, inits, superInterfaces, typeParams, secondaryCtors)
     }
 
     private fun parseCtorParams(): List<CtorParam> {
@@ -188,6 +191,34 @@ class Parser(private val tokens: List<Token>) {
         }
         skipNL()
         return list
+    }
+
+    // ── secondary constructor ─────────────────────────────────────────
+
+    private fun parseSecondaryCtor(): SecondaryCtor {
+        advance()   // skip "constructor"
+        expect(TokenType.LPAREN); nesting++
+        val params = parseParamList()
+        expect(TokenType.RPAREN); nesting--
+        skipNL()
+        // delegation: : this(args)
+        expect(TokenType.COLON); skipNL()
+        val delegation = parseDelegationCall()
+        skipNL()
+        val body = when {
+            at(TokenType.LBRACE) -> parseBlock()
+            else -> Block(emptyList())
+        }
+        skipTerminator()
+        return SecondaryCtor(params, delegation, body)
+    }
+
+    private fun parseDelegationCall(): CallExpr {
+        expect(TokenType.THIS)
+        expect(TokenType.LPAREN); nesting++
+        val args = parseArgList()
+        expect(TokenType.RPAREN); nesting--
+        return CallExpr(ThisExpr, args)
     }
 
     // ── enum class ───────────────────────────────────────────────────

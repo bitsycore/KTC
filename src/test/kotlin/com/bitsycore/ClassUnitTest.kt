@@ -37,7 +37,7 @@ class ClassUnitTest : TranspilerTestBase() {
             }
         """)
         // Constructor should set ctor params + body prop defaults
-        r.sourceContains("test_Main_Player_create")
+        r.sourceContains("test_Main_Player_primaryConstructor")
         r.sourceContains("health = 100")
     }
 

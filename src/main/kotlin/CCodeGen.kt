@@ -1610,8 +1610,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val allCtorParams = ci.ctorProps + ci.ctorPlainParams
         val paramStr = expandCtorParams(allCtorParams)
         val paramDecl = paramStr.ifEmpty { "void" }
-        hdr.appendLine("$cName ${cName}_create($paramDecl);")
-        impl.appendLine("$cName ${cName}_create($paramDecl) {")
+        hdr.appendLine("$cName ${cName}_primaryConstructor($paramDecl);")
+        impl.appendLine("$cName ${cName}_primaryConstructor($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
             impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
         } else {
@@ -1653,9 +1653,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             emitDataClassEquals(cName, ci)
             emitDataClassToString(d.name, cName, ci)
         }
-
-        // --- heap constructor: ClassName_new(args) → ClassName* ---
-        emitHeapNew(cName, ci)
 
         // --- methods ---
         currentClass = d.name
@@ -1710,6 +1707,53 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         popScope()
         currentClass = null
+
+        // Secondary constructors
+        for (sctor in d.secondaryCtors) {
+            emitSecondaryCtor(d.name, cName, sctor)
+        }
+    }
+
+    /** Generate a secondary constructor function name: ClassName_constructorWithType1_Type2 */
+    private fun secondaryCtorName(cClass: String, params: List<Param>): String {
+        val types = params.map { resolveTypeName(it.type).removeSuffix("*") }
+        return "${cClass}_constructorWith${types.joinToString("_")}"
+    }
+
+    /** Emit a secondary constructor that delegates to the primary constructor. */
+    private fun emitSecondaryCtor(className: String, cClass: String, sctor: SecondaryCtor) {
+        val ctorName = secondaryCtorName(cClass, sctor.params)
+        val retResolved = cClass.takeWhile { it != '_' || cClass.indexOf('_') < 0 }.let { "" }  // just use void-like return
+        val extraParams = expandParams(sctor.params)
+        val allP = if (extraParams.isNotEmpty()) "$cClass* \$self, $extraParams" else "$cClass* \$self"
+
+        hdr.appendLine("$cClass $ctorName($extraParams);")
+        impl.appendLine("$cClass $ctorName($extraParams) {")
+
+        // Generate call to primary constructor for delegation
+        val delegateArgs = sctor.delegation.args.joinToString(", ") { a ->
+            genExpr(a.expr)
+        }
+        impl.appendLine("    $cClass \$self = ${cClass}_primaryConstructor($delegateArgs);")
+
+        // Emit body using $self as the implicit receiver
+        pushScope()
+        currentClass = className
+        selfIsPointer = true
+        for (p in sctor.params) {
+            val resolved = resolveTypeName(p.type)
+            defineVar(p.name, resolved)
+        }
+        val ci = classes[className]
+        if (ci != null) for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+
+        for (s in sctor.body.stmts) emitStmt(s, "    ", true)
+        popScope()
+        currentClass = null
+
+        impl.appendLine("    return \$self;")
+        impl.appendLine("}")
+        impl.appendLine()
     }
 
     /**
@@ -1760,8 +1804,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         val allCtorParams = ci.ctorProps + ci.ctorPlainParams
         val paramStr = expandCtorParams(allCtorParams)
         val paramDecl = paramStr.ifEmpty { "void" }
-        hdr.appendLine("$cName ${cName}_create($paramDecl);")
-        impl.appendLine("$cName ${cName}_create($paramDecl) {")
+        hdr.appendLine("$cName ${cName}_primaryConstructor($paramDecl);")
+        impl.appendLine("$cName ${cName}_primaryConstructor($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
             impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
         } else {
@@ -1797,9 +1841,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         impl.appendLine("}")
         impl.appendLine()
-
-        // --- heap constructor ---
-        emitHeapNew(cName, ci)
 
         // --- methods (from template AST, but with typeSubst active) ---
         currentClass = mangledName
@@ -1850,6 +1891,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
         popScope()
         currentClass = null
+
+        // Secondary constructors
+        for (sctor in templateDecl.secondaryCtors) {
+            emitSecondaryCtor(mangledName, cName, sctor)
+        }
     }
 
     private fun emitDataClassEquals(cName: String, ci: ClassInfo) {
@@ -1884,26 +1930,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             impl.appendLine("    ${genSbAppend("sb", "\$self->$fieldName", tFull)}")
         }
         impl.appendLine("    ktc_sb_append_char(sb, ')');")
-        impl.appendLine("}")
-        impl.appendLine()
-    }
-
-    /** Generate ClassName_new(args) → ClassName* (heap constructor). */
-    private fun emitHeapNew(cName: String, ci: ClassInfo) {
-        val allCtorParams = ci.ctorProps + ci.ctorPlainParams
-        val paramStr = expandCtorParams(allCtorParams)
-        val paramDecl = paramStr.ifEmpty { "void" }
-        // Build argument list for _create call, including $len companions for array params
-        val createArgs = allCtorParams.flatMap { (name, type) ->
-            val resolved = resolveTypeName(type)
-            if (isArrayType(resolved) && !hasSizeAnnotation(type)) listOf(name, "${name}\$len")
-            else listOf(name)
-        }.joinToString(", ")
-        hdr.appendLine("$cName* ${cName}_new($paramDecl);")
-        impl.appendLine("$cName* ${cName}_new($paramDecl) {")
-        impl.appendLine("    $cName* \$p = ($cName*)malloc(sizeof($cName));")
-        impl.appendLine("    if (\$p) *\$p = ${cName}_create($createArgs);")
-        impl.appendLine("    return \$p;")
         impl.appendLine("}")
         impl.appendLine()
     }
@@ -4729,18 +4755,14 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     if (ta.typeArgs.isNotEmpty() && classes.containsKey(typeName) && classes[typeName]!!.isGeneric) {
                         typeName = mangledGenericName(typeName, ta.typeArgs.map { it.name })
                     }
-                    // Class heap constructor: HeapAlloc<MyClass>(args) → inline alloc + create
+                    // Class heap constructor: HeapAlloc<MyClass>(args) → inline malloc + primaryConstructor
                     if (classes.containsKey(typeName)) {
                         val cName = pfx(typeName)
                         val argStr = args.joinToString(", ") { genExpr(it.expr) }
-                        if (memTrack) {
-                            // Inline: allocate with Kotlin source, then init via _create
-                            val t = tmp()
-                            preStmts += "$cName* $t = ($cName*)${tMalloc("sizeof($cName)")};"
-                            preStmts += "if ($t) *$t = ${cName}_create($argStr);"
-                            return t
-                        }
-                        return "${cName}_new($argStr)"
+                        val t = tmp()
+                        preStmts += "$cName* $t = ($cName*)${tMalloc("sizeof($cName)")};"
+                        preStmts += "if ($t) *$t = ${cName}_primaryConstructor($argStr);"
+                        return t
                     }
                     // HeapAlloc<T>() with no args → single element: (T*)malloc(sizeof(T))
                     val elemC = cTypeStr(typeName)
@@ -4870,7 +4892,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         }
 
         // Constructor call (known class)
-        // Handle generic class constructor: MyList<Int>(8) → MyList_Int_create(8)
+        // Handle generic class constructor: MyList<Int>(8) → MyList_Int_primaryConstructor(8)
         if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
             // Apply typeSubst so type params (e.g. T) resolve to concrete types (e.g. Int)
             // when inside a generic function body
@@ -4885,10 +4907,20 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 it.first to cp?.default
             })
             val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
-            return "${pfx(mangledName)}_create($expandedArgs)"
+            return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
         }
         if (classes.containsKey(name)) {
             val ci = classes[name]!!
+            // Check secondary constructors by argument count (skip those with same count as primary)
+            val declClass = file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == name }
+            val primaryParamCount = ci.ctorProps.size + ci.ctorPlainParams.size
+            val sctor = declClass?.secondaryCtors?.find { it.params.size == args.size && it.params.size != primaryParamCount }
+            if (sctor != null) {
+                val types = sctor.params.map { resolveTypeName(it.type).removeSuffix("*") }
+                val suffix = "constructorWith${types.joinToString("_")}"
+                val argStr = args.joinToString(", ") { genExpr(it.expr) }
+                return "${pfx(name)}_$suffix($argStr)"
+            }
             val allParams = ci.ctorProps + ci.ctorPlainParams
             val ctorParamList = allParams.map { Param(it.first, it.second) }
             val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
@@ -4898,7 +4930,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 it.first to cp?.default
             })
             val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
-            return "${pfx(name)}_create($expandedArgs)"
+            return "${pfx(name)}_primaryConstructor($expandedArgs)"
         }
 
         // Enum access (should be handled as DotExpr, but just in case)

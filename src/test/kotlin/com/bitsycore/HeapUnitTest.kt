@@ -14,7 +14,8 @@ class HeapUnitTest : TranspilerTestBase() {
 
     @Test fun heapAllocClass() {
         val r = transpileMain("val p = HeapAlloc<Vec2>(10.0f, 20.0f)", decls = vec2Decl)
-        r.sourceContains("test_Main_Vec2_new(10.0f, 20.0f)")
+        r.sourceContains("test_Main_Vec2_primaryConstructor(10.0f, 20.0f)")
+        r.sourceContains("malloc(sizeof(test_Main_Vec2))")
     }
 
     // ── Heap<T> field access (auto-deref through pointer) ──────────
@@ -394,7 +395,7 @@ class HeapUnitTest : TranspilerTestBase() {
         val r = transpileMain("val b = Buf(16)", decls = decl)
         // struct field: ktc_Int* buf
         r.headerContains("ktc_Int* buf;")
-        // _create initializes body prop from ctor param
+        // _primaryConstructor initializes body prop from ctor param
         r.sourceContains("(ktc_Int*)malloc(sizeof(ktc_Int) * (size_t)(capacity))")
     }
 

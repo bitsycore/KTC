@@ -7,10 +7,10 @@ fun main() {
     // Test put via operator set
     map[1] = "hello"
     map[2] = "world"
-    map[3] = "foo"
+    map.set(3, "foo")
 
     println("get(1) = ${map[1]}")
-    println("get(2) = ${map[2]}")
+    println("get(2) = ${map.get(2)}")
 
     // Test containsKey via `in` operator
     println("1 in map = ${1 in map}")

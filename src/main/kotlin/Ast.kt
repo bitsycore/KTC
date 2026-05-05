@@ -45,7 +45,8 @@ data class ClassDecl(
     val members: List<Decl>,
     val initBlocks: List<Block>,
     val superInterfaces: List<TypeRef> = emptyList(),
-    val typeParams: List<String> = emptyList()
+    val typeParams: List<String> = emptyList(),
+    val secondaryCtors: List<SecondaryCtor> = emptyList()
 ) : Decl()
 
 data class EnumDecl(
@@ -91,6 +92,12 @@ data class CtorParam(
     val default: Expr? = null,
     val isVal: Boolean = false,
     val isVar: Boolean = false
+)
+
+data class SecondaryCtor(
+    val params: List<Param>,
+    val delegation: CallExpr,  // this(args...) call to delegate to primary
+    val body: Block
 )
 
 // ═══════════════════════════ Block ═══════════════════════════

@@ -26,8 +26,8 @@ class DataClassUnitTest : TranspilerTestBase() {
 
     @Test fun createFunction() {
         val r = transpileMain("val v = Vec2(1.0f, 2.0f)", decls = vec2Decl)
-        r.sourceContains("test_Main_Vec2 test_Main_Vec2_create(ktc_Float x, ktc_Float y)")
-        r.sourceContains("test_Main_Vec2 v = test_Main_Vec2_create(1.0f, 2.0f);")
+        r.sourceContains("test_Main_Vec2 test_Main_Vec2_primaryConstructor(ktc_Float x, ktc_Float y)")
+        r.sourceContains("test_Main_Vec2 v = test_Main_Vec2_primaryConstructor(1.0f, 2.0f);")
     }
 
     // ── Property access ──────────────────────────────────────────────
@@ -95,9 +95,9 @@ class DataClassUnitTest : TranspilerTestBase() {
 
     // ── new (heap constructor) ───────────────────────────────────────
 
-    @Test fun heapNew() {
+    @Test fun primaryConstructor() {
         val r = transpileMain("val v = Vec2(1.0f, 2.0f)", decls = vec2Decl)
-        r.sourceContains("test_Main_Vec2* test_Main_Vec2_new(ktc_Float x, ktc_Float y)")
+        r.sourceContains("test_Main_Vec2 test_Main_Vec2_primaryConstructor(ktc_Float x, ktc_Float y)")
     }
 
     // ── Nested data class (struct-type ctor arg passed by value) ─────
@@ -111,9 +111,9 @@ class DataClassUnitTest : TranspilerTestBase() {
             data class Vec2(val x: Float, val y: Float)
             data class Rect(val origin: Vec2, val size: Vec2)
         """)
-        // _create takes Vec2 by value, not by pointer
-        r.sourceContains("test_Main_Rect_create(test_Main_Vec2 origin, test_Main_Vec2 size)")
+        // _primaryConstructor takes Vec2 by value, not by pointer
+        r.sourceContains("test_Main_Rect_primaryConstructor(test_Main_Vec2 origin, test_Main_Vec2 size)")
         // call site should NOT use &
-        r.sourceContains("test_Main_Rect_create(origin, size)")
+        r.sourceContains("test_Main_Rect_primaryConstructor(origin, size)")
     }
 }

@@ -37,8 +37,8 @@ class GenericsUnitTest : TranspilerTestBase() {
             }
         """)
         // Constructor function with mangled name
-        r.sourceContains("test_Main_Box_Int_create(")
-        r.sourceContains("test_Main_Box_Int_create(42)")
+        r.sourceContains("test_Main_Box_Int_primaryConstructor(")
+        r.sourceContains("test_Main_Box_Int_primaryConstructor(42)")
     }
 
     @Test fun genericClassHeapConstructors() {
@@ -49,8 +49,8 @@ class GenericsUnitTest : TranspilerTestBase() {
                 val b = Box<Int>(42)
             }
         """)
-        // Heap new generated, toHeap is inlined (no separate function)
-        r.headerContains("test_Main_Box_Int* test_Main_Box_Int_new(")
+        // Heap new is inlined (no separate _new function)
+        r.headerContains("test_Main_Box_Int test_Main_Box_Int_primaryConstructor(")
     }
 
     @Test fun genericTemplateNotEmitted() {
@@ -62,7 +62,7 @@ class GenericsUnitTest : TranspilerTestBase() {
             }
         """)
         // The generic template itself should NOT appear as a concrete struct
-        r.sourceNotContains("test_Main_Box_create(")
+        r.sourceNotContains("test_Main_Box_primaryConstructor(")
         r.headerMatches(Regex("test_Main_Box_Int"))
     }
 
@@ -80,8 +80,8 @@ class GenericsUnitTest : TranspilerTestBase() {
         // Both concrete types emitted
         r.headerContains("test_Main_Box_Int")
         r.headerContains("test_Main_Box_Float")
-        r.sourceContains("test_Main_Box_Int_create(42)")
-        r.sourceContains("test_Main_Box_Float_create(3.14f)")
+        r.sourceContains("test_Main_Box_Int_primaryConstructor(42)")
+        r.sourceContains("test_Main_Box_Float_primaryConstructor(3.14f)")
     }
 
     @Test fun stringInstantiation() {
@@ -159,8 +159,9 @@ class GenericsUnitTest : TranspilerTestBase() {
                 val b = HeapAlloc<Box<Int>>(42)
             }
         """)
-        // HeapAlloc<Box<Int>>(42) → Box_Int_new(42)
-        r.sourceContains("test_Main_Box_Int_new(42)")
+        // HeapAlloc<Box<Int>>(42) → inline malloc + primaryConstructor
+        r.sourceContains("test_Main_Box_Int_primaryConstructor(42)")
+        r.sourceContains("malloc(sizeof(test_Main_Box_Int))")
     }
 
     // ── Generic class with multiple ctor params ─────────────────────
@@ -175,7 +176,7 @@ class GenericsUnitTest : TranspilerTestBase() {
         """)
         r.headerContains("ktc_Int first;")
         r.headerContains("ktc_Int second;")
-        r.sourceContains("test_Main_Pair_Int_create(1, 2)")
+        r.sourceContains("test_Main_Pair_Int_primaryConstructor(1, 2)")
     }
 
     // ── VarDecl with generic class type ─────────────────────────────
@@ -189,7 +190,7 @@ class GenericsUnitTest : TranspilerTestBase() {
             }
         """)
         // Local variable should use the mangled type
-        r.sourceContains("test_Main_Box_Int b = test_Main_Box_Int_create(42);")
+        r.sourceContains("test_Main_Box_Int b = test_Main_Box_Int_primaryConstructor(42);")
     }
 
     // ── Generic class with method that calls self fields ────────────
@@ -243,7 +244,7 @@ class GenericsUnitTest : TranspilerTestBase() {
         """)
         // Should still produce concrete Box_Int
         r.headerContains("test_Main_Box_Int")
-        r.sourceContains("test_Main_Box_Int_create(42)")
+        r.sourceContains("test_Main_Box_Int_primaryConstructor(42)")
     }
 
     // ═══════════════════════════════════════════════════════════════════
