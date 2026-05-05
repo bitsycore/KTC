@@ -70,6 +70,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private data class ActiveLambda(val expr: LambdaExpr, val paramTypes: List<String>)
     private var activeLambdas: Map<String, ActiveLambda> = emptyMap()
     private val lambdaParamSubst = mutableMapOf<String, String>()  // also stores "\$this" → receiver C expr during inline ext expansion
+    // Deferred hdr declarations: className → list of hdr lines (for methods moved to implements section)
+    private val deferredHdrLines = mutableMapOf<String, MutableList<String>>()
     private val lambdaParamTypes = mutableMapOf<String, String>()  // lambda param name → Kotlin type, used by inferExprType so .size etc. resolve correctly
     private var inlineReturnVar: String? = null  // result var name (value pos), "" (stmt pos), null (not inside inline)
     private var inlineEndLabel: String? = null   // goto label after the inline block to handle early return
@@ -394,8 +396,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Emit struct/enum/object declarations (defines the element types needed by generic interfaces)
         // Skip generic templates — they are emitted per concrete instantiation
+        var firstClass = true
         for (d in file.decls) when (d) {
             is ClassDecl  -> if (d.typeParams.isEmpty()) {
+                if (!firstClass) hdr.appendLine()
+                firstClass = false
                 emitClass(d)
                 // Emit interface vtable header declarations right after the class struct
                 if (d.superInterfaces.isNotEmpty()) {
@@ -449,6 +454,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for ((baseName, instantiations) in genericInstantiations) {
             val templateDecl = genericClassDecls[baseName] ?: continue
             for (typeArgs in instantiations) {
+                if (!firstClass) hdr.appendLine()
+                firstClass = false
                 val mangledName = mangledGenericName(baseName, typeArgs)
                 val templateCi = classes[baseName] ?: continue
                 // Set type substitution for this instantiation
@@ -1506,7 +1513,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: typedef struct ---
-        hdr.appendLine()
         hdr.appendLine("// ══ $kind ${d.name} ($currentSourceFile) ══")
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[d.name]!!}")
         hdr.appendLine("typedef struct {")
@@ -1595,8 +1601,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             defineVar(name, resolveTypeName(type))
             if (!ci.isValProp(name)) markMutable(name)
         }
+        // Build set of interface method names to suppress their hdr here (emitted under implements section)
+        val ifaceMethodNames = d.superInterfaces.flatMap { ifaceRef ->
+            val ifaceName = resolveIfaceName(ifaceRef)
+            val iface = interfaces[ifaceName] ?: return@flatMap emptyList()
+            (collectAllIfaceMethods(iface).map { it.name } + collectAllIfaceProperties(iface).map { it.name }).toSet()
+        }.toSet()
+
         for (m in d.members) {
-            if (m is FunDecl && m.receiver == null) emitMethod(d.name, m)
+            if (m is FunDecl && m.receiver == null) {
+                emitMethod(d.name, m, suppressHdr = m.name in ifaceMethodNames)
+            }
         }
         // Implicit no-op dispose if not overridden
         if (d.members.none { it is FunDecl && it.name == "dispose" }) {
@@ -1623,7 +1638,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: struct definition (forward typedef already emitted) ---
-        hdr.appendLine()
         hdr.appendLine("// ══ $kind ${templateDecl.name}<$concreteTypes> ($currentSourceFile) ══")
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[ci.name]!!}")
         hdr.appendLine("struct $cName {")
@@ -1775,7 +1789,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
     }
 
-    private fun emitMethod(className: String, f: FunDecl) {
+    private fun emitMethod(className: String, f: FunDecl, suppressHdr: Boolean = false) {
         val cClass = pfx(className)
         val methodName = if (f.isPrivate) "PRIV_${f.name}" else f.name
 
@@ -1809,6 +1823,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (f.isPrivate) {
             // Private: forward decl only in .c, not in .h
             implFwd.appendLine("$cRet ${cClass}_${methodName}($allParams);")
+        } else if (suppressHdr) {
+            deferredHdrLines.getOrPut(className) { mutableListOf() }.add("$cRet ${cClass}_${methodName}($allParams);")
         } else {
             hdr.appendLine("$cRet ${cClass}_${methodName}($allParams);")
         }
@@ -2614,6 +2630,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
             // wrapping function: ClassName_as_IfaceName
             if (!implsOnly) hdr.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self);")
+            // Emit class method declarations for interface overrides (moved from class section)
+            if (!implsOnly) {
+                val lines = deferredHdrLines[className]
+                if (lines != null) {
+                    for (line in lines) {
+                        hdr.appendLine(line)
+                    }
+                    deferredHdrLines.remove(className)
+                }
+            }
             if (!declsOnly) {
                 impl.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self) {")
                 impl.appendLine("    return ${ifaceAsInit(cIface, cClass, className, ifaceName)};")
