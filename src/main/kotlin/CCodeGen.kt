@@ -4999,6 +4999,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
             return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
         }
+        // Generic class constructor without explicit type args: infer from arguments
+        if (classes.containsKey(name) && classes[name]!!.isGeneric && e.args.isNotEmpty()) {
+            val inferredArgs = e.args.map { inferExprType(it.expr) ?: "Int" }
+            val mangledName = recordGenericInstantiation(name, inferredArgs)
+            materializeGenericInstantiations()
+            val ci = classes[mangledName]
+            if (ci != null) {
+                val allParams = ci.ctorProps + ci.ctorPlainParams
+                val ctorParamList = allParams.map { Param(it.first, it.second) }
+                val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
+                    it.first to null
+                })
+                val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
+                return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
+            }
+        }
         if (classes.containsKey(name)) {
             val ci = classes[name]!!
             // Check secondary constructors by argument count (skip those with same count as primary)
@@ -6448,6 +6464,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
                 val resolvedArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
                 return mangledGenericName(name, resolvedArgs)
+            }
+            if (classes.containsKey(name) && classes[name]!!.isGeneric && e.args.isNotEmpty()) {
+                // Infer type args from constructor arguments (e.g. Wrapper("hello") → Wrapper_String)
+                val inferredArgs = e.args.map { inferExprType(it.expr) ?: "Int" }
+                recordGenericInstantiation(name, inferredArgs)
+                return mangledGenericName(name, inferredArgs)
             }
             if (classes.containsKey(name)) return name
             if (name == "HeapAlloc" || name == "HeapArrayZero" || name == "HeapArrayResize") {
