@@ -1702,15 +1702,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 impl.appendLine("    return h;")
             } else {
-                impl.appendLine("    ktc_ULong x = (ktc_ULong)(uintptr_t)\$self;")
-                impl.appendLine("    x ^= (ktc_ULong)\$self->__type_id * 0x9e3779b97f4a7c15ULL;")
-                impl.appendLine("    x ^= x >> 30;")
-                impl.appendLine("    x *= 0xbf58476d1ce4e5b9ULL;")
-                impl.appendLine("    x ^= x >> 27;")
-                impl.appendLine("    x *= 0x94d049bb133111ebULL;")
-                impl.appendLine("    x ^= x >> 31;")
-                impl.appendLine("    ktc_UInt h = (ktc_UInt)x ^ (ktc_UInt)(x >> 32);")
-                impl.appendLine("    return (ktc_Int)h;")
+                impl.appendLine("    uintptr_t x = (uintptr_t)\$self;")
+                impl.appendLine("    return (ktc_Int)(x ^ (x >> 32));")
             }
             impl.appendLine("}")
             impl.appendLine()
