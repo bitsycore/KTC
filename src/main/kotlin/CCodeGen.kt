@@ -398,10 +398,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
         // Forward-declare all interface structs so class _as_ declarations
         // can reference them before the tagged union is fully defined.
-        for ((name, _) in interfaces) {
+        // Skip generic templates (with type params) — only concrete/monomorphized types need forwarding.
+        hdr.appendLine("// forward declarations")
+        var emittedAny = false
+        for ((name, info) in interfaces) {
+            if (info.typeParams.isNotEmpty()) continue
             val cName = pfx(name)
             hdr.appendLine("typedef struct $cName $cName;")
+            emittedAny = true
         }
+        if (emittedAny) hdr.appendLine()
 
         // Emit struct/enum/object declarations (defines the element types needed by generic interfaces)
         // Skip generic templates — they are emitted per concrete instantiation
@@ -417,11 +423,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 }
                 // Emit companion objects declared inside this class
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
+                    hdr.appendLine()
                     emitObject(ObjectDecl("${d.name}_${vMember.name}", vMember.members))
                 }
             }
             is EnumDecl   -> emitEnum(d)
-            is ObjectDecl -> emitObject(d)
+            is ObjectDecl -> {
+                if (!firstClass) hdr.appendLine()
+                firstClass = false
+                emitObject(d)
+            }
             else -> {}
         }
 
@@ -692,10 +703,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                             }
                         }
                     }
-                    // dispose() is implicitly an override — always requires the keyword
+                    // dispose() and hashCode() are implicitly overrides — always require the keyword
                     for (m in ci.methods) {
-                        if (m.name == "dispose" && !m.isOverride) {
-                            codegenError("Method 'dispose' in class '${d.name}' must be marked 'override'")
+                        if ((m.name == "dispose" || m.name == "hashCode") && !m.isOverride) {
+                            codegenError("Method '${m.name}' in class '${d.name}' must be marked 'override'")
                         }
                     }
                     // Check for bogus override on methods that don't match any interface
@@ -703,7 +714,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val allIfaceMethodNames = d.superInterfaces.flatMap { ifaceRef ->
                         val ifaceName = resolveIfaceName(ifaceRef)
                         interfaces[ifaceName]?.let { collectAllIfaceMethods(it).map { m -> m.name } } ?: emptyList()
-                    }.toSet() + "dispose"
+                    }.toSet() + "dispose" + "hashCode"
                     for (m in ci.methods) {
                         if (m.isOverride && m.name !in allIfaceMethodNames) {
                             codegenError("Method '${m.name}' is marked 'override' but does not override any interface method")
@@ -743,10 +754,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     oi.methods += m
                 }
                 objects[d.name] = oi
-                // dispose() is implicitly an override — always requires the keyword (current file, non-stdlib)
+                // dispose()/hashCode() are implicitly overrides — always require the keyword (current file, non-stdlib)
                 if (validate && file.pkg != "ktc.std") {
-                    for (m in d.members) if (m is FunDecl && m.name == "dispose" && !m.isOverride) {
-                        codegenError("Method 'dispose' in object '${d.name}' must be marked 'override'")
+                    for (m in d.members) if (m is FunDecl && (m.name == "dispose" || m.name == "hashCode") && !m.isOverride) {
+                        codegenError("Method '${m.name}' in object '${d.name}' must be marked 'override'")
                     }
                 }
                 // Track objects with dispose for auto-call on main exit (current file only)
@@ -1672,6 +1683,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             impl.appendLine("void ${cName}_dispose($cName* \$self) { (void)\$self; }")
             impl.appendLine()
         }
+        // Implicit hashCode — default returns __type_id, data classes hash all fields
+        if (d.members.none { it is FunDecl && it.name == "hashCode" }) {
+            hdr.appendLine("ktc_Int ${cName}_hashCode($cName* \$self);")
+            impl.appendLine("ktc_Int ${cName}_hashCode($cName* \$self) {")
+            if (d.isData && ci.props.isNotEmpty()) {
+                impl.appendLine("    ktc_Int h = 0;")
+                for ((name, type) in ci.props) {
+                    val resolved = resolveTypeName(type)
+                    val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
+                    impl.appendLine("    h = h * 31 + ${hashFieldExpr(resolved, "\$self->$fieldName")};")
+                }
+                impl.appendLine("    return h;")
+            } else {
+                impl.appendLine("    return \$self->__type_id;")
+            }
+            impl.appendLine("}")
+            impl.appendLine()
+        }
         popScope()
         currentClass = null
     }
@@ -1780,6 +1809,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (templateDecl.members.none { it is FunDecl && it.name == "dispose" }) {
             hdr.appendLine("void ${cName}_dispose($cName* \$self);")
             impl.appendLine("void ${cName}_dispose($cName* \$self) { (void)\$self; }")
+            impl.appendLine()
+        }
+        // Implicit hashCode
+        if (templateDecl.members.none { it is FunDecl && it.name == "hashCode" }) {
+            hdr.appendLine("ktc_Int ${cName}_hashCode($cName* \$self);")
+            impl.appendLine("ktc_Int ${cName}_hashCode($cName* \$self) {")
+            if (templateDecl.isData && ci.props.isNotEmpty()) {
+                impl.appendLine("    ktc_Int h = 0;")
+                for ((name, type) in ci.props) {
+                    val resolved = resolveTypeName(type)
+                    val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
+                    impl.appendLine("    h = h * 31 + ${hashFieldExpr(resolved, "\$self->$fieldName")};")
+                }
+                impl.appendLine("    return h;")
+            } else {
+                impl.appendLine("    return \$self->__type_id;")
+            }
+            impl.appendLine("}")
             impl.appendLine()
         }
         popScope()
@@ -2384,6 +2431,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine("// ══ object ${d.name} ($currentSourceFile) ══")
         impl.appendLine()
 
+        hdr.appendLine("// ══ object ${d.name} ($currentSourceFile) ══")
         hdr.appendLine("typedef struct {")
         if (props.isEmpty()) hdr.appendLine("    char _dummy;")
         for (p in props) {
@@ -2600,6 +2648,27 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     /** Data member name for a class inside a tagged union or single-field interface struct. */
     private fun ifaceDataName(className: String): String = "${pfx(className)}_data"
+
+    /** Return the ktc_hash_* expression for a resolved field type and value expression. */
+    private fun hashFieldExpr(resolvedType: String, valueExpr: String): String = when {
+        resolvedType == "Byte"    -> "ktc_hash_i8($valueExpr)"
+        resolvedType == "Short"   -> "ktc_hash_i16($valueExpr)"
+        resolvedType == "Int"     -> "ktc_hash_i32($valueExpr)"
+        resolvedType == "Long"    -> "ktc_hash_i64($valueExpr)"
+        resolvedType == "Float"   -> "ktc_hash_f32($valueExpr)"
+        resolvedType == "Double"  -> "ktc_hash_f64($valueExpr)"
+        resolvedType == "Boolean" -> "ktc_hash_bool($valueExpr)"
+        resolvedType == "Char"    -> "ktc_hash_char($valueExpr)"
+        resolvedType == "UByte"   -> "ktc_hash_u8($valueExpr)"
+        resolvedType == "UShort"  -> "ktc_hash_u16($valueExpr)"
+        resolvedType == "UInt"    -> "ktc_hash_u32($valueExpr)"
+        resolvedType == "ULong"   -> "ktc_hash_u64($valueExpr)"
+        resolvedType == "String"  -> "ktc_hash_str($valueExpr)"
+        resolvedType.endsWith("*") -> "((ktc_Int)(uintptr_t)($valueExpr))"
+        classes.containsKey(resolvedType) || interfaces.containsKey(resolvedType) || isArrayType(resolvedType) || resolvedType.endsWith("?") ->
+            "($valueExpr).__type_id"
+        else -> "($valueExpr).__type_id"
+    }
 
     /**
      * Generate the designated-initializer return expression for ClassName_as_IfaceName().

@@ -24,12 +24,30 @@ object Greeter {
     }
 }
 
+class TestCompanion {
+
+    fun test() {
+        println("Run test from instance")
+    }
+
+    companion object {
+        fun testMe() {
+            println("Run testMe from companion object")
+        }
+    }
+}
+
 fun main() {
+
     println("first: ${Config.next()}")
     println("second: ${Config.next()}")
 
     Greeter.greet("World")
     Greeter.greet("Kotlin")
+
+    val test = TestCompanion()
+    TestCompanion.testMe()
+    test.test()
 
     println("done")
 }
