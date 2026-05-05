@@ -75,6 +75,9 @@ typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 
 #define KTC_OPTIONAL(T) typedef struct { ktc_OptionalTag tag; T value; } T##_Optional
 
+/* shared no-op dispose — used by vtables when class doesn't override dispose */
+static void ktc_noop_dispose(void* obj) { (void)obj; }
+
 KTC_OPTIONAL(ktc_Byte);
 KTC_OPTIONAL(ktc_Short);
 KTC_OPTIONAL(ktc_Int);

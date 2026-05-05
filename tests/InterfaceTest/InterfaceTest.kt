@@ -16,6 +16,7 @@ class Square(private var side: Float) : Shape {
 }
 
 interface Resource {
+    fun dispose()
     fun label(): String
 }
 
@@ -53,6 +54,15 @@ fun main() {
     val f = File("data.txt")
     println(f.label())
     f.dispose()
+
+    // dispose through interface (vtable dispatch)
+    val r: Resource = f
+    println("dispose via Resource interface:")
+    r.dispose()
+
+    // dispose on non-override class (no-op via macro)
+    println("dispose on Circle (should be no-op):")
+    c.dispose()
 
     println("done")
 }

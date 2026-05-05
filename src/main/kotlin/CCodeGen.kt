@@ -2790,7 +2790,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         val pResolved = resolveTypeName(p.type)
                         if (p.type.nullable) ", ${optCTypeName(pResolved)}" else ", ${cType(p.type)}"
                     }
-                    impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+                    val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
+                        "ktc_noop_dispose"
+                    else "${cClass}_${m.name}"
+                    impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
                 }
                 impl.appendLine("};")
                 impl.appendLine()
@@ -2867,7 +2870,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val pResolved = resolveTypeName(p.type)
                     if (p.type.nullable) ", ${optCTypeName(pResolved)}" else ", ${cType(p.type)}"
                 }
-                impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+                val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
+                    "ktc_noop_dispose"
+                else "${cClass}_${m.name}"
+                impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
             }
             impl.appendLine("};")
             impl.appendLine()
