@@ -73,7 +73,10 @@ class HeapUnitTest : TranspilerTestBase() {
 
     @Test fun stackToHeap() {
         val r = transpileMain(
-            "val v = Vec2(5.0f, 6.0f)\nval hp = v.toHeap()",
+            """
+            val v = Vec2(5.0f, 6.0f)
+            val hp = v.toHeap()
+            """.trimIndent(),
             decls = vec2Decl
         )
         r.sourceContains("malloc(sizeof(test_Main_Vec2))")

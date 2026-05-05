@@ -692,11 +692,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                             }
                         }
                     }
+                    // dispose() is implicitly an override — always requires the keyword
+                    for (m in ci.methods) {
+                        if (m.name == "dispose" && !m.isOverride) {
+                            codegenError("Method 'dispose' in class '${d.name}' must be marked 'override'")
+                        }
+                    }
                     // Check for bogus override on methods that don't match any interface
+                    // (dispose is implicitly an override of the no-op dispose every class gets)
                     val allIfaceMethodNames = d.superInterfaces.flatMap { ifaceRef ->
                         val ifaceName = resolveIfaceName(ifaceRef)
                         interfaces[ifaceName]?.let { collectAllIfaceMethods(it).map { m -> m.name } } ?: emptyList()
-                    }.toSet()
+                    }.toSet() + "dispose"
                     for (m in ci.methods) {
                         if (m.isOverride && m.name !in allIfaceMethodNames) {
                             codegenError("Method '${m.name}' is marked 'override' but does not override any interface method")
@@ -736,6 +743,12 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     oi.methods += m
                 }
                 objects[d.name] = oi
+                // dispose() is implicitly an override — always requires the keyword (current file, non-stdlib)
+                if (validate && file.pkg != "ktc.std") {
+                    for (m in d.members) if (m is FunDecl && m.name == "dispose" && !m.isOverride) {
+                        codegenError("Method 'dispose' in object '${d.name}' must be marked 'override'")
+                    }
+                }
                 // Track objects with dispose for auto-call on main exit (current file only)
                 if (validate) {
                     for (m in d.members) if (m is FunDecl && m.name == "dispose") {

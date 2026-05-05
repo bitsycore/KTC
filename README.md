@@ -118,7 +118,6 @@ Unlike Kotlin, **all types are by value by default**. A class instance is a C st
 
 | Type                           | Description                                 |
 |--------------------------------|---------------------------------------------|
-| `Disposable`                   | Interface with `dispose()` for cleanup      |
 | `List<T>` / `MutableList<T>`   | Read-only and mutable list interfaces       |
 | `ArrayList<T>`                 | Growable array-backed list implementation   |
 | `ListIterator<T>`              | Iterator for list types                     |

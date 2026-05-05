@@ -7,7 +7,7 @@ class SimpleData(val x: Int, val y: Int)
 class ManagedResource {
     var id: Int = 0
 
-    fun dispose() {
+    override fun dispose() {
         println("disposed resource $id")
     }
 }

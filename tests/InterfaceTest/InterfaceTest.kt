@@ -16,7 +16,6 @@ class Square(private var side: Float) : Shape {
 }
 
 interface Resource {
-    fun dispose()
     fun label(): String
 }
 
@@ -25,8 +24,7 @@ class File(private var name: String) : Resource {
     override fun label(): String { return "File($name)" }
 }
 
-// TODO: This should return a Union of Circle and Square
-// Right now it's allocated memory
+// This should return a Union of Circle and Square
 fun shapeReturnerById(id: Int): Shape {
     if (id % 2 == 0)
         return Circle(1.0f)
