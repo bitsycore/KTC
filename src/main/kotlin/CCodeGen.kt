@@ -397,6 +397,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         for (d in file.decls) when (d) {
             is ClassDecl  -> if (d.typeParams.isEmpty()) {
                 emitClass(d)
+                // Emit interface vtable header declarations right after the class struct
+                if (d.superInterfaces.isNotEmpty()) {
+                    emitInterfaceVtablesForClass(d.name, d.superInterfaces, declsOnly = true)
+                }
                 // Emit companion objects declared inside this class
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
                     emitObject(ObjectDecl("${d.name}_${vMember.name}", vMember.members))
@@ -430,6 +434,18 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit monomorphized generic class instantiations BEFORE generic interfaces,
         // because interface vtable structs may reference generic class types as return types
         // (e.g., MapIterator<Int,String> returned by Map<Int,String>.iterator())
+
+        // Forward-declare all monomorphized generic interface vtable structs so that
+        // class _as_ declarations can reference them before the full vtable definition.
+        for ((name, info) in interfaces) {
+            val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
+            if (isMonomorphized) {
+                val cName = pfx(name)
+                hdr.appendLine("typedef struct ${cName}_vt ${cName}_vt;")
+            }
+        }
+        hdr.appendLine()
+
         for ((baseName, instantiations) in genericInstantiations) {
             val templateDecl = genericClassDecls[baseName] ?: continue
             for (typeArgs in instantiations) {
@@ -441,6 +457,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val prevSourceFile = currentSourceFile
                 declSourceFile[baseName]?.let { currentSourceFile = it }
                 emitGenericClass(templateDecl, mangledName)
+                // Emit interface vtable header declarations right after the class struct
+                if (templateDecl.superInterfaces.isNotEmpty()) {
+                    val resolvedIfaces = templateDecl.superInterfaces.map { substituteTypeRef(it, typeSubst) }
+                    emitInterfaceVtablesForClass(mangledName, resolvedIfaces, declsOnly = true)
+                }
                 currentSourceFile = prevSourceFile
                 typeSubst = emptyMap()
             }
@@ -482,7 +503,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         // Emit static vtable instances + wrapping functions for interface implementations
         // Non-generic classes:
         for (d in file.decls) if (d is ClassDecl && d.typeParams.isEmpty() && d.superInterfaces.isNotEmpty()) {
-            emitClassInterfaceVtables(d)
+            emitInterfaceVtablesForClass(d.name, d.superInterfaces, implsOnly = true)
         }
         // Monomorphized generic classes:
         for ((baseName, instantiations) in genericInstantiations) {
@@ -495,7 +516,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     .ifEmpty { genericTypeBindings[mangledName] ?: emptyMap() }
                 val resolvedIfaces = templateDecl.superInterfaces.map { substituteTypeRef(it, subst) }
                 typeSubst = subst
-                emitInterfaceVtablesForClass(mangledName, resolvedIfaces)
+                emitInterfaceVtablesForClass(mangledName, resolvedIfaces, implsOnly = true)
                 typeSubst = emptyMap()
             }
         }
@@ -1485,6 +1506,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: typedef struct ---
+        hdr.appendLine()
         hdr.appendLine("// ══ $kind ${d.name} ($currentSourceFile) ══")
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[d.name]!!}")
         hdr.appendLine("typedef struct {")
@@ -1601,6 +1623,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: struct definition (forward typedef already emitted) ---
+        hdr.appendLine()
         hdr.appendLine("// ══ $kind ${templateDecl.name}<$concreteTypes> ($currentSourceFile) ══")
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[ci.name]!!}")
         hdr.appendLine("struct $cName {")
@@ -2540,8 +2563,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     /**
      * Emit vtables for a concrete class name implementing the given super interfaces.
      * Works for both non-generic and monomorphized generic classes.
+     * @param declsOnly if true, only emit header declarations (for grouping with class struct).
+     * @param implsOnly if true, only emit .c implementations (skip hdr lines).
      */
-    private fun emitInterfaceVtablesForClass(className: String, superIfaceRefs: List<TypeRef>) {
+    private fun emitInterfaceVtablesForClass(className: String, superIfaceRefs: List<TypeRef>, declsOnly: Boolean = false, implsOnly: Boolean = false) {
         val cClass = pfx(className)
         for (ifaceRef in superIfaceRefs) {
             val ifaceName = resolveIfaceName(ifaceRef)
@@ -2550,49 +2575,58 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val allMethods = collectAllIfaceMethods(iface)
             val allProps = collectAllIfaceProperties(iface)
 
-            hdr.appendLine("// ── $className implements $ifaceName ──")
-            impl.appendLine("// ── $className implements $ifaceName ──")
+            if (!implsOnly) hdr.appendLine()
+            if (!implsOnly) hdr.appendLine("// ── $className implements $ifaceName ──")
+            if (!declsOnly) impl.appendLine("// ── $className implements $ifaceName ──")
 
             // Emit property getter wrappers
             for (p in allProps) {
                 val ct = if (p.type != null) cType(p.type) else "int32_t"
                 val getterName = "${cClass}_${p.name}_get"
-                hdr.appendLine("$ct $getterName($cClass* \$self);")
-                impl.appendLine("$ct $getterName($cClass* \$self) { return \$self->${p.name}; }")
-                impl.appendLine()
+                if (!implsOnly) hdr.appendLine("$ct $getterName($cClass* \$self);")
+                if (!declsOnly) {
+                    impl.appendLine("$ct $getterName($cClass* \$self) { return \$self->${p.name}; }")
+                    impl.appendLine()
+                }
             }
 
             // static vtable instance
-            hdr.appendLine("extern const ${cIface}_vt ${cClass}_${ifaceName}_vt;")
-            impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
-            for (p in allProps) {
-                val ct = if (p.type != null) cType(p.type) else "int32_t"
-                impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
-            }
-            for (m in allMethods) {
-                val mReturnsNullable = m.returnType != null && m.returnType.nullable
-                val mRetResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
-                val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
-                val extraCast = m.params.joinToString("") { p ->
-                    val pResolved = resolveTypeName(p.type)
-                    if (p.type.nullable) ", ${optCTypeName(pResolved)}" else ", ${cType(p.type)}"
+            if (!implsOnly) hdr.appendLine("extern const ${cIface}_vt ${cClass}_${ifaceName}_vt;")
+            if (!declsOnly) {
+                impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
+                for (p in allProps) {
+                    val ct = if (p.type != null) cType(p.type) else "int32_t"
+                    impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
                 }
-                impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+                for (m in allMethods) {
+                    val mReturnsNullable = m.returnType != null && m.returnType.nullable
+                    val mRetResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+                    val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
+                    val extraCast = m.params.joinToString("") { p ->
+                        val pResolved = resolveTypeName(p.type)
+                        if (p.type.nullable) ", ${optCTypeName(pResolved)}" else ", ${cType(p.type)}"
+                    }
+                    impl.appendLine("    ($cRet (*)(void*$extraCast)) ${cClass}_${m.name},")
+                }
+                impl.appendLine("};")
+                impl.appendLine()
             }
-            impl.appendLine("};")
-            impl.appendLine()
 
             // wrapping function: ClassName_as_IfaceName
-            hdr.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self);")
-            impl.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self) {")
-            impl.appendLine("    return ${ifaceAsInit(cIface, cClass, className, ifaceName)};")
-            impl.appendLine("}")
-            impl.appendLine()
+            if (!implsOnly) hdr.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self);")
+            if (!declsOnly) {
+                impl.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self) {")
+                impl.appendLine("    return ${ifaceAsInit(cIface, cClass, className, ifaceName)};")
+                impl.appendLine("}")
+                impl.appendLine()
+            }
 
             // Also emit vtables for all parent interfaces (transitive)
             // E.g., ArrayList_Int implements MutableList_Int which extends List_Int
             // → emit ArrayList_Int_as_List_Int too
-            emitTransitiveInterfaceVtables(className, cClass, iface, allProps, allMethods)
+            if (!declsOnly) {
+                emitTransitiveInterfaceVtables(className, cClass, iface, allProps, allMethods)
+            }
         }
     }
 
