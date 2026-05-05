@@ -369,6 +369,16 @@ static inline ktc_Int ktc_hash_str(ktc_String s) {
     return (ktc_Int)h;
 }
 
+/* finalisation mix — 32-bit Murmur3-like avalanching */
+static inline ktc_UInt ktc_fmix32(ktc_UInt h) {
+    h ^= h >> 16;
+    h *= 0x85ebca6bU;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35U;
+    h ^= h >> 16;
+    return h;
+}
+
 /* ═══════════════════════════ Conversion helpers ═════════════════════ */
 
 static inline ktc_String ktc_int_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Int v) {

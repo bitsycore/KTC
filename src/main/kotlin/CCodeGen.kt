@@ -1692,11 +1692,25 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 for ((name, type) in ci.props) {
                     val resolved = resolveTypeName(type)
                     val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                    impl.appendLine("    h = h * 31 + ${hashFieldExpr(resolved, "\$self->$fieldName")};")
+                    val hashExpr = if (type.nullable && !resolved.endsWith("*")) {
+                        val valueExpr = "\$self->$fieldName"
+                        "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(resolved, "${valueExpr}.value")} : 0)"
+                    } else {
+                        hashFieldExpr(resolved, "\$self->$fieldName")
+                    }
+                    impl.appendLine("    h = h * 31 + $hashExpr;")
                 }
                 impl.appendLine("    return h;")
             } else {
-                impl.appendLine("    return \$self->__type_id;")
+                impl.appendLine("    ktc_ULong x = (ktc_ULong)(uintptr_t)\$self;")
+                impl.appendLine("    x ^= (ktc_ULong)\$self->__type_id * 0x9e3779b97f4a7c15ULL;")
+                impl.appendLine("    x ^= x >> 30;")
+                impl.appendLine("    x *= 0xbf58476d1ce4e5b9ULL;")
+                impl.appendLine("    x ^= x >> 27;")
+                impl.appendLine("    x *= 0x94d049bb133111ebULL;")
+                impl.appendLine("    x ^= x >> 31;")
+                impl.appendLine("    ktc_UInt h = (ktc_UInt)x ^ (ktc_UInt)(x >> 32);")
+                impl.appendLine("    return (ktc_Int)h;")
             }
             impl.appendLine("}")
             impl.appendLine()
@@ -1820,11 +1834,23 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 for ((name, type) in ci.props) {
                     val resolved = resolveTypeName(type)
                     val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                    impl.appendLine("    h = h * 31 + ${hashFieldExpr(resolved, "\$self->$fieldName")};")
+                    val hashExpr = if (type.nullable && !resolved.endsWith("*")) {
+                        val valueExpr = "\$self->$fieldName"
+                        "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(resolved, "${valueExpr}.value")} : 0)"
+                    } else {
+                        hashFieldExpr(resolved, "\$self->$fieldName")
+                    }
+                    impl.appendLine("    h = h * 31 + $hashExpr;")
                 }
                 impl.appendLine("    return h;")
             } else {
-                impl.appendLine("    return \$self->__type_id;")
+                impl.appendLine("    uintptr_t p = (uintptr_t)\$self; p >>= 4;")
+                impl.appendLine("    ktc_UInt lo = (ktc_UInt)p;")
+                impl.appendLine("    ktc_UInt hi = (ktc_UInt)(p >> 32);")
+                impl.appendLine("    ktc_UInt t = (ktc_UInt)\$self->__type_id * 0x9e3779b1U;")
+                impl.appendLine("    ktc_UInt h = lo ^ hi ^ t;")
+                impl.appendLine("    h = ktc_fmix32(h);")
+                impl.appendLine("    return (ktc_Int)h;")
             }
             impl.appendLine("}")
             impl.appendLine()
@@ -2651,6 +2677,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
 
     /** Return the ktc_hash_* expression for a resolved field type and value expression. */
     private fun hashFieldExpr(resolvedType: String, valueExpr: String): String = when {
+        // Nullable value types: hash tag + value (or 0 if null)
+        resolvedType.endsWith("?") && isValueNullableType(resolvedType) -> {
+            val base = resolvedType.removeSuffix("?")
+            "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(base, "${valueExpr}.value")} : 0)"
+        }
         resolvedType == "Byte"    -> "ktc_hash_i8($valueExpr)"
         resolvedType == "Short"   -> "ktc_hash_i16($valueExpr)"
         resolvedType == "Int"     -> "ktc_hash_i32($valueExpr)"
