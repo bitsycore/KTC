@@ -1485,6 +1485,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: typedef struct ---
+        hdr.appendLine("// ══ $kind ${d.name} ($currentSourceFile) ══")
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[d.name]!!}")
         hdr.appendLine("typedef struct {")
         hdr.appendLine("    ktc_Int __type_id;")
@@ -1600,6 +1601,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         impl.appendLine()
 
         // --- header: struct definition (forward typedef already emitted) ---
+        hdr.appendLine("// ══ $kind ${templateDecl.name}<$concreteTypes> ($currentSourceFile) ══")
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[ci.name]!!}")
         hdr.appendLine("struct $cName {")
         hdr.appendLine("    ktc_Int __type_id;")
@@ -2406,6 +2408,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      */
     private fun emitInterfaceVtable(info: IfaceInfo) {
         val cName = pfx(info.name)
+        hdr.appendLine("// ══ interface ${info.name} ($currentSourceFile) ══")
         hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[info.name]!!}")
         // Collect all methods/properties including inherited from super interfaces
         val allMethods = collectAllIfaceMethods(info)
@@ -2440,6 +2443,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun emitIfaceInfo(info: IfaceInfo) {
         val cName = pfx(info.name)
         val impls = interfaceImplementors[info.name] ?: emptyList()
+        hdr.appendLine("// ══ interface ${info.name} — tagged union ($currentSourceFile) ══")
         hdr.appendLine("typedef struct $cName {")
         if (impls.isEmpty()) {
             // Fallback: no known implementors — keep void* obj
@@ -2546,6 +2550,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val allMethods = collectAllIfaceMethods(iface)
             val allProps = collectAllIfaceProperties(iface)
 
+            hdr.appendLine("// ── $className implements $ifaceName ──")
+            impl.appendLine("// ── $className implements $ifaceName ──")
+
             // Emit property getter wrappers
             for (p in allProps) {
                 val ct = if (p.type != null) cType(p.type) else "int32_t"
@@ -2604,6 +2611,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             val cSuper = pfx(superName)
             val superMethods = collectAllIfaceMethods(superIface)
             val superProps = collectAllIfaceProperties(superIface)
+
+            hdr.appendLine("// ── $className implements $superName (transitive) ──")
+            impl.appendLine("// ── $className implements $superName (transitive) ──")
 
             // Register this class as also implementing the parent interface
             val existing = classInterfaces[className]?.toMutableList() ?: mutableListOf()
