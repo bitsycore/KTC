@@ -211,6 +211,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     // genName redirects these to their local$name copy; .size uses the trampoline field.
     private val trampolinedParams = mutableSetOf<String>()
     private var currentExtRecvType: String? = null
+    // Target type for HeapAlloc/HeapArrayZero/HeapArrayResize inference (context from LHS)
+    private var heapAllocTargetType: TypeRef? = null
 
     /** Returns the class name if `type` is a pointer to a known class, else null. */
     private fun pointerClassName(type: String?): String? {
@@ -1691,7 +1693,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             for (bp in ci.bodyProps) {
                 if (bp.init != null) {
                     if (bp.line > 0) currentStmtLine = bp.line
+                    heapAllocTargetType = bp.type
                     val expr = genExpr(bp.init)
+                    heapAllocTargetType = null
                     flushPreStmts("    ")
                     val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
                     impl.appendLine("    \$self.$bodyFieldName = $expr;")
@@ -1885,7 +1889,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             for (bp in ci.bodyProps) {
                 if (bp.init != null) {
                     if (bp.line > 0) currentStmtLine = bp.line
+                    heapAllocTargetType = bp.type
                     val expr = genExpr(bp.init)
+                    heapAllocTargetType = null
                     flushPreStmts("    ")
                     val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
                     impl.appendLine("    \$self.$bodyFieldName = $expr;")
@@ -3425,7 +3431,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         if (inner !is CallExpr) return false
         val name = (inner.callee as? NameExpr)?.name ?: return false
         if (name !in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize")) return false
-        return inner.typeArgs.isNotEmpty() && inner.typeArgs[0].name == "Array"
+        if (inner.typeArgs.isNotEmpty() && inner.typeArgs[0].name == "Array") return true
+        if (heapAllocTargetType != null && heapAllocTargetType!!.name == "Array" && heapAllocTargetType!!.typeArgs.isNotEmpty()) return true
+        return false
     }
 
     /** Extract the allocation size argument from malloc<Array<T>>(size) or realloc<Array<T>>(ptr, size).
@@ -4884,6 +4892,43 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     // HeapAlloc<T>(n) → array allocation: (T*)malloc(sizeof(T) * (size_t)(n))
                     return "($elemC*)${tMalloc("sizeof($elemC) * (size_t)(${genExpr(args[0].expr)})")}"
                 }
+                if (heapAllocTargetType != null) {
+                    val tt = heapAllocTargetType!!
+                    if (tt.name == "RawArray" && tt.typeArgs.isNotEmpty()) {
+                        val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
+                        val elemC = cTypeStr(elemName)
+                        val sizeExpr = genExpr(args[0].expr)
+                        val t = tmp()
+                        preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
+                        return t
+                    }
+                    if (tt.name == "Array" && tt.typeArgs.isNotEmpty()) {
+                        val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
+                        val elemC = cTypeStr(elemName)
+                        val sizeExpr = genExpr(args[0].expr)
+                        val t = tmp()
+                        preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
+                        preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                        return t
+                    }
+                    var typeName = typeSubst[tt.name] ?: tt.name
+                    if (tt.typeArgs.isNotEmpty() && classes.containsKey(typeName) && classes[typeName]!!.isGeneric) {
+                        typeName = mangledGenericName(typeName, tt.typeArgs.map { it.name })
+                    }
+                    if (classes.containsKey(typeName)) {
+                        val cName = pfx(typeName)
+                        val argStr = args.joinToString(", ") { genExpr(it.expr) }
+                        val t = tmp()
+                        preStmts += "$cName* $t = ($cName*)${tMalloc("sizeof($cName)")};"
+                        preStmts += "if ($t) *$t = ${cName}_primaryConstructor($argStr);"
+                        return t
+                    }
+                    val elemC = cTypeStr(typeName)
+                    if (args.isEmpty()) {
+                        return "($elemC*)${tMalloc("sizeof($elemC)")}"
+                    }
+                    return "($elemC*)${tMalloc("sizeof($elemC) * (size_t)(${genExpr(args[0].expr)})")}"
+                }
                 return tMalloc("(size_t)(${genExpr(args[0].expr)})")
             }
             "HeapArrayZero"  -> {
@@ -4905,6 +4950,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     }
                     return t
                 }
+                if (heapAllocTargetType != null) {
+                    val tt = heapAllocTargetType!!
+                    val isArray = tt.name == "Array" && tt.typeArgs.isNotEmpty()
+                    val isRawArray = tt.name == "RawArray" && tt.typeArgs.isNotEmpty()
+                    val elemName = if (isArray || isRawArray) {
+                        typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
+                    } else {
+                        typeSubst[tt.name] ?: tt.name
+                    }
+                    val elemC = cTypeStr(elemName)
+                    val sizeExpr = genExpr(args[0].expr)
+                    val t = tmp()
+                    preStmts += "$elemC* $t = ($elemC*)${tCalloc("(size_t)($sizeExpr)", "sizeof($elemC)")};"
+                    if (isArray) {
+                        preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    }
+                    return t
+                }
                 return tCalloc("(size_t)(${genExpr(args[0].expr)})", "(size_t)(${genExpr(args[1].expr)})")
             }
             "HeapArrayResize" -> {
@@ -4915,6 +4978,24 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                     } else {
                         typeSubst[ta.name] ?: ta.name
+                    }
+                    val elemC = cTypeStr(elemName)
+                    val ptrExpr = genExpr(args[0].expr)
+                    val sizeExpr = genExpr(args[1].expr)
+                    val t = tmp()
+                    preStmts += "$elemC* $t = ($elemC*)${tRealloc(ptrExpr, "sizeof($elemC) * (size_t)($sizeExpr)")};"
+                    if (isArray) {
+                        preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    }
+                    return t
+                }
+                if (heapAllocTargetType != null) {
+                    val tt = heapAllocTargetType!!
+                    val isArray = tt.name == "Array" && tt.typeArgs.isNotEmpty()
+                    val elemName = if (isArray) {
+                        typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
+                    } else {
+                        typeSubst[tt.name] ?: tt.name
                     }
                     val elemC = cTypeStr(elemName)
                     val ptrExpr = genExpr(args[0].expr)
@@ -6602,6 +6683,22 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                     val resolvedName = typeSubst[ta.name] ?: ta.name
                     return "${resolvedName}*"
                 }
+                if (heapAllocTargetType != null) {
+                    val tt = heapAllocTargetType!!
+                    if (tt.name == "Array" && tt.typeArgs.isNotEmpty()) {
+                        val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
+                        return "${elemName}*"
+                    }
+                    if (tt.name == "RawArray" && tt.typeArgs.isNotEmpty()) {
+                        val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
+                        return "${elemName}*"
+                    }
+                    if (tt.typeArgs.isNotEmpty() && classes.containsKey(tt.name) && classes[tt.name]!!.isGeneric) {
+                        return "${mangledGenericName(tt.name, tt.typeArgs.map { it.name })}*"
+                    }
+                    val resolvedName = typeSubst[tt.name] ?: tt.name
+                    return "${resolvedName}*"
+                }
                 return "void*"
             }
             if (name == "intArrayOf" || name == "IntArray") return "IntArray"
@@ -7060,6 +7157,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "ULong"   -> "ktc_ULong"
         t == "String"  -> "ktc_String"
         t == "Unit"    -> "void"
+        t == "void"    -> "void"
         t == "ByteArray"    -> "ktc_Byte*"
         t == "ShortArray"   -> "ktc_Short*"
         t == "IntArray"     -> "ktc_Int*"
