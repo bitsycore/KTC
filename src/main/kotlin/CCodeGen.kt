@@ -1636,7 +1636,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("    ktc_Int __type_id;")
         for ((name, type) in ci.props) {
             val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-            val resolved = resolveTypeName(type)
+            // RawArray<T> field → T* (raw pointer, no $len)
+            val isRawArray = type.name == "RawArray" && type.typeArgs.isNotEmpty()
+            val resolved = if (isRawArray) resolveTypeName(type.typeArgs[0]) + "*" else resolveTypeName(type)
             val mutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
             if (isFuncType(resolved)) {
                 hdr.appendLine("    $mutComment${cFuncPtrDecl(resolved, fieldName)};")
@@ -1828,7 +1830,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("    ktc_Int __type_id;")
         for ((name, type) in ci.props) {
             val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-            val resolved = resolveTypeName(type)
+            // RawArray<T> field → T* (raw pointer, no $len)
+            val isRawArray = type.name == "RawArray" && type.typeArgs.isNotEmpty()
+            val resolved = if (isRawArray) resolveTypeName(type.typeArgs[0]) + "*" else resolveTypeName(type)
             val mutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
             if (isFuncType(resolved)) {
                 hdr.appendLine("    $mutComment${cFuncPtrDecl(resolved, fieldName)};")
@@ -3448,6 +3452,9 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                     return ta.copy(annotations = ta.annotations + Annotation("Ptr"))
                 }
+                if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty()) {
+                    return ta.typeArgs[0].copy(annotations = ta.typeArgs[0].annotations + Annotation("Ptr"))
+                }
             }
         }
         return TypeRef(inferExprType(init) ?: "Int")
@@ -4836,6 +4843,15 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
             "HeapAlloc"  -> {
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
+                    // HeapAlloc<RawArray<T>>(n) → raw typed pointer allocation (no $len)
+                    if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty()) {
+                        val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                        val elemC = cTypeStr(elemName)
+                        val sizeExpr = genExpr(args[0].expr)
+                        val t = tmp()
+                        preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
+                        return t
+                    }
                     // HeapAlloc<Array<T>>(n) → typed array allocation: (elemC*)malloc(sizeof(elemC) * (size_t)(n))
                     if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                         val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
@@ -4874,7 +4890,8 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 if (e.typeArgs.isNotEmpty()) {
                     val ta = e.typeArgs[0]
                     val isArray = ta.name == "Array" && ta.typeArgs.isNotEmpty()
-                    val elemName = if (isArray) {
+                    val isRawArray = ta.name == "RawArray" && ta.typeArgs.isNotEmpty()
+                    val elemName = if (isArray || isRawArray) {
                         typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                     } else {
                         typeSubst[ta.name] ?: ta.name
@@ -6573,6 +6590,11 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                         val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                         return "${elemName}*"
                     }
+                    // HeapAlloc<RawArray<T>>(n) → T* (raw pointer, no $len)
+                    if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty()) {
+                        val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                        return "${elemName}*"
+                    }
                     // HeapAlloc<MyList<Int>>(...) → MyList_Int* (generic class heap pointer)
                     if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
                         return "${mangledGenericName(ta.name, ta.typeArgs.map { it.name })}*"
@@ -7115,6 +7137,10 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private fun resolveTypeName(t: TypeRef?): String {
         if (t == null) return "Int"
         val substituted = substituteTypeParams(t)
+        // RawArray<T> → T* (raw pointer, no $len companion)
+        if (substituted.name == "RawArray" && substituted.typeArgs.isNotEmpty()) {
+            return resolveTypeName(substituted.typeArgs[0]) + "*"
+        }
         val base = resolveTypeNameInner(substituted)
         val isPtr = substituted.annotations.any { it.name == "Ptr" }
         return if (isPtr) "${base}*" else base
@@ -7232,13 +7258,16 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 else      -> { classArrayTypes.add(elem); "${elem}Array" }
             }
         }
+        if (t.name == "RawArray" && t.typeArgs.isNotEmpty()) {
+            return resolveTypeName(t.typeArgs[0]) + "*"
+        }
         // Reject unknown type constructors with args (e.g. Heap<T>, Value<T>)
         if (t.typeArgs.isNotEmpty()
             && !classes.containsKey(t.name)
             && !interfaces.containsKey(t.name)
             && !genericClassDecls.containsKey(t.name)
             && !genericIfaceDecls.containsKey(t.name)
-            && t.name !in setOf("Array", "Pair", "Triple", "Tuple")) {
+            && t.name !in setOf("Array", "Pair", "Triple", "Tuple", "RawArray")) {
             codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
         }
         return t.name
