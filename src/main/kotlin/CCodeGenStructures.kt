@@ -1,9 +1,26 @@
 package com.bitsycore
 
 /**
- * Data classes used by CCodeGen for symbol tables and code generation.
- * Extracted from CCodeGen.kt for maintainability.
+ * ── Symbol Table Data Classes ───────────────────────────────────────────
+ *
+ * Data structures used throughout the transpiler pipeline to represent
+ * Kotlin declarations during code generation. All are internal to the
+ * `com.bitsycore` package.
+ *
+ * ## Types:
+ *
+ *   [BodyProp]     — a property declared in the class body (not constructor)
+ *   [ClassInfo]    — aggregated class metadata (props, methods, type params)
+ *   [EnumInfo]     — enum name + entry list
+ *   [ObjInfo]      — object properties + methods
+ *   [FunSig]       — function parameter types + return type
+ *   [IfaceInfo]    — interface methods + properties + super-interfaces
+ *   [ActiveLambda] — lambda expression being expanded inside an inline call
+ *   [IteratorInfo] — result of findOperatorIterator() lookup
+ *   [COutput]      — result of code generation (.h + .c string pair)
  */
+
+// ═══════════════════════════════════════════════════════════════════
 
 internal data class BodyProp(
     val name: String,
