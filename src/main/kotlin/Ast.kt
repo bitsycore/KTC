@@ -91,7 +91,8 @@ data class CtorParam(
     val type: TypeRef,
     val default: Expr? = null,
     val isVal: Boolean = false,
-    val isVar: Boolean = false
+    val isVar: Boolean = false,
+    val isPrivate: Boolean = false
 )
 
 data class SecondaryCtor(

@@ -182,7 +182,7 @@ class Parser(private val tokens: List<Token>) {
             val type = parseTypeRef()
             val finalType = if (annotations.isEmpty()) type else type.copy(annotations = type.annotations + annotations)
             val default = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
-            list += CtorParam(name, finalType, default, isVal, isVar)
+            list += CtorParam(name, finalType, default, isVal, isVar, isPriv)
             if (at(TokenType.COMMA)) { advance(); skipNL() } else break
         }
         skipNL()

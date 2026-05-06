@@ -702,7 +702,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
                 val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
                     BodyProp(p.name, p.type ?: inferInitType(p.init), p.init, p.line, p.isPrivate, p.mutable, p.isPrivateSet)
                 }
-                val privateProps = bodyProps.filter { it.isPrivate }.map { it.name }.toSet()
+                val privateProps = (bodyProps.filter { it.isPrivate }.map { it.name } + d.ctorParams.filter { it.isPrivate && (it.isVal || it.isVar) }.map { it.name }).toSet()
                 val privateSetPropNames = bodyProps.filter { it.isPrivateSet }.map { it.name }.toSet()
                 val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams, privateProps = privateProps, valCtorProps = valCtorPropNames, privateSetProps = privateSetPropNames)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
@@ -1668,7 +1668,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName ${cName}_primaryConstructor($paramDecl);")
         impl.appendLine("$cName ${cName}_primaryConstructor($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-            impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
+            impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.first }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
             impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
@@ -1862,7 +1862,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         hdr.appendLine("$cName ${cName}_primaryConstructor($paramDecl);")
         impl.appendLine("$cName ${cName}_primaryConstructor($paramDecl) {")
         if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-            impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { val fName = if (it.first in ci.privateProps) "PRIV_${it.first}" else it.first; fName }}};")
+            impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.first }}};")
         } else {
             impl.appendLine("    $cName \$self = {0};")
             impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
