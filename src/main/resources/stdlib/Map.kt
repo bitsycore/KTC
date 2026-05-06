@@ -1,15 +1,16 @@
 package ktc.std
 
 class MapIterator<K, V>(
-	private val keys: @Ptr Array<K>,
-	private val vals: @Ptr Array<V>,
-	private val occ: @Ptr Array<Boolean>,
+	private val keys: @Ptr RawArray<K>,
+	private val vals: @Ptr RawArray<V>,
+	private val occ: @Ptr RawArray<Boolean>,
+	private val cap: Int
 ) : Iterator<Pair<K, V>> {
 
 	private var idx: Int = 0
 
 	operator fun hasNext(): Boolean {
-		while (idx < keys.size) {
+		while (idx < cap) {
 			if (occ[idx]) {
 				return true
 			}
@@ -42,25 +43,25 @@ interface MutableMap<K, V> : Map<K, V> {
 	fun clear()
 }
 
-class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
+class HashMap<K, V>(private var capacity: Int) : MutableMap<K, V> {
 
 	override var size: Int = 0
 		private set
 
-	private var keys = HeapAlloc<Array<K>>(capacity)!!
-	private var vals = HeapAlloc<Array<V>>(capacity)!!
-	private var occ = HeapArrayZero<Array<Boolean>>(capacity)!!
+	private var keys = HeapAlloc<RawArray<K>>(capacity)!!
+	private var vals = HeapAlloc<RawArray<V>>(capacity)!!
+	private var occ = HeapArrayZero<RawArray<Boolean>>(capacity)!!
 
 	private fun findSlot(key: K): Int {
-		var idx = key.hashCode() % keys.size
+		var idx = key.hashCode() % capacity
 		if (idx < 0) {
-			idx = idx + keys.size
+			idx = idx + capacity
 		}
 		while (occ[idx]) {
 			if (keys[idx] == key) {
 				return idx
 			}
-			idx = (idx + 1) % keys.size
+			idx = (idx + 1) % capacity
 		}
 		return -1
 	}
@@ -82,19 +83,19 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 	}
 
 	override fun put(key: K, value: V) {
-		if (size * 2 >= keys.size) {
+		if (size * 2 >= capacity) {
 			this.grow()
 		}
-		var idx = key.hashCode() % keys.size
+		var idx = key.hashCode() % capacity
 		if (idx < 0) {
-			idx = idx + keys.size
+			idx = idx + capacity
 		}
 		while (occ[idx]) {
 			if (keys[idx] == key) {
 				vals[idx] = value
 				return
 			}
-			idx = (idx + 1) % keys.size
+			idx = (idx + 1) % capacity
 		}
 		keys[idx] = key
 		vals[idx] = value
@@ -113,20 +114,20 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		}
 		occ[fi] = false
 		size = size - 1
-		var j = (fi + 1) % keys.size
+		var j = (fi + 1) % capacity
 		while (occ[j]) {
 			val rk = keys[j]
 			val rv = vals[j]
 			occ[j] = false
 			size = size - 1
 			this.put(rk, rv)
-			j = (j + 1) % keys.size
+			j = (j + 1) % capacity
 		}
 		return true
 	}
 
 	override fun clear() {
-		for (i in 0 until keys.size) {
+		for (i in 0 until capacity) {
 			occ[i] = false
 		}
 		size = 0
@@ -136,11 +137,12 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 		val oldKeys = keys
 		val oldVals = vals
 		val oldOcc = occ
-		val oldCap = keys.size
-		val newCapacity = keys.size * 2
-		keys = HeapAlloc<Array<K>>(newCapacity)!!
-		vals = HeapAlloc<Array<V>>(newCapacity)!!
-		occ = HeapArrayZero<Array<Boolean>>(newCapacity)!!
+		val oldCap = capacity
+		val newCapacity = capacity * 2
+		keys = HeapAlloc<RawArray<K>>(newCapacity)!!
+		vals = HeapAlloc<RawArray<V>>(newCapacity)!!
+		occ = HeapArrayZero<RawArray<Boolean>>(newCapacity)!!
+		capacity = newCapacity
 		size = 0
 		for (i in 0 until oldCap) {
 			if (oldOcc[i]) {
@@ -153,7 +155,7 @@ class HashMap<K, V>(capacity: Int) : MutableMap<K, V> {
 	}
 
 	override operator fun iterator(): Iterator<Pair<K, V>> {
-		return MapIterator<K, V>(keys, vals, occ)
+		return MapIterator<K, V>(keys, vals, occ, capacity)
 	}
 
 	override fun dispose() {
