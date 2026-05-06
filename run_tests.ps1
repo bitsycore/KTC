@@ -11,6 +11,7 @@
 #   .\run_tests.ps1 -Run HashMapTest       # Transpile, compile & run a single test
 #   .\run_tests.ps1 -Run game -MemTrack    # Run single test with --mem-track
 #   .\run_tests.ps1 -Run game -Ast         # Run single test with --ast
+#   .\run_tests.ps1 -Run game -DumpSemantics # Run single test with --dump-semantics
 #   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
 #   .\run_tests.ps1 -Compiler clang        # Use clang instead of auto-detected gcc
 #   .\run_tests.ps1 -CCArgs "-j14 -O2"     # Pass flags to the C compiler
@@ -27,6 +28,7 @@ param(
     [switch]$Help,
     [switch]$MemTrack,
     [switch]$Ast,
+    [switch]$DumpSemantics,
     [string]$Build = "Jar"
 )
 
@@ -257,6 +259,7 @@ if ($Run -ne "") {
     $allArgs = ""
     if ($MemTrack) { $allArgs += " --mem-track" }
     if ($Ast) { $allArgs += " --ast" }
+    if ($DumpSemantics) { $allArgs += " --dump-semantics" }
     if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
     $allArgs = $allArgs.Trim()
 
@@ -331,6 +334,7 @@ if ($testDirs.Count -eq 0) {
     $allArgs = ""
     if ($MemTrack) { $allArgs += " --mem-track" }
     if ($Ast) { $allArgs += " --ast" }
+    if ($DumpSemantics) { $allArgs += " --dump-semantics" }
     if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
     $allArgs = $allArgs.Trim()
 

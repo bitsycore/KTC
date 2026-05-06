@@ -12,6 +12,7 @@
 #   ./run_tests.sh --run HashMapTest          # Single test
 #   ./run_tests.sh --run game --mem-track     # With --mem-track flag
 #   ./run_tests.sh --run game --ast           # With --ast flag
+#   ./run_tests.sh --run game --dump-semantics # With --dump-semantics flag
 #   ./run_tests.sh --compiler clang           # Override C compiler
 #   ./run_tests.sh --cc-args "-j14 -O2"       # Pass flags to C compiler
 #   ./run_tests.sh --build jar                # Build fat JAR (default for suite)
@@ -45,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         --run)         RUN_TEST="$2"; shift 2 ;;
         --mem-track)   EXTRA_ARGS="$EXTRA_ARGS --mem-track"; shift ;;
         --ast)         EXTRA_ARGS="$EXTRA_ARGS --ast"; shift ;;
+        --dump-semantics) EXTRA_ARGS="$EXTRA_ARGS --dump-semantics"; shift ;;
         --args)        EXTRA_ARGS="$EXTRA_ARGS $2"; shift 2 ;;
         --compiler)    COMPILER="$2"; shift 2 ;;
         --cc-args)     CC_ARGS="$2"; shift 2 ;;

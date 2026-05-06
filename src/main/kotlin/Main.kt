@@ -7,10 +7,11 @@ val aClass = object {}.javaClass
 
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
-        System.err.println("Usage: ktc <file.kt...> [-o <output_dir>] [--mem-track] [--ast]")
+        System.err.println("Usage: ktc <file.kt...> [-o <output_dir>] [--mem-track] [--ast] [--dump-semantics]")
         System.err.println("  Transpiles Kotlin subset files to C11.")
-        System.err.println("  --mem-track  Enable allocation tracking (alloc/free counts + leak report)")
-        System.err.println("  --ast        Dump parsed AST and exit (no C output)")
+        System.err.println("  --mem-track        Enable allocation tracking (alloc/free counts + leak report)")
+        System.err.println("  --ast              Dump parsed AST and exit (no C output)")
+        System.err.println("  --dump-semantics   Dump AST + semantic analysis (classes, interfaces, generics, etc.) and exit")
         exitProcess(1)
     }
 
@@ -19,6 +20,7 @@ fun main(args: Array<String>) {
     var outputDir = "."
     var memTrack = false
     var dumpAst = false
+    var dumpSemantics = false
     var i = 0
     while (i < args.size) {
         if (args[i] == "-o" && i + 1 < args.size) {
@@ -29,6 +31,9 @@ fun main(args: Array<String>) {
             i++
         } else if (args[i] == "--ast") {
             dumpAst = true
+            i++
+        } else if (args[i] == "--dump-semantics") {
+            dumpSemantics = true
             i++
         } else {
             inputPaths += args[i]
@@ -119,6 +124,24 @@ fun main(args: Array<String>) {
         for (ps in parsedFiles) {
             println("=== AST: ${ps.ast.sourceFile.ifEmpty { ps.file.name }} ===")
             println(dumpAst(ps.ast, 0))
+        }
+        return
+    }
+
+    // ── Dump semantics if --dump-semantics flag is set ─────────────────
+    if (dumpSemantics) {
+        val allAsts = parsedFiles.map { it.ast }
+        for (ps in parsedFiles) {
+            println("=== AST: ${ps.ast.sourceFile.ifEmpty { ps.file.name }} ===")
+            println(dumpAst(ps.ast, 0))
+        }
+        val lastPs = parsedFiles.last()
+        try {
+            val gen = CCodeGen(lastPs.ast, allAsts, lastPs.sourceLines, memTrack = false, sourceFileName = lastPs.ast.sourceFile.ifEmpty { lastPs.file.name })
+            gen.collectAndScan()
+            println(gen.dumpSemantics())
+        } catch (e: Exception) {
+            System.err.println("Semantic analysis error: ${e.message}")
         }
         return
     }
