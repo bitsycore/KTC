@@ -4565,6 +4565,17 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         is ElvisExpr   -> {
             val lt = inferExprType(e.left)
             val l = genExpr(e.left)
+            val rt = inferExprType(e.right)
+            // If right side returns Nothing (e.g., error("msg")), emit non-null assertion
+            if (rt != null && (rt == "Nothing" || rt.removeSuffix("?") == "Nothing")) {
+                val baseType = lt?.removeSuffix("?") ?: "void*"
+                val ct = cTypeStr(baseType)
+                val t = tmp()
+                preStmts += "$ct $t = $l;"
+                val r = genExpr(e.right)
+                preStmts += "if (!$t) { $r; }"
+                return t
+            }
             val r = genExpr(e.right)
             if (lt != null && isValueNullableType(lt)) {
                 "($l.tag == ktc_SOME ? $l.value : $r)"
@@ -7158,6 +7169,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
         t == "String"  -> "ktc_String"
         t == "Unit"    -> "void"
         t == "void"    -> "void"
+        t == "Nothing" -> "void"
         t == "ByteArray"    -> "ktc_Byte*"
         t == "ShortArray"   -> "ktc_Short*"
         t == "IntArray"     -> "ktc_Int*"

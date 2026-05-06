@@ -48,9 +48,9 @@ class HashMap<K, V>(private var capacity: Int) : MutableMap<K, V> {
 	override var size: Int = 0
 		private set
 
-	private var keys = HeapAlloc<RawArray<K>>(capacity)!!
-	private var vals = HeapAlloc<RawArray<V>>(capacity)!!
-	private var occ = HeapArrayZero<RawArray<Boolean>>(capacity)!!
+	private var keys: @Ptr RawArray<K> = HeapAlloc(capacity) ?: error("Could allocate keys")
+	private var vals: @Ptr RawArray<V> = HeapAlloc(capacity)  ?: error("Could allocate vals")
+	private var occ: @Ptr RawArray<Boolean> = HeapArrayZero(capacity)  ?: error("Could allocate occ")
 
 	private fun findSlot(key: K): Int {
 		var idx = key.hashCode() % capacity
