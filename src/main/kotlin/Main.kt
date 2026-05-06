@@ -166,7 +166,7 @@ fun main(args: Array<String>) {
 
         val srcName = if (group.size == 1) group.first().file.name else "$pkg.kt"
 
-        val output: CCodeGen.COutput
+        val output: COutput
         try {
             output = CCodeGen(mergedFile, allAsts, mergedSourceLines, memTrack = memTrack, sourceFileName = srcName).generate()
         } catch (e: Exception) {

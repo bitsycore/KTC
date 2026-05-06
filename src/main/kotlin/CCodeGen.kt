@@ -48,37 +48,7 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     }
 
     // ── Symbol tables (populated by collectDecls) ────────────────────
-    private data class BodyProp(val name: String, val type: TypeRef, val init: Expr?, val line: Int = 0, val isPrivate: Boolean = false, val mutable: Boolean = true, val isPrivateSet: Boolean = false)
-
-    private data class ClassInfo(
-        val name: String, val isData: Boolean,
-        val ctorProps: List<Pair<String, TypeRef>>,
-        val ctorPlainParams: List<Pair<String, TypeRef>> = emptyList(),
-        val bodyProps: List<BodyProp> = emptyList(),
-        val methods: MutableList<FunDecl> = mutableListOf(),
-        val initBlocks: List<Block> = emptyList(),
-        val typeParams: List<String> = emptyList(),
-        val privateProps: Set<String> = emptySet(),
-        val valCtorProps: Set<String> = emptySet(),
-        val privateSetProps: Set<String> = emptySet()
-    ) {
-        val props: List<Pair<String, TypeRef>>
-            get() = ctorProps + bodyProps.map { it.name to it.type }
-        val isGeneric get() = typeParams.isNotEmpty()
-        fun isValProp(name: String): Boolean = name in valCtorProps || bodyProps.any { it.name == name && !it.mutable }
-    }
-
-    private data class EnumInfo(val name: String, val entries: List<String>)
-    private data class ObjInfo(val name: String, val props: List<Pair<String, TypeRef>>, val methods: MutableList<FunDecl> = mutableListOf())
-    private data class FunSig(val params: List<Param>, val returnType: TypeRef?)
-
-    private data class IfaceInfo(
-        val name: String,
-        val methods: List<FunDecl>,
-        val properties: List<PropDecl> = emptyList(),
-        val typeParams: List<String> = emptyList(),
-        val superInterfaces: List<TypeRef> = emptyList()
-    )
+    // Data classes now in CCodeGenStructures.kt
 
     private val classes  = mutableMapOf<String, ClassInfo>()
     private val enums    = mutableMapOf<String, EnumInfo>()
@@ -88,7 +58,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val funSigs  = mutableMapOf<String, FunSig>()
     private val inlineFunDecls = mutableMapOf<String, FunDecl>()
     private val inlineExtFunDecls = mutableMapOf<String, FunDecl>()  // inline generic extension funs, keyed by method name
-    private data class ActiveLambda(val expr: LambdaExpr, val paramTypes: List<String>)
     private var activeLambdas: Map<String, ActiveLambda> = emptyMap()
     private val lambdaParamSubst = mutableMapOf<String, String>()  // also stores "\$this" → receiver C expr during inline ext expansion
     // Deferred hdr declarations: className → list of hdr lines (for methods moved to implements section)
@@ -367,8 +336,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
     private val implFwd = StringBuilder()  // .c private forward decls (prepended at end)
 
     // ═══════════════════════════ Public entry ═════════════════════════
-
-    data class COutput(val header: String, val source: String)
 
     fun collectAndScan() {
         collectDecls()
@@ -4643,8 +4610,6 @@ class CCodeGen(private val file: KtFile, private val allFiles: List<KtFile> = li
      * Check if a type has an `operator fun iterator()` method.
      * Returns (iteratorClassName, iteratorCType, elementKtType, isPointer) or null.
      */
-    private data class IteratorInfo(val iterClass: String, val iterCType: String, val elemKtType: String, val isPointer: Boolean)
-
     private fun findOperatorIterator(type: String?): IteratorInfo? {
         if (type == null) return null
         // Direct class
