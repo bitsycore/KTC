@@ -2,32 +2,84 @@
 
 This file provides context for AI coding agents working on the KotlinToC project.
 
-## Project Overview
+---
 
-KotlinToC is a source-to-source transpiler that converts a subset of Kotlin into portable C11 code. It targets zero-runtime, stack-first allocation with no garbage collector. The output is standard C11 that compiles with GCC, Clang, or MSVC.
+## 1. Project Overview
 
-## Architecture
-
-The transpiler is a single-pass pipeline:
+KotlinToC is a source-to-source transpiler that converts a subset of Kotlin into portable C11 code. It targets **zero-runtime, stack-first allocation** with no garbage collector. The output is standard C11 that compiles with GCC, Clang, or MSVC.
 
 ```
 Kotlin source → Lexer → Parser → AST → CCodeGen → .c/.h files
 ```
 
-All stages are in `src/main/kotlin/`:
+---
 
-| File          | Role                                                                                                                                                         |
-|---------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `Lexer.kt`    | Tokenizer. Converts source text to token stream.                                                                                                             |
-| `Token.kt`    | Token enum and type definitions.                                                                                                                             |
-| `Parser.kt`   | Recursive-descent parser. Produces AST from tokens.                                                                                                          |
-| `Ast.kt`      | AST node definitions (Decl, Stmt, Expr, TypeRef).                                                                                                            |
-| `CCodeGen.kt` | The bulk of the project (~6400 lines). All C code generation, generic monomorphization, type resolution, interface vtable emission, operator dispatch, etc.  |
-| `Main.kt`     | CLI entry point. Loads stdlib, lexes/parses inputs, groups by package, invokes CCodeGen, writes output.                                                      |
+## 2. Source Layout
 
-### CCodeGen Internal Structure
+All transpiler stages are in `src/main/kotlin/`:
+
+| File                         | Role                                          |
+|------------------------------|-----------------------------------------------|
+| `Token.kt`                   | Token enum and type definitions               |
+| `Lexer.kt`                   | Tokenizer: source text → token stream         |
+| `Parser.kt`                  | Recursive-descent parser: tokens → AST        |
+| `Ast.kt`                     | AST node definitions (Decl, Stmt, Expr, TypeRef) |
+| `Main.kt`                    | CLI entry point                               |
+
+### 2.1 CCodeGen Module Map
+
+The C code generator is split across 8 files, all in package `com.bitsycore`. Every function is an extension function on `CCodeGen`; state is `internal` so all files share it.
+
+| File                      | Lines | Role                                                          |
+|---------------------------|-------|---------------------------------------------------------------|
+| `CCodeGen.kt`             | 1043  | **Orchestrator** — state, `collectDecls()`, `generate()`, `dumpSemantics()` |
+| `CCodeGenStructures.kt`   |   60  | Data classes: `BodyProp`, `ClassInfo`, `EnumInfo`, `IfaceInfo`, etc. |
+| `CCodeGenScan.kt`         |  789  | **Pre-scanning** — discover all generic class/function instantiations |
+| `CCodeGenEmit.kt`         | 1497  | **Declaration emission** — structs, vtables, functions, interfaces |
+| `CCodeGenStmts.kt`        | 1351  | **Statement codegen** — var/if/for/when/return/inline expansion |
+| `CCodeGenExpr.kt`         | 2124  | **Expression codegen** — genExpr → calls, dots, bins, toString |
+| `CCodeGenInfer.kt`        |  460  | **Type inference** — inferExprType and helpers |
+| `CCodeGenCTypes.kt`       |  574  | **C type mapping** — resolveTypeName, cTypeStr, printf helpers |
+
+### 2.2 Dependency Graph
+
+```
+CCodeGenCTypes ──────────────────────────┐   (leaf module, no deps)
+                                         │
+CCodeGenInfer ─── depends on ── CCodeGenCTypes
+                                         │
+CCodeGenScan ─── depends on ─── CCodeGenInfer, CCodeGenCTypes
+                                         │
+CCodeGenExpr ─── depends on ─── CCodeGenStmts, CCodeGenInfer, CCodeGenCTypes
+                                         │
+CCodeGenStmts ─── depends on ─── CCodeGenExpr, CCodeGenInfer, CCodeGenCTypes
+                                         │
+CCodeGenEmit ─── depends on ─── CCodeGenExpr, CCodeGenStmts, CCodeGenInfer, CCodeGenCTypes
+                                         │
+CCodeGen ─────── orchestrates all modules above
+```
+
+### 2.3 Pipeline Phases (orchestrated by `generate()`)
+
+```
+1. collectDecls()                          → populate symbol tables
+2. scanForClassArrayTypes()                → discover class types in Array<T>
+3. scanForGenericInstantiations()         → find MyList<Int>, HashMap<K,V> etc.
+4. materializeGenericInstantiations()     → create concrete ClassInfo per instantiation
+5. scanForGenericFunCalls()               → discover generic function call sites
+6. scanGenericFunBodiesForInstantiations()       → transitive discovery (fixpoint)
+7. scanGenericClassMethodBodiesForInstantiations() → from materialized classes (fixpoint)
+8. computeGenericFunConcreteReturns()     → interface return → concrete class
+9. Emit declarations                      → structs, vtables, functions, methods
+10. Output assembly                       → .h + .c strings
+```
+
+---
+
+## 3. Generated C Output
 
 CCodeGen emits section comments in the generated `.c` file:
+
 ```c
 // ══ data class Vec2 (PointerTest.kt) ══
 // ══ fun passArrayPtr(@Ptr Array<Int>) (PointerTest.kt) ══
@@ -35,51 +87,70 @@ CCodeGen emits section comments in the generated `.c` file:
 // ══ class HashMap<Int, String> (Map.kt) ══
 ```
 
-### Type System
+## 4. Type System
 
-**Value semantics:** Unlike Kotlin, all types in KotlinToC are by value by default. A class instance is a C struct held directly on the stack; assignment copies the struct. `@Ptr T` is the only way to introduce pointer/reference semantics.
+### 4.1 Value Semantics
 
-Types are tracked as strings internally with suffix markers:
-- `T` — value type (stack)
-- `T*` — pointer type (`@Ptr` annotation)
-- `T?` — value-nullable (uses Optional struct)
-- `T*?` — nullable pointer (uses NULL)
+Unlike Kotlin, **all types are by value by default**. A class instance is a C struct held directly on the stack; assignment copies the struct. `@Ptr T` is the only way to introduce pointer/reference semantics.
 
-The `@Ptr` annotation on a TypeRef adds `*` suffix. There is no `Ptr<T>` generic wrapper, no `@Heap`, `@Value`, `^`, `&`, or `#` marker.
+Types are tracked internally as strings with suffix markers:
 
-**Primitive types:** `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`, `UByte`, `UShort`, `UInt`, `ULong`. All have Optional and hash support.
+| Suffix  | Meaning                  | C Representation       |
+|---------|--------------------------|------------------------|
+| `T`     | Value type (stack)       | `T` (struct)           |
+| `T*`    | Pointer type (`@Ptr`)    | `T*`                   |
+| `T?`    | Value-nullable           | `ktc_T_Optional`       |
+| `T*?`   | Nullable pointer         | `T*` (NULL for null)   |
 
-### Pointer Semantics
+There is no `Ptr<T>` generic wrapper, no `@Heap`, `@Value`, `^`, `&`, or `#` marker.
 
-Only `@Ptr T` exists as a pointer annotation. `Ptr<T>` generic wrapper has been removed.
+### 4.2 Primitive Types
 
-- `p.x` on `@Ptr Vec2` → `p->x` (auto-deref on member access)
-- `v.ptr()` → `&v` (take address of a plain value, yields `@Ptr T`)
-- `p.value()` → `(*p)` (dereference to a stack copy of `T`)
+`Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Boolean`, `Char`, `String`, `UByte`, `UShort`, `UInt`, `ULong`. All primitives have `ktc_T_Optional` and `ktc_hash_*` support.
 
-### Array Types
+### 4.3 Pointer Semantics
 
-- `Array<T>` — dynamic-size stack array, represented as `ktc_ArrayTrampoline`. Cannot be returned from a function.
-- `@Size(N) Array<T>` — fixed-size stack array with size known at compile time. Passed and returned as a raw C pointer (out-parameter ABI). Can be returned from functions.
+Only `@Ptr T` exists as a pointer annotation.
 
-### Nullable Pattern
+| Kotlin            | C                 | Notes                           |
+|-------------------|-------------------|----------------------------------|
+| `p.x` on `@Ptr T` | `p->x`            | Auto-deref on member access     |
+| `v.ptr()`          | `&v`              | Take address, yields `@Ptr T`   |
+| `p.value()`        | `(*p)`            | Dereference to stack copy       |
 
-- **Value types** (`Vec2?`): Optional struct with `tag` (`ktc_SOME`/`ktc_NONE`) and `value`
-- **Pointer types** (`@Ptr Vec2?`): nullable pointer, NULL for null
-- **Arrays** (`Array<Int>?`): `ktc_ArrayTrampoline` with `data == NULL`
+### 4.4 Array Types
 
-### Inline Functions & Lambdas
+| Kotlin              | C Representation      | Constraints                          |
+|---------------------|-----------------------|--------------------------------------|
+| `Array<T>`          | `ktc_ArrayTrampoline` | Stack array, **cannot be returned**  |
+| `@Size(N) Array<T>` | `T[N]` (out-pointer)  | Fixed-size, **can be returned**      |
 
-- `inline fun` functions are expanded at the call site; no C function is emitted for them.
-- Lambda expressions (`{ params -> body }` or trailing `{ }`) are **only valid as arguments to `inline` functions**. There is no closure support — lambdas cannot be stored in variables or passed to non-inline functions.
+- `Array<T>` is passed/received as `ktc_ArrayTrampoline { .size, .data }`.
+- Parameters are trampolined: copied via `alloca`+`memcpy` on entry.
+- `@Size(N) Array<T>` is passed and returned as a raw C pointer via out-parameter ABI.
+
+### 4.5 Nullable Pattern
+
+| Kotlin Type      | C Pattern                                    |
+|------------------|-----------------------------------------------|
+| `Vec2?`          | `ktc_Vec2_Optional { tag, value }`            |
+| `@Ptr Vec2?`     | `Vec2*` (NULL for null)                       |
+| `Array<Int>?`    | `ktc_ArrayTrampoline` with `data == NULL`     |
+
+---
+
+## 5. Language Feature Implementation
+
+### 5.1 Inline Functions & Lambdas
+
+- `inline fun` — body expanded at call site; **no C function emitted**.
+- Lambdas `{ params -> body }` — **only valid as arguments to `inline` functions**. No closures.
 - Inside an inline expansion, lambda call sites are themselves expanded inline.
-- `::funRef` (function pointer references) are separate from lambdas and work with regular functions, producing a raw C function pointer.
+- `::funRef` — function pointer references; produces raw C function pointer.
 
-### Private Visibility
+### 5.2 Private Visibility
 
-`private` keyword supported on:
-- **Fields**: `PRIV_` prefix on C struct field, auto-resolved in class methods. External code sees un-prefixed name (C compilation error).
-- **Methods**: `PRIV_` prefix on C function name, forward declaration in `.c` only (not `.h`).
+`private` keyword supported on fields and methods:
 
 ```kotlin
 class Foo {
@@ -88,31 +159,94 @@ class Foo {
 }
 // → struct { ktc_Int PRIV_count; };
 // → ktc_Int Foo_PRIV_helper(Foo* $self);
+// PRIV_ prefix is C-enforced: external code sees un-prefixed name → compilation error.
+// Private methods: forward declaration only in .c (not .h).
 ```
 
-### Stdlib
+### 5.3 Generics (Monomorphization)
 
-The stdlib lives in `src/main/resources/stdlib/` as Kotlin source files transpiled alongside user code. Uses `@Ptr` annotation for heap-allocated arrays.
+- Generic classes (`class Box<T>`) and functions (`fun <T> id(x: T)`) are stored as templates.
+- Concrete instantiations (`Box<Int>`) are discovered by scanning all type references and call sites.
+- Each concrete instantiation is materialized as a distinct C type (`Box_Int` in C).
+- Fixpoint iteration ensures transitive instantiations are found (e.g. `HashMap<Int,String>` creates `MapIterator<Int,String>`).
+- Package prefix: `package game.Main` → `game_Main_`
+- Mangled generics: `HashMap_Int_String`
 
-Stdlib files belong to `package ktc.std` and get the `ktc_std_` C prefix.
+### 5.4 Interface Vtables
 
-## Testing
+Interfaces use **fat pointers** (`{void* obj; const vtable* vt;}`):
 
-### Unit Tests (~330 tests)
+```c
+typedef struct Drawable_vt {
+    void (*draw)(void* self);
+    ktc_Float (*area)(void* self);
+} Drawable_vt;
 
-Located in `src/test/kotlin/com/bitsycore/` with `*UnitTest.kt` suffix. JUnit 5 tests that feed Kotlin source strings through the transpiler pipeline and assert on generated C code. They do NOT compile or execute the C output.
+typedef struct Drawable {
+    void* obj;
+    const Drawable_vt* vt;
+} Drawable;
+```
 
-Run with: `./gradlew test`
+- Each class generates a static `const` vtable instance per implemented interface.
+- `ClassName_as_IfaceName(ClassName* $self)` wrapping function converts class → interface fat pointer.
+- Interface dispatch: `d.vt->method((void*)&d, args)`.
+- Parent interface vtables are inherited transitively.
+
+### 5.5 Operator Dispatch
+
+`operator` keyword is required for:
+- `get`/`set` — `a[i]`, `a[i] = v`
+- `contains`/`containsKey` — `x in collection`
+- `iterator` — `for (item in collection)`
+- `hashCode` — requires `override` (implicitly overrides default)
+
+### 5.6 `defer`
+
+Non-standard RAII extension. LIFO execution at function end or return:
+
+```kotlin
+fun example() {
+    defer { println("cleanup") }
+    // ...body...
+} // "cleanup" printed here
+```
+
+### 5.7 `c.*` Interop
+
+Direct C function/constant access via `c.` prefix: `c.printf(...)`, `c.memcpy(...)`, `c.EXIT_SUCCESS`. String literals are passed as raw C strings.
+
+### 5.8 Pair / Triple / Tuple Intrinsics
+
+`Pair<A,B>`, `Triple<A,B,C>`, `Tuple<T...>` are built-in compound types (unless a user-defined class shadows them). Emitted as dedicated C structs (`ktc_Pair_Int_String`, etc.) on first use.
+
+---
+
+## 6. Stdlib
+
+Located in `src/main/resources/stdlib/` as Kotlin source files. Transpiled alongside user code. All stdlib files belong to `package ktc.std` → `ktc_std_` C prefix.
+
+---
+
+## 7. Testing
+
+### 7.1 Unit Tests (~330 tests)
+
+Located in `src/test/kotlin/com/bitsycore/` with `*UnitTest.kt` suffix. JUnit 5 tests feed Kotlin source strings through the transpiler pipeline and assert on generated C code — they do **not** compile or execute the C output.
+
+```bash
+./gradlew test
+```
 
 Test base class `TranspilerTestBase` provides:
 - `transpile(src)` → `TranspileResult(header, source, pkg)`
-- `transpileMain(body, decls)` — wraps body in a main function with optional supporting decls
+- `transpileMain(body, decls)` — wraps body in a main function
 - `sourceContains()`, `headerContains()`, `sourceMatches()` — assertion helpers
 - `transpileExpectError(src, msg)` — negative test helper
 
-### Integration Tests
+### 7.2 Integration Tests
 
-Each subdirectory under `tests/` is one integration test. All `.kt` files in the directory are transpiled, compiled, and executed together.
+Each subdirectory under `tests/` is one integration test. All `.kt` files in the directory are transpiled, compiled with a C11 compiler, and executed together.
 
 ```
 tests/
@@ -123,40 +257,39 @@ tests/
   MultiFileTest/      — Multi-file/multi-package test
   PairVarargTest/     — Pair intrinsic, to infix, vararg, spread
   PointerTest/        — @Ptr Array<T>, nullable pointers, vec, data classes
-  UberTest/           — Comprehensive: classes, data classes, generics, interfaces, defer, @Ptr, HeapAlloc
+  UberTest/           — Comprehensive: classes, generics, interfaces, defer, @Ptr, HeapAlloc
 ```
-
-Run scripts: `run_tests.ps1` (Windows) / `run_tests.sh` (Unix)
-```
-.\run_tests.ps1                    # Run all
-.\run_tests.ps1 -Skip unit         # Skip unit
-.\run_tests.ps1 -Run HashMapTest   # Single test
-.\run_tests.ps1 -MemTrack -Ast     # Transpiler flags
-.\run_tests.ps1 -CCArgs "-j14 -O2" # C compiler flags
-.\run_tests.ps1 -Compiler clang    # Override C compiler
-.\run_tests.ps1 -BuildJar          # Force fat JAR build (default: gradlew run)
-```
-
-## Build
 
 ```bash
-./gradlew jar       # Build fat JAR
-./gradlew test      # Run unit tests
-.\run_tests.ps1     # Run all tests (Windows)
-./run_tests.sh      # Run all tests (Unix)
+./run_tests.sh                     # Run all (Unix)
+.\run_tests.ps1                    # Run all (Windows)
+./run_tests.sh --run HashMapTest   # Single test
+.\run_tests.ps1 -Skip unit         # Integration only
+.\run_tests.ps1 -MemTrack -Ast     # With transpiler flags
+.\run_tests.ps1 -Compiler clang    # Override C compiler
+```
+
+---
+
+## 8. Build
+
+```bash
+./gradlew jar       # Fat JAR
+./gradlew test      # Unit tests
 ```
 
 Requires JDK 21+ and a C11 compiler (GCC, Clang, or MSVC) on PATH.
 
-## Key Conventions
+---
+
+## 9. Key Conventions
 
 - `@Ptr T` annotation for pointer types (not `Ptr<T>`)
 - `$self` is the receiver parameter name for methods
-- Mangled generic names use `_` separator: `HashMap_Int_String`
-- Package prefix uses `_` separator: `package game.Main` → `game_Main_`
 - `operator` keyword required for dispatch
-- `defer` is a non-standard extension for RAII-style cleanup
-- Strings are non-owning slices (`ktc_String { const char* ptr; int32_t len; }`)
-- `private` keyword supported on fields and methods
-- Private methods get `PRIV_` prefix and `.c`-only forward declaration
-- Private fields get `PRIV_` prefix on struct; access within class auto-resolved
+- `defer` is a non-standard RAII extension
+- Strings are non-owning slices: `ktc_String { const char* ptr; int32_t len; }`
+- `private` fields get `PRIV_` prefix on struct; private methods get `PRIV_` on function name
+- The `inlineCounter` produces unique temp vars (`$0`, `$1`, ...) and goto labels (`$end_ir_0`, ...)
+- `preStmts` is a hoist buffer: C statements emitted before the current statement (for temp allocations, toString buffers, etc.)
+- `trampolinedParams` tracks array params that have been copied to `local$` stack copies via alloca+memcpy
