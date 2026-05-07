@@ -220,6 +220,15 @@ open class TranspilerTestBase {
         }
     }
 
+    /**
+     * Mark a test as "not yet implemented" — skipped via JUnit5 assumption
+     * instead of failing. Use for valid Kotlin syntax that the transpiler
+     * doesn't support yet.
+     */
+    protected fun notYetImpl(reason: String = "not yet implemented") {
+        org.junit.jupiter.api.Assumptions.assumeTrue(false, "NOT YET IMPL: $reason")
+    }
+
     /** Assert transpilation of a main-body snippet fails. */
     protected fun transpileMainExpectError(body: String, expectedMsg: String, decls: String = "", pkg: String = "test.Main") {
         val src = buildString {
