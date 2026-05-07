@@ -44,6 +44,12 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+
+    // Propagate ktc.verifyCompile system property to test JVM.
+    // Usage: ./gradlew test -Dktc.verifyCompile=true
+    System.getProperty(" ")?.let {
+        systemProperty("ktc.verifyCompile", it)
+    }
 }
 
 tasks.register<JavaExec>("proguard") {

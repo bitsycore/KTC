@@ -11,6 +11,21 @@ import kotlin.test.fail
  * Provides helpers to transpile Kotlin snippets and assert on the generated C code.
  * Each test feeds a self-contained Kotlin source through Lexer → Parser → CCodeGen
  * and checks the .c / .h output for expected patterns.
+ *
+ * ### C Compile Verification
+ *
+ * When the system property `ktc.verifyCompile=true` (or env var `KTC_VERIFY_COMPILE=true`)
+ * is set, every transpile call also compiles the generated C output with a C compiler
+ * using `-c` (compile to object, no link). This catches invalid C code early.
+ *
+ * ```bash
+ * # Enable compile verification
+ * ./gradlew test -Dktc.verifyCompile=true
+ *
+ * # Or via environment variable
+ * $env:KTC_VERIFY_COMPILE = "true"
+ * ./gradlew test
+ * ```
  */
 open class TranspilerTestBase {
 
@@ -21,6 +36,48 @@ open class TranspilerTestBase {
     ) {
         override fun toString(): String {
             return "$header\n$source"
+        }
+    }
+
+    companion object {
+        /**
+         * Whether to compile the generated C code after transpiling.
+         * Controlled by system property `ktc.verifyCompile` or env var `KTC_VERIFY_COMPILE`.
+         */
+        val verifyCompile: Boolean by lazy {
+            val prop = System.getProperty("ktc.verifyCompile")
+            if (prop != null) prop.toBoolean()
+            else System.getenv("KTC_VERIFY_COMPILE")?.toBoolean() ?: false
+        }
+
+        /** Detect a C compiler on PATH. Returns null if none found. */
+        private val ccCompiler: String? by lazy {
+            if (!verifyCompile) return@lazy null
+            val candidates = if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) {
+                listOf("gcc", "clang", "cl")
+            } else if(System.getProperty("os.name").contains("MacOS", ignoreCase = true)) {
+                listOf("clang", "cc", "gcc")
+            } else {
+                listOf("cc", "gcc", "clang")
+            }
+            for (candidate in candidates) {
+                try {
+                    val proc = ProcessBuilder(candidate, "--version")
+                        .redirectErrorStream(true)
+                        .start()
+                    val hasOutput = proc.inputStream.bufferedReader().use { it.readText().isNotBlank() }
+                    proc.waitFor()
+                    if (hasOutput) return@lazy candidate
+                } catch (_: Exception) {
+                    // not found, try next
+                }
+            }
+            null
+        }
+
+        /** Temp directory root for compile verification outputs. */
+        private val verifyTempDir: java.nio.file.Path by lazy {
+            java.nio.file.Files.createTempDirectory("ktc_test_compile_")
         }
     }
 
@@ -37,11 +94,13 @@ open class TranspilerTestBase {
         val ast = Parser(tokens).parseFile()
         val allAsts = listOf(ast)
         val output = CCodeGen(ast, allAsts, source.lines()).generate()
-        return TranspileResult(
+        val result = TranspileResult(
             header = output.header,
             source = output.source,
             pkg = ast.pkg ?: "test"
         )
+        if (verifyCompile) verifyCompiles(result)
+        return result
     }
 
     /*
@@ -83,11 +142,13 @@ open class TranspilerTestBase {
         val vAst = Parser(vTokens).parseFile()
         val vAllAsts = loadStdlibAsts() + vAst
         val vOutput = CCodeGen(vAst, vAllAsts, vSource.lines()).generate()
-        return TranspileResult(
+        val result = TranspileResult(
             header = vOutput.header,
             source = vOutput.source,
             pkg = vAst.pkg ?: "test"
         )
+        if (verifyCompile) verifyCompiles(result)
+        return result
     }
 
     /*
@@ -103,11 +164,13 @@ open class TranspilerTestBase {
         val vAst = Parser(vTokens).parseFile().copy(sourceFile = vFileName)
         val vAllAsts = loadStdlibAsts()
         val vOutput = CCodeGen(vAst, vAllAsts, vSource.lines()).generate()
-        return TranspileResult(
+        val result = TranspileResult(
             header = vOutput.header,
             source = vOutput.source,
             pkg = vAst.pkg ?: "ktc_std"
         )
+        if (verifyCompile) verifyCompiles(result)
+        return result
     }
 
     /*
@@ -154,6 +217,96 @@ open class TranspilerTestBase {
             appendLine("}")
         }
         return transpile(src)
+    }
+
+    // ── C Compile Verification ──────────────────────────────────────
+
+    data class CompileResult(
+        val succeeded: Boolean,
+        val command: String,
+        val output: String,
+        val exitCode: Int,
+        val source: String,
+        val header: String
+    )
+
+    private val compileCounter = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Compiles [result]'s generated C code to an object file.
+     * Uses `-c` (compile only, no link) so no `main()` is required.
+     * Returns a [CompileResult] for further assertions.
+     */
+    protected fun compileC(result: TranspileResult): CompileResult {
+        val cc = ccCompiler ?: return CompileResult(
+            succeeded = true, command = "", output = "no C compiler found", exitCode = 0,
+            source = result.source, header = result.header
+        )
+        val idx = compileCounter.incrementAndGet()
+        val dir = verifyTempDir.resolve("test_$idx").toFile()
+        dir.mkdirs()
+
+        val intrinsicH = javaClass.getResourceAsStream("/ktc_intrinsic.h")
+            ?.bufferedReader()?.readText() ?: error("ktc_intrinsic.h not found")
+        val intrinsicC = javaClass.getResourceAsStream("/ktc_intrinsic.c")
+            ?.bufferedReader()?.readText() ?: error("ktc_intrinsic.c not found")
+        java.io.File(dir, "ktc_intrinsic.h").writeText(intrinsicH)
+        java.io.File(dir, "ktc_intrinsic.c").writeText(intrinsicC)
+
+        val pkgBase = result.pkg.replace('.', '_')
+        java.io.File(dir, "$pkgBase.h").writeText(result.header)
+        java.io.File(dir, "$pkgBase.c").writeText(result.source)
+
+        val cFile = java.io.File(dir, "$pkgBase.c")
+        val oFile = java.io.File(dir, "$pkgBase.o")
+        val compileCmd = listOf(cc, "-std=c11", "-c", cFile.absolutePath, "-o", oFile.absolutePath)
+
+        return try {
+            val proc = ProcessBuilder(compileCmd)
+                .directory(dir)
+                .redirectErrorStream(true)
+                .start()
+            val compileOutput = proc.inputStream.bufferedReader().readText()
+            val ec = proc.waitFor()
+            CompileResult(
+                succeeded = ec == 0,
+                command = compileCmd.joinToString(" "),
+                output = compileOutput,
+                exitCode = ec,
+                source = result.source,
+                header = result.header
+            )
+        } catch (e: Exception) {
+            CompileResult(
+                succeeded = false,
+                command = compileCmd.joinToString(" "),
+                output = "C compiler invocation failed: ${e.message}",
+                exitCode = -1,
+                source = result.source,
+                header = result.header
+            )
+        }
+    }
+
+    private fun verifyCompiles(result: TranspileResult) {
+        val cr = compileC(result)
+        if (!cr.succeeded) {
+            fail("C compilation failed (exit ${cr.exitCode}).\nCommand: ${cr.command}\nOutput:\n${cr.output}")
+        }
+    }
+
+    // ── CompileResult helpers ─────────────────────────────────────
+
+    fun CompileResult.compileSucceeded(message: String? = null) {
+        assertTrue(succeeded, message ?: "C compilation failed (exit $exitCode).\nCommand: $command\nOutput:\n$output")
+    }
+
+    fun CompileResult.compileOutputContains(text: String, message: String? = null) {
+        assertTrue(output.contains(text), message ?: "Compile output should contain:\n  «$text»\n\nActual:\n$output")
+    }
+
+    fun CompileResult.compileOutputMatches(regex: Regex, message: String? = null) {
+        assertTrue(regex.containsMatchIn(output), message ?: "Compile output should match:\n  «${regex.pattern}»\n\nActual:\n$output")
     }
 
     // ── Assertion helpers ────────────────────────────────────────────
@@ -214,8 +367,9 @@ open class TranspilerTestBase {
             transpile(src.trimIndent())
             fail("Expected transpilation to fail with error containing '$expectedMsg', but it succeeded")
         } catch (e: Exception) {
-            assertTrue(
-                e.message?.contains(expectedMsg) == true,
+            assertEquals(
+                e.message?.contains(expectedMsg),
+                true,
                 "Expected error containing '$expectedMsg', got: ${e.message}"
             )
         }
