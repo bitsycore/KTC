@@ -1081,7 +1081,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
 
     // Array .size → trampolined param uses trampoline size field; others use $len
-    if (method == "size" && recvType != null && isArrayType(recvType)) {
+    if (method == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*"))) {
         val dotName = (dot.obj as? NameExpr)?.name
         return if (dotName != null && dotName in trampolinedParams) "$dotName.size" else "${recv}\$len"
     }
@@ -1101,6 +1101,13 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         preStmts += "if ($t) memcpy($t, $recv, sizeof($elemC) * (size_t)($lenExpr));"
         preStmts += "int32_t ${t}\$len = $lenExpr;"
         return t
+    }
+    // Array pointer .get(i) → recv[i] and .set(i,v) → recv[i] = v
+    if ((method == "get" || method == "set") && recvType != null && isArrayType(recvType)) {
+        val idx = args.getOrNull(0)?.let { genExpr(it.expr) } ?: "0"
+        if (method == "get") return "${recv}[$idx]"
+        val valExpr = args.getOrNull(1)?.let { genExpr(it.expr) } ?: "0"
+        return "(${recv}[$idx] = $valExpr)"
     }
     // Ptr<Array<T>> .deref() → dereference to get the array
     if (method == "deref" && recvType != null && isArrayType(recvType) &&
@@ -1496,7 +1503,7 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
         markOptional(t)
         defineVar(t, fieldType)
     } else {
-        val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int32_Optional"
+        val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int_Optional"
         val fieldCType = if (fieldType != null) cTypeStr(fieldType) else "int32_t"
         preStmts += "$optType $t = $guard ? ($optType){ktc_SOME, $fieldAccess} : ${optNone(optType)};"
         markOptional(t)

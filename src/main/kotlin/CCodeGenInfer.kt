@@ -334,15 +334,31 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     if (method == "toFloatOrNull") return "Float?"
     if (method == "toDoubleOrNull") return "Double?"
     if (method == "hashCode") return "Int"
-    // Array methods
-    if (recvType.endsWith("Array")) {
+    // Array methods (including pointer-to-array)
+    val isArrayPtr = recvType.endsWith("Array") ||
+        (recvType.removeSuffix("?").endsWith("*") && isArrayType(recvType))
+    if (isArrayPtr) {
         return when (method) {
             "size" -> "Int"
-            "ptr", "toHeap" -> {
-                val elem = recvType.removeSuffix("Array")
-                val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
-                "${internal}*"
+            "get" -> {
+                val base = recvType.removeSuffix("?")
+                // IntArray*? → strip Array → Int; Int*? → strip * → Int
+                if (base.endsWith("Array*")) base.removeSuffix("Array*") else base.removeSuffix("*")
             }
+            "ptr", "toHeap" -> {
+                // For XxxArray* types, return element-type pointer (e.g. IntArray* → Int*)
+                val base = recvType.removeSuffix("?")
+                if (base.endsWith("Array*")) {
+                    val elem = base.removeSuffix("Array*")
+                    val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
+                    "${internal}*"
+                } else if (recvType.endsWith("Array")) {
+                    val elem = recvType.removeSuffix("Array")
+                    val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
+                    "${internal}*"
+                } else recvType
+            }
+            "set" -> "Unit"
             else -> null
         }
     }
@@ -451,12 +467,14 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
         return null
     }
     if (e.name == "size" && recvType.endsWith("Array")) return "Int"
+    if (e.name == "size" && recvType.removeSuffix("?").endsWith("*") && isArrayType(recvType)) return "Int"
     if (e.name == "ptr") {
         if (recvType.endsWith("Array")) {
             val elem = recvType.removeSuffix("Array")
             val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
             return "${internal}*"
         }
+        if (recvType.removeSuffix("?").endsWith("*") && isArrayType(recvType)) return recvType
         return if (recvType.endsWith("*")) recvType else "${recvType}*"
     }
     if (e.name == "toHeap" && recvType.endsWith("Array")) {
