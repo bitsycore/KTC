@@ -1,11 +1,19 @@
 package ArrayTest
 
+fun arrayPtr(arr: @Ptr Array<Int>) {
+    for (i in 0 until arr.size) {
+        println("arr[$i] = ${arr[i]}")
+    }
+}
+
 fun main() {
     val abc = Array<Int>(10)
-
+    arrayPtr(abc.ptr())
+    arrayPtr(Array<Int>(10).ptr())
+    arrayPtr(heapArrayOf(0,1,2,3,4,5))
 
     // intArrayOf
-    val arr = intArrayOf(10, 20, 30, 40, 50)
+    val arr = intArrayOf(10, 20, 30, 40, 50).ptr()
     println("size = ${arr.size}")
     if (arr.size != 5) error("size should be 5")
     for (i in 0 until arr.size) {

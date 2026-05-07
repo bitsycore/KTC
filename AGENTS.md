@@ -124,10 +124,25 @@ Only `@Ptr T` exists as a pointer annotation.
 |---------------------|-----------------------|--------------------------------------|
 | `Array<T>`          | `ktc_ArrayTrampoline` | Stack array, **cannot be returned**  |
 | `@Size(N) Array<T>` | `T[N]` (out-pointer)  | Fixed-size, **can be returned**      |
+| `@Ptr Array<T>`     | `T*` (heap pointer)   | Heap-allocated, + `$len` variable    |
 
 - `Array<T>` is passed/received as `ktc_ArrayTrampoline { .size, .data }`.
 - Parameters are trampolined: copied via `alloca`+`memcpy` on entry.
 - `@Size(N) Array<T>` is passed and returned as a raw C pointer via out-parameter ABI.
+
+#### Heap-Allocated Arrays (safe to return)
+
+| Kotlin                       | C Representation                 | Notes                            |
+|------------------------------|----------------------------------|----------------------------------|
+| `heapArrayOf<T>(e1, e2, ...)`| `T* = malloc(sizeof(T) * n)`     | Like `arrayOf` but on heap       |
+| `HeapAlloc<Array<T>>(n)`     | `T* = malloc(sizeof(T) * n)`     | Uninitialized (zero-initialized) |
+| `HeapArrayZero<Array<T>>(n)` | `T* = calloc(n, sizeof(T))`      | Zero-initialized                 |
+| `HeapArrayResize<Array<T>>(p, n)` | `T* = realloc(p, n)`       | Reallocates                       |
+
+`heapArrayOf<T>(v1, v2, ...)` is the heap equivalent of `arrayOf<T>(v1, v2, ...)`. It
+allocates a heap array, initializes each element from the given values, and returns a
+`@Ptr` (nullable pointer). The result carries an accompanying `$len` variable (the
+number of elements). It is safe to return from functions.
 
 ### 4.5 Nullable Pattern
 

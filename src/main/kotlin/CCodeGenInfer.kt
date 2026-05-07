@@ -130,7 +130,7 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
             return mangledGenericName(name, inferredArgs)
         }
         if (classes.containsKey(name)) return name
-        if (name == "HeapAlloc" || name == "HeapArrayZero" || name == "HeapArrayResize") {
+        if (name == "HeapAlloc" || name == "HeapArrayZero" || name == "HeapArrayResize" || name == "heapArrayOf") {
             if (e.typeArgs.isNotEmpty()) {
                 val ta = e.typeArgs[0]
                 // HeapAlloc<Array<Int>>(n) → Int* (element type pointer)

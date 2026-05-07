@@ -23,7 +23,7 @@ package com.bitsycore
  *   [genToString]      — toString() dispatch (primitive, data class, default hash)
  *   [genSbAppend]      — StrBuf append for all types
  *   [genArrayOfExpr]   — array literal (arrayOf/byteArrayOf/etc.)
- *   [genNewArray]      — Array<T>(size) constructor → alloca+memset
+ *   [genNewArray]      — Array<T>(size) constructor → alloca
  *   [genLValue]         — l-value for assignment target
  *
  * ## genExpr dispatch table:
@@ -611,6 +611,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         }
         "arrayOf" -> {
             return genArrayOfExpr(name, args, e.typeArgs.getOrNull(0))
+        }
+        "heapArrayOf" -> {
+            return genHeapArrayOfExpr(args, e.typeArgs.getOrNull(0))
         }
         "arrayOfNulls" -> {
             val typeArg = e.typeArgs.getOrNull(0)
@@ -2088,8 +2091,22 @@ internal fun CCodeGen.genNewArray(elemCType: String, args: List<Arg>): String {
     val size = if (args.isNotEmpty()) genExpr(args[0].expr) else "0"
     val t = tmp()
     preStmts += "$elemCType* $t = ($elemCType*)ktc_alloca(sizeof($elemCType) * (size_t)($size));"
-    preStmts += "memset($t, 0, sizeof($elemCType) * (size_t)($size));"
     preStmts += "const int32_t ${t}\$len = $size;"
+    return t
+}
+
+internal fun CCodeGen.genHeapArrayOfExpr(args: List<Arg>, inTypeArg: TypeRef? = null): String {
+    val elemType = if (inTypeArg != null) cTypeStr(typeSubst[inTypeArg.name] ?: inTypeArg.name)
+                   else if (args.isNotEmpty()) {
+                       val inferred = inferExprType(args[0].expr) ?: "Int"
+                       cTypeStr(inferred)
+                   } else "ktc_Int"
+    val n = args.size
+    val t = tmp()
+    preStmts += "$elemType* $t = ($elemType*)${tMalloc("sizeof($elemType) * $n")};"
+    val vals = args.mapIndexed { i, arg -> "$t[$i] = ${genExpr(arg.expr)};" }.joinToString(" ")
+    if (vals.isNotEmpty()) preStmts += vals
+    preStmts += "const int32_t ${t}\$len = $n;"
     return t
 }
 

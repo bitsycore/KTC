@@ -301,7 +301,6 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         val size = if (init.args.isNotEmpty()) genExpr(init.args[0].expr) else "0"
         flushPreStmts(ind)
         return "${ind}$elemC* ${varName} = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));\n" +
-               "${ind}memset($varName, 0, sizeof($elemC) * (size_t)($size));\n" +
                "${ind}const int32_t ${varName}\$len = $size;"
     }
     // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
@@ -317,6 +316,23 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
             }
             return "${ind}$vOptCType ${varName}[] = {$vArgs};\n${ind}const int32_t ${varName}\$len = ${init.args.size};"
         }
+    }
+    // heapArrayOf<T>(e1, e2, ...) → heap allocation, returns pointer, safe to return from functions
+    if (callee == "heapArrayOf") {
+        val elemType = if (init.typeArgs.isNotEmpty()) cTypeStr(typeSubst[init.typeArgs[0].name] ?: init.typeArgs[0].name)
+                       else if (init.args.isNotEmpty()) {
+                           val inferred = inferExprType(init.args[0].expr) ?: "Int"
+                           cTypeStr(inferred)
+                       } else "ktc_Int"
+        val n = init.args.size
+        val sb = StringBuilder()
+        flushPreStmts(ind)
+        sb.appendLine("${ind}$elemType* ${varName} = ($elemType*)${tMalloc("sizeof($elemType) * $n")};")
+        init.args.forEachIndexed { i, arg ->
+            sb.appendLine("${ind}$varName[$i] = ${genExpr(arg.expr)};")
+        }
+        sb.appendLine("${ind}const int32_t ${varName}\$len = $n;")
+        return sb.toString().trimEnd()
     }
     val elemType = when (callee) {
         "intArrayOf" -> "ktc_Int"; "longArrayOf" -> "ktc_Long"
@@ -364,7 +380,7 @@ internal fun CCodeGen.isArrayReturningCall(e: Expr?): Boolean {
 internal fun CCodeGen.isAllocCall(e: Expr?): Boolean {
     if (e !is CallExpr) return false
     val name = (e.callee as? NameExpr)?.name ?: return false
-    return name in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize")
+    return name in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize", "heapArrayOf")
 }
 
 /** Check if an expression is a malloc/calloc/realloc call with Array<T> type arg. */
@@ -372,8 +388,10 @@ internal fun CCodeGen.isAllocArrayCall(e: Expr?): Boolean {
     val inner = if (e is NotNullExpr) e.expr else e
     if (inner !is CallExpr) return false
     val name = (inner.callee as? NameExpr)?.name ?: return false
-    if (name !in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize")) return false
+    if (name !in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize", "heapArrayOf")) return false
     if (inner.typeArgs.isNotEmpty() && inner.typeArgs[0].name == "Array") return true
+    // heapArrayOf<T>(...) produces a heap array pointer
+    if (name == "heapArrayOf") return true
     if (heapAllocTargetType != null && heapAllocTargetType!!.name == "Array" && heapAllocTargetType!!.typeArgs.isNotEmpty()) return true
     return false
 }
@@ -388,6 +406,7 @@ internal fun CCodeGen.extractAllocSize(e: Expr?): Expr? {
         "HeapAlloc"  -> inner.args.firstOrNull()?.expr  // HeapAlloc<Array<T>>(size)
         "HeapArrayZero"  -> inner.args.firstOrNull()?.expr  // HeapArrayZero<Array<T>>(size)
         "HeapArrayResize" -> inner.args.getOrNull(1)?.expr   // HeapArrayResize<Array<T>>(ptr, size)
+        "heapArrayOf" -> IntLit(inner.args.size.toLong())  // heapArrayOf<T>(...) — size = number of args
         else      -> null
     }
 }
@@ -397,13 +416,17 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
     val inner = if (init is NotNullExpr) init.expr else init
     if (inner is CallExpr) {
         val name = (inner.callee as? NameExpr)?.name
-        if (name in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize") && inner.typeArgs.isNotEmpty()) {
+        if (name in setOf("HeapAlloc", "HeapArrayZero", "HeapArrayResize", "heapArrayOf") && inner.typeArgs.isNotEmpty()) {
             val ta = inner.typeArgs[0]
             if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                 return ta.copy(annotations = ta.annotations + Annotation("Ptr"))
             }
             if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty()) {
                 return ta.typeArgs[0].copy(annotations = ta.typeArgs[0].annotations + Annotation("Ptr"))
+            }
+            // heapArrayOf<Int>(1,2,3) → @Ptr Array<Int>? (heap pointer to array)
+            if (name == "heapArrayOf") {
+                return TypeRef("Array", nullable = true, typeArgs = listOf(ta), annotations = listOf(Annotation("Ptr")))
             }
         }
     }
