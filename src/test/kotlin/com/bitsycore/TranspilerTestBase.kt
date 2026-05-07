@@ -1,5 +1,6 @@
 package com.bitsycore
 
+import org.intellij.lang.annotations.Language
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -137,7 +138,7 @@ open class TranspilerTestBase {
      * [body] is placed inside `fun main(args: Array<String>) { ... }`.
      * [decls] are placed at top-level (before main).
      */
-    protected fun transpileMain(body: String, decls: String = "", pkg: String = "test.Main"): TranspileResult {
+    protected fun transpileMain(@Language("kotlin") body: String,@Language("kotlin") decls: String = "", pkg: String = "test.Main"): TranspileResult {
         val src = buildString {
             appendLine("package $pkg")
             appendLine()
