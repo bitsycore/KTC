@@ -281,6 +281,29 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
                "${ind}memset($varName, 0, sizeof($optCType) * (size_t)($size));\n" +
                "${ind}const int32_t ${varName}\$len = $size;"
     }
+    // Array<T>(size), IntArray(size) etc. — fresh stack allocation, emit directly into varName
+    if (callee in setOf("IntArray", "LongArray", "FloatArray", "DoubleArray",
+        "BooleanArray", "CharArray", "ByteArray", "ShortArray",
+        "UByteArray", "UShortArray", "UIntArray", "ULongArray") ||
+        (callee == "Array" && init.typeArgs.isNotEmpty())) {
+        val elemC = if (callee == "Array") {
+            val elemName = resolveTypeName(init.typeArgs[0])
+            cTypeStr(elemName)
+        } else when (callee) {
+            "IntArray" -> "ktc_Int"; "LongArray" -> "ktc_Long"
+            "FloatArray" -> "ktc_Float"; "DoubleArray" -> "ktc_Double"
+            "BooleanArray" -> "ktc_Bool"; "CharArray" -> "ktc_Char"
+            "ByteArray" -> "ktc_Byte"; "ShortArray" -> "ktc_Short"
+            "UByteArray" -> "ktc_UByte"; "UShortArray" -> "ktc_UShort"
+            "UIntArray" -> "ktc_UInt"; "ULongArray" -> "ktc_ULong"
+            else -> return null
+        }
+        val size = if (init.args.isNotEmpty()) genExpr(init.args[0].expr) else "0"
+        flushPreStmts(ind)
+        return "${ind}$elemC* ${varName} = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));\n" +
+               "${ind}memset($varName, 0, sizeof($elemC) * (size_t)($size));\n" +
+               "${ind}const int32_t ${varName}\$len = $size;"
+    }
     // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
     if (callee == "arrayOf") {
         val vTypeArg = init.typeArgs.getOrNull(0)

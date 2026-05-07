@@ -1,6 +1,9 @@
 package ArrayTest
 
 fun main() {
+    val abc = Array<Int>(10)
+
+
     // intArrayOf
     val arr = intArrayOf(10, 20, 30, 40, 50)
     println("size = ${arr.size}")
