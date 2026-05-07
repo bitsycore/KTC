@@ -188,6 +188,7 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
 
 /** Generate a secondary constructor function name: ClassName_constructorWithType1_Type2 */
 internal fun CCodeGen.secondaryCtorName(cClass: String, params: List<Param>): String {
+    if (params.isEmpty()) return "${cClass}_emptyConstructor"
     val types = params.map { resolveTypeName(it.type).removeSuffix("*") }
     return "${cClass}_constructorWith${types.joinToString("_")}"
 }

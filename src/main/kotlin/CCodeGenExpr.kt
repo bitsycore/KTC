@@ -741,7 +741,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val sctor = declClass?.secondaryCtors?.find { it.params.size == args.size && it.params.size != primaryParamCount }
         if (sctor != null) {
             val types = sctor.params.map { resolveTypeName(it.type).removeSuffix("*") }
-            val suffix = "constructorWith${types.joinToString("_")}"
+            val suffix = if (types.isEmpty()) "emptyConstructor" else "constructorWith${types.joinToString("_")}"
             val argStr = args.joinToString(", ") { genExpr(it.expr) }
             return "${pfx(name)}_$suffix($argStr)"
         }
