@@ -7,11 +7,12 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
     @Test fun operatorGetIndex() {
         val r = transpile("""
             package test.Main
-            class IntMap(val arr: IntArray) {
+            class IntMap(val arr: @Ptr IntArray) {
                 operator fun get(index: Int): Int = arr[index]
             }
             fun main(args: Array<String>) {
-                val m = IntMap(intArrayOf(10, 20, 30))
+                val arr = intArrayOf(10, 20, 30)
+                val m = IntMap(arr.ptr())
                 val v = m[1]
             }
         """)
@@ -21,13 +22,14 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
     @Test fun operatorSetIndex() {
         val r = transpile("""
             package test.Main
-            class IntMap(var arr: IntArray) {
+            class IntMap(var arr: @Ptr IntArray) {
                 operator fun set(index: Int, value: Int) {
                     arr[index] = value
                 }
             }
             fun main(args: Array<String>) {
-                val m = IntMap(intArrayOf(10, 20, 30))
+                val arr = intArrayOf(10, 20, 30)
+                val m = IntMap(arr.ptr())
                 m[1] = 99
             }
         """)
@@ -59,7 +61,7 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
                 val ok = 15 !in r
             }
         """)
-        r.sourceContains("!Range2_contains(&r, 15)")
+        r.sourceContains("!test_Main_Range2_contains(&r, 15)")
     }
 
     @Test fun operatorGetOnInterface() {
@@ -68,11 +70,12 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
             interface Indexed {
                 operator fun get(index: Int): Int
             }
-            class IntList(val arr: IntArray) : Indexed {
+            class IntList(val arr: @Ptr IntArray) : Indexed {
                 override fun get(index: Int): Int = arr[index]
             }
             fun main(args: Array<String>) {
-                val lst: Indexed = IntList(intArrayOf(1, 2, 3))
+                val arr = intArrayOf(1, 2, 3).ptr()
+                val lst: Indexed = IntList(arr)
                 val v = lst[0]
             }
         """)
@@ -85,11 +88,12 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
             interface MutableIndexed {
                 operator fun set(index: Int, value: Int)
             }
-            class IntList(var arr: IntArray) : MutableIndexed {
+            class IntList(var arr: @Ptr IntArray) : MutableIndexed {
                 override fun set(index: Int, value: Int) { arr[index] = value }
             }
             fun main(args: Array<String>) {
-                val lst: MutableIndexed = IntList(intArrayOf(1, 2, 3))
+                val arr = intArrayOf(1, 2, 3)
+                val lst: MutableIndexed = IntList(arr.ptr())
                 lst[0] = 99
             }
         """)
@@ -97,7 +101,7 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
     }
 
     @Test fun operatorIterator() {
-        val r = transpile("""
+        val r = transpileWithStdlib("""
             package test.Main
             class IntRange2(val lo: Int, val hi: Int) {
                 operator fun iterator(): Iterator<Int> = TODO()
@@ -116,7 +120,7 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
             var sum = 0
             for (x in list) { sum += x }
         """)
-        r.sourceContains("ArrayList_iterator")
+        r.sourceContains("ktc_std_ArrayList_Int_iterator")
     }
 
     @Test fun operatorContainsMap() {
@@ -132,7 +136,7 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
             val map = mutableMapOf("a" to 1, "b" to 2)
             val v = map["a"]
         """)
-        r.sourceContains("HashMap_get")
+        r.sourceContains("ktc_std_HashMap_String_Int_get")
     }
 
     @Test fun operatorSetMap() {
@@ -140,6 +144,6 @@ class OperatorOverloadUnitTest : TranspilerTestBase() {
             val map = mutableMapOf("a" to 1, "b" to 2)
             map["a"] = 99
         """)
-        r.sourceContains("HashMap_set")
+        r.sourceContains("ktc_std_HashMap_String_Int_set")
     }
 }

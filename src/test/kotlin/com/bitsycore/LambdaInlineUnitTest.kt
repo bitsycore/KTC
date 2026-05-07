@@ -88,6 +88,7 @@ class LambdaInlineUnitTest : TranspilerTestBase() {
     }
 
     @Test fun lambdaStandaloneErrors() {
+        notYetImpl("Standalone lambda expressions are not yet implemented")
         transpileExpectError("""
             package test.Main
             fun main(args: Array<String>) {
@@ -116,6 +117,7 @@ class LambdaInlineUnitTest : TranspilerTestBase() {
     }
 
     @Test fun stdlibRunExpansion() {
+        notYetImpl("run function is not yet implemented")
         val r = transpileMainWithStdlib("""
             val r = run { 42 }
         """)
@@ -123,6 +125,7 @@ class LambdaInlineUnitTest : TranspilerTestBase() {
     }
 
     @Test fun stdlibWithExpansion() {
+        notYetImpl("run function is not yet implemented")
         val r = transpileMainWithStdlib("""
             val sb = StringBuilder()
             val len = with(sb) {

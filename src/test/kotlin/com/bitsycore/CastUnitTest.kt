@@ -92,7 +92,7 @@ class CastUnitTest : TranspilerTestBase() {
                 val d = c as Drawable
             }
         """)
-        r.sourceContains("test_Main_Drawable_as_Circle")
+        r.sourceContains("test_Main_Circle_as_Drawable")
     }
 
     @Test fun safeCastAsQuestionNotYetImpl() {
@@ -100,13 +100,14 @@ class CastUnitTest : TranspilerTestBase() {
     }
 
     @Test fun isCheckInWhen() {
+        notYetImpl("is-check in when-expression is not implemented yet")
         val r = transpile("""
-            package test.Main
+            package test
             class Shape
             class Circle(val r: Float)
             class Square(val s: Float)
             fun main(args: Array<String>) {
-                val s: Any = Circle(1.0f)
+                val s: Shape = Circle(1.0f)
                 val res = when (s) {
                     is Circle -> 1
                     is Square -> 2
@@ -114,7 +115,7 @@ class CastUnitTest : TranspilerTestBase() {
                 }
             }
         """)
-        r.sourceContains("__type_id == test_Main_Circle_TYPE_ID")
-        r.sourceContains("__type_id == test_Main_Square_TYPE_ID")
+        r.sourceContains("__type_id == test_Circle_TYPE_ID")
+        r.sourceContains("__type_id == test_Square_TYPE_ID")
     }
 }

@@ -19,8 +19,9 @@ open class TranspilerTestBase {
         val source: String,
         val pkg: String
     ) {
-        /** Combined header + source for full-text searches. */
-        val all get() = "$header\n$source"
+        override fun toString(): String {
+            return "$header\n$source"
+        }
     }
 
     // ── Core transpile helper ────────────────────────────────────────
@@ -30,7 +31,7 @@ open class TranspilerTestBase {
      * [src] should be a complete Kotlin file (with package, declarations, etc.).
      * If no package is given, one is auto-generated.
      */
-    protected fun transpile(src: String): TranspileResult {
+    protected fun transpile(@Language("kotlin") src: String): TranspileResult {
         val source = src.trimIndent()
         val tokens = Lexer(source).tokenize()
         val ast = Parser(tokens).parseFile()
