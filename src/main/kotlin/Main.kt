@@ -335,6 +335,7 @@ private fun dumpStmt(s: Stmt, depth: Int): String {
             sb.appendLine("${id}defer")
             sb.append(dumpBlock(s.body, depth))
         }
+        is CommentStmt -> sb.appendLine("${id}comment ${s.text}")
     }
     return sb.toString()
 }

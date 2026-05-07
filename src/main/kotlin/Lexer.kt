@@ -34,8 +34,8 @@ class Lexer(private val src: String) {
         val c = cur()
         when {
             c == '\n' || c == '\r' -> lexNewline()
-            c == '/' && pos + 1 < src.length && src[pos + 1] == '/' -> skipLineComment()
-            c == '/' && pos + 1 < src.length && src[pos + 1] == '*' -> skipBlockComment()
+            c == '/' && pos + 1 < src.length && src[pos + 1] == '/' -> lexLineComment()
+            c == '/' && pos + 1 < src.length && src[pos + 1] == '*' -> lexBlockComment()
             c == '"'  -> startString()
             c == '\'' -> lexChar()
             c.isDigit() -> lexNumber()
@@ -240,18 +240,26 @@ class Lexer(private val src: String) {
 
     // ── Comments ─────────────────────────────────────────────────────
 
-    private fun skipLineComment() {
+    private fun lexLineComment() {
+        advance(); advance()               // skip //
+        val start = pos
         while (pos < src.length && cur() != '\n') advance()
+        val text = src.substring(start, pos).trim()
+        emit(TokenType.COMMENT, "//$text")
     }
 
-    private fun skipBlockComment() {
-        advance(); advance()                // skip /*
+    private fun lexBlockComment() {
+        advance(); advance()               // skip /*
+        val start = pos
         var depth = 1
         while (pos < src.length && depth > 0) {
             if (cur() == '/' && pos + 1 < src.length && src[pos + 1] == '*') { advance(); advance(); depth++ }
             else if (cur() == '*' && pos + 1 < src.length && src[pos + 1] == '/') { advance(); advance(); depth-- }
             else { if (cur() == '\n') { line++; col = 1 }; advance() }
         }
+        val end = pos - 2  // before */
+        val text = src.substring(start, end).trim().replace("\n", " ")
+        emit(TokenType.COMMENT, "/*$text*/")
     }
 
     // ── Escape sequences ─────────────────────────────────────────────

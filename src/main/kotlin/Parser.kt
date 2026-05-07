@@ -19,7 +19,11 @@ class Parser(private val tokens: List<Token>) {
     // ═══════════════════════════ Declarations ═════════════════════════
 
     private fun parseDecl(): Decl {
-        skipNL()
+        while (true) {
+            skipNL()
+            if (at(TokenType.COMMENT)) { advance(); skipTerminator(); continue }
+            break
+        }
         // track 'override', 'operator', 'inline' and 'private' modifiers
         val isOverride = at(TokenType.OVERRIDE)
         if (isOverride) advance()
@@ -269,8 +273,8 @@ class Parser(private val tokens: List<Token>) {
                 if (isOp) advance()
                 when {
                     at(TokenType.FUN) -> methods += parseFunDecl(isOperator = isOp)
-                    at(TokenType.VAL) -> properties += parsePropDecl(mutable = false) as PropDecl
-                    at(TokenType.VAR) -> properties += parsePropDecl(mutable = true) as PropDecl
+                    at(TokenType.VAL) -> properties += parsePropDecl(mutable = false)
+                    at(TokenType.VAR) -> properties += parsePropDecl(mutable = true)
                     else -> error("Expected fun, val, or var in interface body at ${cur()}")
                 }
                 skipNL()
@@ -378,6 +382,7 @@ class Parser(private val tokens: List<Token>) {
         skipNL()
         val stmtLine = cur().line
         val stmt = when {
+            at(TokenType.COMMENT) -> { val text = advance().value; CommentStmt(text) }
             at(TokenType.VAL) -> parseVarDeclStmt(mutable = false)
             at(TokenType.VAR) -> parseVarDeclStmt(mutable = true)
             at(TokenType.RETURN) -> { advance(); val v = if (atExprStart()) parseExpr() else null; ReturnStmt(v) }

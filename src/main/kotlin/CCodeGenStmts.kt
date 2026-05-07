@@ -48,6 +48,7 @@ internal fun CCodeGen.emitStmt(s: Stmt, ind: String, insideMethod: Boolean = fal
         is BreakStmt    -> impl.appendLine("${ind}break;")
         is ContinueStmt -> impl.appendLine("${ind}continue;")
         is DeferStmt    -> deferStack.add(s.body)
+        is CommentStmt  -> { impl.appendLine("$ind${s.text}") }
     }
     // Smart cast: if (x == null) return/break/continue → narrow x to non-null after
     applyGuardSmartCast(s)

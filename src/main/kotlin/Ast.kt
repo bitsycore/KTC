@@ -133,6 +133,7 @@ data class DoWhileStmt(val body: Block, val cond: Expr) : Stmt()
 class BreakStmt : Stmt()
 class ContinueStmt : Stmt()
 data class DeferStmt(val body: Block) : Stmt()
+data class CommentStmt(val text: String) : Stmt()
 
 // ═══════════════════════════ Expressions ═══════════════════════════
 

@@ -44,7 +44,7 @@ enum class TokenType {
     AT,
 
     // Special
-    NEWLINE, EOF
+    NEWLINE, EOF, COMMENT
 }
 
 data class Token(
