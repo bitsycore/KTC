@@ -10,32 +10,38 @@ class StringUnitTest : TranspilerTestBase() {
     // ── Simple string template ───────────────────────────────────────
 
     @Test fun simpleTemplate() {
-        val r = transpileMain("""
+        val r = transpileMain(
+            $$"""
             val name = "World"
-            println("Hello, ${'$'}name!")
-        """)
+            println("Hello, $name!")
+            """
+        )
         r.sourceContains("printf(\"Hello, %.*s!\\n\"")
     }
 
     // ── Expression in template ───────────────────────────────────────
 
     @Test fun expressionTemplate() {
-        val r = transpileMain("""
+        val r = transpileMain(
+            $$"""
             val a = 10
             val b = 20
-            println("sum = ${'$'}{a + b}")
-        """)
+            println("sum = ${a + b}")
+        """
+        )
         r.sourceContains("(a + b)")
     }
 
     // ── String template as value ─────────────────────────────────────
 
     @Test fun templateAsValue() {
-        val r = transpileMain("""
+        val r = transpileMain(
+            $$"""
             val x = 42
-            val s = "value=${'$'}x"
+            val s = "value=$x"
             println(s)
-        """)
+        """
+        )
         // Template assigned to val → uses snprintf or similar
         r.sourceContains("ktc_StrBuf")
     }
@@ -43,14 +49,16 @@ class StringUnitTest : TranspilerTestBase() {
     // ── Data class in template ───────────────────────────────────────
 
     @Test fun dataClassInTemplate() {
-        val r = transpile("""
+        val r = transpile(
+            $$"""
             package test.Main
             data class Vec2(val x: Float, val y: Float)
             fun main(args: Array<String>) {
                 val v = Vec2(3.0f, 4.0f)
-                println("v=${'$'}v")
+                println("v=$v")
             }
-        """)
+        """
+        )
         r.sourceContains("test_Main_Vec2_toString")
     }
 
