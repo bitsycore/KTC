@@ -1089,6 +1089,19 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     if (method == "ptr" && recvType != null && isArrayType(recvType)) {
         return recv
     }
+    // Array .toHeap() → malloc + memcpy to heap
+    if (method == "toHeap" && recvType != null && isArrayType(recvType)) {
+        val elemC = arrayElementCType(recvType)
+        val lenExpr = when {
+            dot.obj is NameExpr && (dot.obj as NameExpr).name in trampolinedParams -> "${(dot.obj as NameExpr).name}.size"
+            else -> "${recv}\$len"
+        }
+        val t = tmp()
+        preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($lenExpr)")};"
+        preStmts += "if ($t) memcpy($t, $recv, sizeof($elemC) * (size_t)($lenExpr));"
+        preStmts += "int32_t ${t}\$len = $lenExpr;"
+        return t
+    }
     // Ptr<Array<T>> .deref() → dereference to get the array
     if (method == "deref" && recvType != null && isArrayType(recvType) &&
         (recvType.endsWith("*") || recvType.endsWith("*?"))) {

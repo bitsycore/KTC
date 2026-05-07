@@ -334,6 +334,18 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     if (method == "toFloatOrNull") return "Float?"
     if (method == "toDoubleOrNull") return "Double?"
     if (method == "hashCode") return "Int"
+    // Array methods
+    if (recvType.endsWith("Array")) {
+        return when (method) {
+            "size" -> "Int"
+            "ptr", "toHeap" -> {
+                val elem = recvType.removeSuffix("Array")
+                val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
+                "${internal}*"
+            }
+            else -> null
+        }
+    }
     // String methods
     if (recvType == "String") {
         return when (method) {
@@ -439,6 +451,19 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
         return null
     }
     if (e.name == "size" && recvType.endsWith("Array")) return "Int"
+    if (e.name == "ptr") {
+        if (recvType.endsWith("Array")) {
+            val elem = recvType.removeSuffix("Array")
+            val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
+            return "${internal}*"
+        }
+        return if (recvType.endsWith("*")) recvType else "${recvType}*"
+    }
+    if (e.name == "toHeap" && recvType.endsWith("Array")) {
+        val elem = recvType.removeSuffix("Array")
+        val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
+        return "${internal}*"
+    }
     if (e.name == "length" && recvType == "String") return "Int"
     // Enum value .name / .ordinal
     if (e.name == "name" && recvType in enums) return "String"

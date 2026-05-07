@@ -242,6 +242,9 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     if (isArrayType(t) && !t.endsWith("*?") && (t.endsWith("*") || isArrayType(t))) {
                         val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
+                    } else if (t.endsWith("*") && !t.endsWith("*?") && s.init is NameExpr) {
+                        val srcName = (s.init as NameExpr).name
+                        impl.appendLine("${ind}int32_t ${s.name}\$len = ${srcName}\$len;")
                     }
                 }
             }
@@ -271,6 +274,18 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
 
 internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t: String, ind: String): String? {
     if (init !is CallExpr) return null
+    // .ptr() on array expression → propagate $len to the target variable
+    if (init.callee is DotExpr) {
+        val dot = init.callee as DotExpr
+        if (dot.name == "ptr" || dot.name == "toHeap") {
+            val recvType = inferExprType(dot.obj)
+            if (recvType != null && recvType.endsWith("Array")) {
+                val expr = genExpr(init)
+                flushPreStmts(ind)
+                return "$ind$ct $varName = $expr;\n${ind}int32_t ${varName}\$len = ${expr}\$len;"
+            }
+        }
+    }
     val callee = (init.callee as? NameExpr)?.name ?: return null
     // arrayOfNulls<T>(size) — stack-allocate array of Optionals, all set to ktc_NONE
     if (callee == "arrayOfNulls") {
