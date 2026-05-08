@@ -408,13 +408,13 @@ else
     done
 
     for pid in "${pids[@]}"; do
-        wait "$pid"
+        wait "$pid" || true
     done
 
     for dir in "${test_dirs[@]}"; do
         dir_name="$(basename "$dir")"
         exit_code=$(cat "$OUT_DIR/${dir_name}.code" 2>/dev/null || echo 1)
-        cat "$OUT_DIR/${dir_name}.out" 2>/dev/null
+        cat "$OUT_DIR/${dir_name}.out" 2>/dev/null || true
         ((TOTAL++)) || true
         if [[ "$exit_code" == "0" ]]; then
             ((PASSED++)) || true

@@ -244,7 +244,12 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
                     } else if (t.endsWith("*") && !t.endsWith("*?") && s.init is NameExpr) {
                         val srcName = (s.init as NameExpr).name
-                        impl.appendLine("${ind}int32_t ${s.name}\$len = ${srcName}\$len;")
+                        // Skip $len copy if source is a @Ptr RawArray<T> field (which has no $len companion)
+                        val isRawArrayField = currentClass != null &&
+                            classes[currentClass]?.props?.any { it.first == srcName && it.second.name == "RawArray" } == true
+                        if (!isRawArrayField) {
+                            impl.appendLine("${ind}int32_t ${s.name}\$len = ${srcName}\$len;")
+                        }
                     }
                 }
             }

@@ -156,7 +156,9 @@ class Parser(private val tokens: List<Token>) {
             advance(); nesting++; skipNL()
             while (!at(TokenType.RBRACE) && !at(TokenType.EOF)) {
                 skipNL(); if (at(TokenType.RBRACE)) break
-                if (at(TokenType.INIT)) {
+                if (at(TokenType.COMMENT)) {
+                    advance(); skipTerminator()
+                } else if (at(TokenType.INIT)) {
                     advance(); inits += parseBlock(); skipTerminator()
                 } else if (at(TokenType.IDENT) && cur().value == "constructor") {
                     secondaryCtors += parseSecondaryCtor()
