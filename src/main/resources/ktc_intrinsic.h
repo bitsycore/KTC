@@ -67,8 +67,9 @@ ktc_UInt ktc_rand_range(ktc_UInt bound);
 
 /* ═══════════════════════════ Array Trampoline ════════════════════════ */
 /* Pass-by-value semantics for variable-size arrays.
- * Functions receive this struct, then copy data to a local stack buffer. */
-typedef struct { ktc_Int size; void* data; } ktc_ArrayTrampoline;
+ * Functions receive this struct, then copy data to a local stack buffer.
+ * __array_type_id identifies the element type at runtime (for `is` checks). */
+typedef struct { ktc_Int __array_type_id; ktc_Int size; void* data; } ktc_ArrayTrampoline;
 
 /* ═══════════════════════════ Optional ════════════════════════════════ */
 typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
@@ -209,8 +210,7 @@ typedef struct {
     const ktc_Char* ptr;
     ktc_Int     len;
 } ktc_String;
-
-typedef struct { ktc_OptionalTag tag; ktc_String value; } ktc_String_Optional;
+KTC_OPTIONAL(ktc_String);
 
 /* String from literal — zero-cost, points into static storage. */
 #define ktc_str(s) ((ktc_String){(s), (ktc_Int)(sizeof(s) - 1)})

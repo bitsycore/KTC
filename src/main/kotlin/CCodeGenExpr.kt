@@ -177,6 +177,16 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
             if (impls.isEmpty()) "false"  // no class implements this interface
             else impls.joinToString(" || ") { "${inner}.__type_id == ${pfx(it)}_TYPE_ID" }
+        } else if (isArrayType(target)) {
+            // Array type check: compare compile-time known types when possible
+            val exprType = inferExprType(e.expr)
+            if (exprType != null && isArrayType(exprType)) {
+                if (exprType == target) "true" else "false"
+            } else {
+                // Runtime check via trampoline __array_type_id
+                val arrayId = getTypeId(target)
+                "(${inner}.__array_type_id == $arrayId)"
+            }
         } else {
             "/* is-check: unknown type '${target}' */ true"
         }
@@ -185,7 +195,26 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     is CastExpr    -> {
         val target = resolveTypeName(e.type)
         val inner = genExpr(e.expr)
-        if (interfaces.containsKey(target)) {
+        if (e.safe) {
+            // Safe cast: x as? Type → check runtime type, return nullable
+            val optCType = optCTypeName("$target?")
+            val check = if (classes.containsKey(target)) {
+                "${inner}.__type_id == ${pfx(target)}_TYPE_ID"
+            } else if (interfaces.containsKey(target)) {
+                val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
+                if (impls.isEmpty()) "false"
+                else impls.joinToString(" || ") { "${inner}.__type_id == ${pfx(it)}_TYPE_ID" }
+            } else {
+                // Non-class/non-interface types: always succeed
+                "true"
+            }
+            val castVal = if (interfaces.containsKey(target)) {
+                "${pfx(target)}_as_$target(&($inner))"
+            } else {
+                "(${cTypeStr(target)})($inner)"
+            }
+            "($check) ? ${optSome(optCType, castVal)} : ${optNone(optCType)}"
+        } else if (interfaces.containsKey(target)) {
             "${pfx(target)}_as_$target(&($inner))"
         } else {
             "(${cType(e.type)})($inner)"
@@ -1704,6 +1733,7 @@ internal fun CCodeGen.inferBlockType(b: Block): String? {
 // ── when expression (nested ternary or temp) ──────────────────────
 
 internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
+    val subjName = (e.subject as? NameExpr)?.name
     // Check if branches need interface coercion (different types sharing a common interface)
     val branchTypes = e.branches.map { inferBlockType(it.body) }
     val distinctTypes = branchTypes.filterNotNull().distinct()
@@ -1731,12 +1761,15 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
                 val keyword = if (bi == 0) "if" else "} else if"
                 preStmts += "$keyword ($condStr) {"
             }
+            val narrowedType = narrowSubjectForBranch(br, subjName)
+            if (narrowedType != null) { pushScope(); defineVar(subjName!!, narrowedType) }
             val brType = branchTypes[bi]
             if (brType != null && classes.containsKey(brType)) {
                 emitBlockIntoTempIface(br.body, t, brType, commonIface, "    ")
             } else {
                 emitBlockIntoTemp(br.body, t, "    ")
             }
+            if (narrowedType != null) popScope()
         }
         preStmts += "}"
         return t
@@ -1747,7 +1780,10 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
     if (allSimple) {
         val sb = StringBuilder()
         for (br in e.branches) {
+            val narrowedType = narrowSubjectForBranch(br, subjName)
+            if (narrowedType != null) { pushScope(); defineVar(subjName!!, narrowedType) }
             val expr = genExpr(blockAsSingleExpr(br.body)!!)
+            if (narrowedType != null) popScope()
             if (br.conds == null) {
                 sb.append(expr)
             } else {
@@ -1772,10 +1808,21 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
             val keyword = if (bi == 0) "if" else "} else if"
             preStmts += "$keyword ($condStr) {"
         }
+        val narrowedType = narrowSubjectForBranch(br, subjName)
+        if (narrowedType != null) { pushScope(); defineVar(subjName!!, narrowedType) }
         emitBlockIntoTemp(br.body, t, "    ")
+        if (narrowedType != null) popScope()
     }
     preStmts += "}"
     return t
+}
+
+internal fun CCodeGen.narrowSubjectForBranch(br: WhenBranch, subjName: String?): String? {
+    if (br.conds == null || subjName == null || isMutable(subjName)) return null
+    val isCond = br.conds.find { it is IsCond && !it.negated } as? IsCond ?: return null
+    val target = resolveTypeName(isCond.type)
+    val current = lookupVar(subjName) ?: return null
+    return if (current != target) target else null
 }
 
 internal fun CCodeGen.inferWhenExprType(e: WhenExpr): String? {

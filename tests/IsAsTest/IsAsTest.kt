@@ -13,10 +13,9 @@ class Square(val side: Int) : Drawable {
 }
 
 fun main() {
-    // is on nullable String
+    // is smart-cast on nullable
     val y: String? = "test"
-    // TODO: 'is' smart-cast on nullable doesn't work yet
-    if (y != null) {
+    if (y is String) {
         println("y is String: ${y.length}")
     }
 

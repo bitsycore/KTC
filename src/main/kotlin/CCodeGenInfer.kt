@@ -82,7 +82,7 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
     is NotNullExpr -> inferExprType(e.expr)?.removeSuffix("?")
     is ElvisExpr -> (inferExprType(e.left) ?: inferExprType(e.right))?.removeSuffix("?")
     is IsCheckExpr -> "Boolean"
-    is CastExpr -> e.type.name
+    is CastExpr -> if (e.safe) e.type.name + "?" else e.type.name
     is FunRefExpr -> {
         // Look up the function signature and build a Fun(...)->R type string
         val sig = funSigs[e.name]

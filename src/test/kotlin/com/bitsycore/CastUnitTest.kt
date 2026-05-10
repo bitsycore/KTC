@@ -95,12 +95,37 @@ class CastUnitTest : TranspilerTestBase() {
         r.sourceContains("test_Main_Circle_as_Drawable")
     }
 
-    @Test fun safeCastAsQuestionNotYetImpl() {
-        notYetImpl("as? safe cast is not implemented yet")
+    @Test fun safeCastAsQuestion() {
+        val r = transpile("""
+            package test.Main
+            class Shape
+            class Circle(val r: Float) : Shape
+            fun main(args: Array<String>) {
+                val s: Shape = Circle(1.0f)
+                val c = (s as? Circle)
+            }
+        """)
+        r.sourceContains("__type_id == test_Main_Circle_TYPE_ID")
+        r.sourceContains("ktc_SOME")
+        r.sourceContains("ktc_NONE")
+    }
+
+    @Test fun safeCastAsQuestionInterface() {
+        val r = transpile("""
+            package test.Main
+            interface Drawable { fun draw(): Unit }
+            class Circle(val r: Float) : Drawable {
+                override fun draw() {}
+            }
+            fun main(args: Array<String>) {
+                val c = Circle(1.0f)
+                val d = (c as? Drawable)
+            }
+        """)
+        r.sourceContains("__type_id == test_Main_Circle_TYPE_ID")
     }
 
     @Test fun isCheckInWhen() {
-        notYetImpl("is-check in when-expression is not implemented yet")
         val r = transpile("""
             package test
             class Shape

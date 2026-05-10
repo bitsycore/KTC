@@ -1160,8 +1160,9 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
 
 /**
  * Detect smart-cast candidates from a condition expression.
- * Returns a list of (varName, nonNullType) pairs for variables proven non-null.
- * Handles value nullable ("T?") and pointer nullable ("T*?").
+ * Returns a list of (varName, narrowedType) pairs for variables whose type is narrowed.
+ * Handles value nullable ("T?") and pointer nullable ("T*?") via != null checks,
+ * and type narrowing via `is T` / `this is T` checks.
  */
 internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> {
     val casts = mutableListOf<Pair<String, String>>()
@@ -1178,6 +1179,19 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
             casts.add("\$self" to type.dropLast(1))
         }
     }
+    fun tryCastTo(name: String, targetType: String) {
+        if (isMutable(name)) return
+        val currentType = lookupVar(name)
+        if (currentType != null && currentType != targetType) {
+            casts.add(name to targetType)
+        }
+    }
+    fun tryThisCastTo(targetType: String) {
+        val currentType = currentExtRecvType ?: return
+        if (currentType != targetType) {
+            casts.add("\$self" to targetType)
+        }
+    }
     when {
         // x != null
         cond is BinExpr && cond.op == "!=" && cond.right is NullLit && cond.left is NameExpr ->
@@ -1191,18 +1205,37 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
         // null != this
         cond is BinExpr && cond.op == "!=" && cond.left is NullLit && cond.right is ThisExpr ->
             tryThisSmartCast()
+        // x is Type
+        cond is IsCheckExpr && !cond.negated && cond.expr is NameExpr ->
+            tryCastTo(cond.expr.name, resolveTypeName(cond.type))
+        // this is Type
+        cond is IsCheckExpr && !cond.negated && cond.expr is ThisExpr ->
+            tryThisCastTo(resolveTypeName(cond.type))
     }
     return casts
 }
 
-/** Detect smart-casts for the else branch (condition that proves null in the then branch). */
+/** Detect smart-casts for the else branch (condition that proves null in the then branch, or !is in then branch). */
 internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, String>> {
     val casts = mutableListOf<Pair<String, String>>()
     fun trySmartCast(name: String) {
-        if (isMutable(name)) return  // var cannot be smart-cast
+        if (isMutable(name)) return
         val type = lookupVar(name)
         if (type != null && type.endsWith("?")) {
             casts.add(name to type.dropLast(1))
+        }
+    }
+    fun tryCastTo(name: String, targetType: String) {
+        if (isMutable(name)) return
+        val currentType = lookupVar(name)
+        if (currentType != null && currentType != targetType) {
+            casts.add(name to targetType)
+        }
+    }
+    fun tryThisCastTo(targetType: String) {
+        val currentType = currentExtRecvType ?: return
+        if (currentType != targetType) {
+            casts.add("\$self" to targetType)
         }
     }
     when {
@@ -1211,6 +1244,12 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
             trySmartCast(cond.left.name)
         cond is BinExpr && cond.op == "==" && cond.left is NullLit && cond.right is NameExpr ->
             trySmartCast(cond.right.name)
+        // x !is Type → in else branch, x IS Type
+        cond is IsCheckExpr && cond.negated && cond.expr is NameExpr ->
+            tryCastTo(cond.expr.name, resolveTypeName(cond.type))
+        // this !is Type → in else branch, $self IS Type
+        cond is IsCheckExpr && cond.negated && cond.expr is ThisExpr ->
+            tryThisCastTo(resolveTypeName(cond.type))
     }
     return casts
 }
@@ -1250,6 +1289,7 @@ internal fun CCodeGen.emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
 // ── when (as statement) ──────────────────────────────────────────
 
 internal fun CCodeGen.emitWhenStmt(e: WhenExpr, ind: String, method: Boolean) {
+    val subjName = (e.subject as? NameExpr)?.name
     for ((bi, br) in e.branches.withIndex()) {
         if (br.conds == null) {
             // else branch
@@ -1259,7 +1299,17 @@ internal fun CCodeGen.emitWhenStmt(e: WhenExpr, ind: String, method: Boolean) {
             val keyword = if (bi == 0) "if" else "else if"
             impl.appendLine("$ind$keyword ($condStr) {")
         }
+        // Smart cast: narrow subject type for `is` branches
+        val narrowedType = if (br.conds != null && subjName != null && !isMutable(subjName)) {
+            val isCond = br.conds.find { it is IsCond && !it.negated } as? IsCond
+            if (isCond != null) resolveTypeName(isCond.type) else null
+        } else null
+        if (narrowedType != null) {
+            pushScope()
+            defineVar(subjName!!, narrowedType)
+        }
         emitBlock(br.body, ind, method)
+        if (narrowedType != null) popScope()
         impl.appendLine("$ind}")
     }
 }
@@ -1283,6 +1333,15 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
                 else impls.joinToString(" || ") { "$subj.__type_id == ${pfx(it)}_TYPE_ID" }
+            } else if (isArrayType(target)) {
+                // Array type check: compare compile-time known types
+                val exprType = if (subject != null) inferExprType(subject) else null
+                if (exprType != null && isArrayType(exprType)) {
+                    if (exprType == target) "true" else "false"
+                } else {
+                    val arrayId = getTypeId(target)
+                    "($subj.__array_type_id == $arrayId)"
+                }
             } else {
                 "/* is ${c.type.name} */ true"
             }

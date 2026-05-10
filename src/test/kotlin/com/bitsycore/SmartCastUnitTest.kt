@@ -181,4 +181,75 @@ class SmartCastUnitTest : TranspilerTestBase() {
             }
         """, "Only safe")
     }
+
+    // ── `is` smart-cast ────────────────────────────────────────────
+
+    @Test fun isCheckSmartCastInIf() {
+        // x is Type should narrow x to Type in the then branch
+        val r = transpile("""
+            package test.Main
+            class Shape
+            class Circle(val r: Float) : Shape
+            fun main(args: Array<String>) {
+                val s: Shape = Circle(1.0f)
+                if (s is Circle) {
+                    println(s.r)
+                }
+            }
+        """)
+        r.sourceContains("s.r")
+    }
+
+    @Test fun isCheckSmartCastInIfNullable() {
+        // is check on nullable should unwrap the optional
+        val r = transpile("""
+            package test.Main
+            fun String.show() { println(this) }
+            fun findStr(): String? { return "hello" }
+            fun main(args: Array<String>) {
+                val s = findStr()
+                if (s is String) {
+                    s.show()
+                }
+            }
+        """)
+        r.sourceContains("s.value")
+    }
+
+    @Test fun isCheckSmartCastInWhen() {
+        val r = transpile("""
+            package test.Main
+            class Shape
+            class Circle(val r: Float) : Shape
+            class Square(val s: Float) : Shape
+            fun main(args: Array<String>) {
+                val sh: Shape = Circle(1.0f)
+                when (sh) {
+                    is Circle -> println(sh.r)
+                    is Square -> println(sh.s)
+                }
+            }
+        """)
+        r.sourceContains("sh.r")
+        r.sourceContains("sh.s")
+    }
+
+    @Test fun isCheckSmartCastWhenExpr() {
+        val r = transpile("""
+            package test.Main
+            class Shape
+            class Circle(val r: Float) : Shape
+            class Square(val s: Float) : Shape
+            fun main(args: Array<String>) {
+                val sh: Shape = Circle(1.0f)
+                val area = when (sh) {
+                    is Circle -> sh.r
+                    is Square -> sh.s
+                    else -> 0.0f
+                }
+            }
+        """)
+        r.sourceContains("sh.r")
+        r.sourceContains("sh.s")
+    }
 }

@@ -18,9 +18,14 @@ fun main() {
         println("length: ${s.length}")
     }
 
-    // is type check on arrays
+    // is type check on arrays (compile-time resolved)
     val arr = intArrayOf(1, 2, 3)
-    // TODO: 'is Array<Int>' not supported on dynamic arrays
+    if (arr is Array<Int>) {
+        println("arr is IntArray")
+    }
+    if (arr !is Array<Float>) {
+        println("arr is not FloatArray")
+    }
     println("has items: ${arr.size > 0}")
 
     println("done")

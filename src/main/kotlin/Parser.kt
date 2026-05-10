@@ -3,6 +3,7 @@ package com.bitsycore
 class Parser(private val tokens: List<Token>) {
     private var pos = 0
     private var nesting = 0          // depth inside () [] {}
+    private var noNewlineExpr = false // when true, parseExpr stops at newlines
 
     // ═══════════════════════════ Public entry ═════════════════════════
 
@@ -468,7 +469,7 @@ class Parser(private val tokens: List<Token>) {
         var left = parsePrefixExpr()
         while (true) {
             left = parsePostfixChain(left)
-            skipNL()
+            if (!noNewlineExpr) skipNL()
             val prec = binaryPrec()
             if (prec < 0 || prec < minPrec) break
 
@@ -500,7 +501,12 @@ class Parser(private val tokens: List<Token>) {
                 }
                 TokenType.AS -> {
                     advance(); skipNL()
-                    left = CastExpr(left, parseTypeRef())
+                    if (at(TokenType.QUESTION)) {
+                        advance(); skipNL()
+                        left = CastExpr(left, parseTypeRef(), safe = true)
+                    } else {
+                        left = CastExpr(left, parseTypeRef())
+                    }
                 }
                 // ── infix identifiers: until, downTo, step ──
                 TokenType.IDENT -> {
@@ -720,7 +726,10 @@ class Parser(private val tokens: List<Token>) {
             list
         }
         expect(TokenType.ARROW); skipNL()
+        val prevNoNL = noNewlineExpr
+        noNewlineExpr = true
         val body = if (at(TokenType.LBRACE)) parseBlock() else Block(listOf(ExprStmt(parseExpr())))
+        noNewlineExpr = prevNoNL
         return WhenBranch(conds, body)
     }
 
