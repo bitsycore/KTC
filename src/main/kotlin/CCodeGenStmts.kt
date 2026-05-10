@@ -54,17 +54,18 @@ internal fun CCodeGen.emitStmt(s: Stmt, ind: String, insideMethod: Boolean = fal
     applyGuardSmartCast(s)
 }
 
-/** After `if (x == null) return/break/continue` (no else), narrow x from T? to T. */
+/** After `if (x == null) ... return/break/continue` (no else), narrow x from T? to T. */
 internal fun CCodeGen.applyGuardSmartCast(s: Stmt) {
     if (s !is ExprStmt) return
     val ifExpr = s.expr as? IfExpr ?: return
     if (ifExpr.els != null) return  // must have no else branch
-    // Body must be a single early-exit statement
-    val bodyStmt = ifExpr.then.stmts.singleOrNull() ?: return
-    if (bodyStmt !is ReturnStmt && bodyStmt !is BreakStmt && bodyStmt !is ContinueStmt) return
-    // Condition must be x == null
+    // Body must end with an early-exit statement
+    val lastStmt = ifExpr.then.stmts.lastOrNull() ?: return
+    if (lastStmt !is ReturnStmt && lastStmt !is BreakStmt && lastStmt !is ContinueStmt) return
     val casts = extractElseSmartCasts(ifExpr.cond)
+    val outerInd = currentInd.removeSuffix("    ")
     for ((name, nonNullType) in casts) {
+        impl.appendLine("${outerInd}// smart-cast: '$name' narrowed to '$nonNullType'")
         defineVar(name, nonNullType)
     }
 }
@@ -1323,9 +1324,12 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
 
 internal fun CCodeGen.emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
     impl.appendLine("${ind}if (${genExpr(e.cond)}) {")
-    // Smart cast: narrow nullable types in then-branch
+    // Smart cast: narrow types in then-branch
     val thenCasts = extractSmartCasts(e.cond)
     if (thenCasts.isNotEmpty()) {
+        for ((name, narrowedType) in thenCasts) {
+            impl.appendLine("$ind    // smart-cast: '$name' narrowed to '$narrowedType'")
+        }
         pushScope()
         for ((name, nonNullType) in thenCasts) defineVar(name, nonNullType)
     }
@@ -1340,6 +1344,9 @@ internal fun CCodeGen.emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
             // Apply else-branch smart-casts before recursing (e.g. x == null → x non-null)
             val elseCasts = extractElseSmartCasts(e.cond)
             if (elseCasts.isNotEmpty()) {
+                for ((name, narrowedType) in elseCasts) {
+                    impl.appendLine("$ind    // smart-cast: '$name' narrowed to '$narrowedType'")
+                }
                 pushScope()
                 for ((name, type) in elseCasts) defineVar(name, type)
             }
@@ -1351,6 +1358,9 @@ internal fun CCodeGen.emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
         // Smart cast: narrow nullable types in else-branch (x == null → else has x non-null)
         val elseCasts = extractElseSmartCasts(e.cond)
         if (elseCasts.isNotEmpty()) {
+            for ((name, narrowedType) in elseCasts) {
+                impl.appendLine("$ind    // smart-cast: '$name' narrowed to '$narrowedType'")
+            }
             pushScope()
             for ((name, nonNullType) in elseCasts) defineVar(name, nonNullType)
         }
@@ -1379,6 +1389,7 @@ internal fun CCodeGen.emitWhenStmt(e: WhenExpr, ind: String, method: Boolean) {
             if (isCond != null) resolveTypeName(isCond.type) else null
         } else null
         if (narrowedType != null) {
+            impl.appendLine("$ind    // smart-cast: '$subjName' narrowed to '$narrowedType'")
             pushScope()
             defineVar(subjName!!, narrowedType)
         }

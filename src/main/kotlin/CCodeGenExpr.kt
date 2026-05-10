@@ -1016,11 +1016,16 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     parts += "(ktc_Any){0}"
                 } else {
                     val argType = inferExprType(arg.expr)?.removeSuffix("?") ?: "Int"
-                    val typeId = getTypeId(argType)
-                    val ct = cTypeStr(argType)
-                    val tVal = tmp()
-                    preStmts += "$ct $tVal = $expr;"
-                    parts += "(ktc_Any){$typeId, (void*)&$tVal}"
+                    // If already Any/Any?, pass directly (no re-wrap)
+                    if (argType == "Any") {
+                        parts += expr
+                    } else {
+                        val typeId = getTypeId(argType)
+                        val ct = cTypeStr(argType)
+                        val tVal = tmp()
+                        preStmts += "$ct $tVal = $expr;"
+                        parts += "(ktc_Any){$typeId, (void*)&$tVal}"
+                    }
                 }
             } else {
                 parts += expr
@@ -1817,7 +1822,10 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
                 preStmts += "$keyword ($condStr) {"
             }
             val narrowedType = narrowSubjectForBranch(br, subjName)
-            if (narrowedType != null) { pushScope(); defineVar(subjName!!, narrowedType) }
+            if (narrowedType != null) {
+                preStmts += "    // smart-cast: '$subjName' narrowed to '$narrowedType'"
+                pushScope(); defineVar(subjName!!, narrowedType)
+            }
             val brType = branchTypes[bi]
             if (brType != null && classes.containsKey(brType)) {
                 emitBlockIntoTempIface(br.body, t, brType, commonIface, "    ")
@@ -1864,7 +1872,10 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
             preStmts += "$keyword ($condStr) {"
         }
         val narrowedType = narrowSubjectForBranch(br, subjName)
-        if (narrowedType != null) { pushScope(); defineVar(subjName!!, narrowedType) }
+        if (narrowedType != null) {
+            preStmts += "    // smart-cast: '$subjName' narrowed to '$narrowedType'"
+            pushScope(); defineVar(subjName!!, narrowedType)
+        }
         emitBlockIntoTemp(br.body, t, "    ")
         if (narrowedType != null) popScope()
     }
