@@ -71,6 +71,7 @@ The `String` type is a non-owning slice: `{ const char* ptr; int32_t len; }`.
 | Kotlin              | C                    | Semantics                          |
 |---------------------|----------------------|------------------------------------|
 | `T`                 | `T`                  | Stack-allocated, copied on assign  |
+| `T?`                | `T_Optional`         | Stack-allocated, copied on assign, tag == NONE or SOME  |
 | `@Ptr T`            | `T*`                 | Pointer to T                       |
 | `@Ptr T?`           | `T*` (nullable)      | NULL for null                      |
 
