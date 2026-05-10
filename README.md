@@ -1,6 +1,6 @@
 # Kotlin.toC()
 
-A transpiler that converts a subset of Kotlin to portable C11. Stack-first allocation, no garbage collector, no runtime dependencies beyond the C standard library.
+A transpiler that converts a subset of Kotlin to portable C11. Stack-first allocation, pass by value, no garbage collector, no runtime dependencies beyond the C standard library.
 
 ---
 
