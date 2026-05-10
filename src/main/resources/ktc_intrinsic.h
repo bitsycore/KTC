@@ -71,6 +71,11 @@ ktc_UInt ktc_rand_range(ktc_UInt bound);
  * __array_type_id identifies the element type at runtime (for `is` checks). */
 typedef struct { ktc_Int __array_type_id; ktc_Int size; void* data; } ktc_ArrayTrampoline;
 
+/* ═══════════════════════════ Any (fat pointer) ═══════════════════════ */
+/* Type-erased value: __type_id identifies the concrete type, data points to the value.
+ * Similar to interface fat pointers but without a vtable — only identity checks. */
+typedef struct { ktc_Int __type_id; void* data; } ktc_Any;
+
 /* ═══════════════════════════ Optional ════════════════════════════════ */
 typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 

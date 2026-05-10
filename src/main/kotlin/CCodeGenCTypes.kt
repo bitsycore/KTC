@@ -146,7 +146,8 @@ internal fun CCodeGen.expandParams(params: List<Param>): String {
                 parts += "ktc_ArrayTrampoline ${p.name}$vNullComment /* ${arrayElementCType(resolved)}[] */"
             }
         } else if (p.type.nullable) {
-            parts += "${optCTypeName(resolved)} ${p.name}"
+            val vNullComment = if (resolved == "Any") " /* nullable */" else ""
+            parts += "${optCTypeName(resolved)} ${p.name}$vNullComment"
         } else {
             parts += "${cType(p.type)} ${p.name}"
         }
@@ -173,6 +174,7 @@ internal fun CCodeGen.cTypeStr(t: String): String = when {
     t == "UInt"    -> "ktc_UInt"
     t == "ULong"   -> "ktc_ULong"
     t == "String"  -> "ktc_String"
+    t == "Any"     -> "ktc_Any"
     t == "Unit"    -> "void"
     t == "void"    -> "void"
     t == "Nothing" -> "void"

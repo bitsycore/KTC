@@ -237,6 +237,29 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     /** Returns the class name for any indirect (pointer) type. */
     internal fun anyIndirectClassName(type: String?): String? = pointerClassName(type)
 
+    /** Built-in types that are not classes/interfaces/arrays (primitives, String, Any). */
+    internal fun isBuiltinType(t: String): Boolean {
+        val base = t.removeSuffix("?")
+        return base in builtinTypes
+    }
+    private val builtinTypes = setOf(
+        "Byte", "Short", "Int", "Long", "Float", "Double", "Boolean", "Char",
+        "UByte", "UShort", "UInt", "ULong", "String", "Any"
+    )
+
+    /** True if the variable was originally declared as Any trampoline (or Any?) and later smart-cast narrowed. */
+    internal fun isAnySmartCastVar(name: String): Boolean {
+        val cur = lookupVar(name) ?: return false
+        if (cur == "Any") return false
+        // Search outer scopes for original Any/Any? declaration
+        for (i in scopes.size - 2 downTo 0) {
+            val outer = scopes[i][name]
+            if (outer == "Any" || outer == "Any?") return true
+            if (outer != null) return false
+        }
+        return false
+    }
+
     /** True if type is a function pointer type: "Fun(P1,P2)->R" */
     internal fun isFuncType(t: String): Boolean = t.startsWith("Fun(")
 
@@ -271,6 +294,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         if (base.endsWith("*")) return false
         // Arrays use ktc_ArrayTrampoline, not Optional
         if (isArrayType(base)) return false
+        // Any is a trampoline, uses data==NULL for null, not Optional
+        if (base == "Any") return false
         return true
     }
 
@@ -290,6 +315,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             "UInt"    -> "ktc_UInt_Optional"
             "ULong"   -> "ktc_ULong_Optional"
             "String"  -> "ktc_String_Optional"
+            "Any"     -> "ktc_Any"   // Any uses data==NULL for null, not Optional
             else -> {
                 val sp = symbolPrefix[base]
                 val cName = if (sp != null) "${sp}${base}" else "${prefix}${base}"
@@ -636,6 +662,13 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val hasStdlib = allFiles.any { it.pkg == "ktc.std" }
         if (hasStdlib && file.pkg != "ktc_std") {
             hdr.appendLine("#include \"ktc_std.h\"")
+        }
+        hdr.appendLine()
+
+        // Emit type IDs for built-in types (primitives, String, Any)
+        for (t in builtinTypes) {
+            val tid = getTypeId(t)
+            hdr.appendLine("#define ktc_${t}_TYPE_ID $tid")
         }
         hdr.appendLine()
 
@@ -1049,6 +1082,9 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             is FunDecl -> {
                 if (d.returnType != null && isRawArrayTypeRef(d.returnType)) {
                     codegenError("Function '${d.name}' cannot return raw array type '${d.returnType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
+                }
+                if (d.returnType != null && d.returnType.name == "Any" && d.returnType.annotations.none { it.name == "Ptr" }) {
+                    codegenError("Function '${d.name}' cannot return value-type 'Any'. Use @Ptr Any instead")
                 }
                 val effectiveReturnType = d.returnType ?: d.body?.let { inferredTypeRef(inferBlockType(it)) }
                 if (d.typeParams.isNotEmpty()) {

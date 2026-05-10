@@ -91,12 +91,15 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
             (s.type?.nullable == true || s.init is NullLit || inferredNullable || isAlloc)
 
     // Value nullable (T? without pointer): uses Optional struct
-    val isValueNullable = !isPointer && !isFuncType(t) && !isArrayType(t) &&
+    val isValueNullable = t != "Any" && !isPointer && !isFuncType(t) && !isArrayType(t) &&
             (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init) || inferredNullable)
 
     // Nullable array (Array<T>?): uses pointer + $len, null = NULL
     val isNullableArray = isArrayType(t) && !isPointer &&
             (s.type?.nullable == true || s.init is NullLit || inferredNullable)
+
+    // Nullable Any: trampoline, null = data == NULL
+    val isAnyNullable = t == "Any" && (s.type?.nullable == true || s.init is NullLit || inferredNullable)
 
     val isInferredPtr = inferredPtr
 
@@ -105,6 +108,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
         isPtrNullable  -> "${t}?"
         isValueNullable -> "${t}?"
         isNullableArray -> "${t}?"
+        isAnyNullable   -> "${t}?"
         else -> t
     })
     if (s.mutable) markMutable(s.name)
@@ -195,6 +199,21 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
                 }
             }
+            // ── Nullable Any (trampoline, null = data == NULL) ──
+            isAnyNullable -> {
+                if (s.init is NullLit || s.init == null) {
+                    impl.appendLine("$ind$mutComment$ct ${s.name} = (ktc_Any){0};")
+                } else {
+                    val initType = inferExprType(s.init)?.removeSuffix("?") ?: "Int"
+                    val typeId = getTypeId(initType)
+                    val initCT = cTypeStr(initType)
+                    val expr = genExpr(s.init)
+                    flushPreStmts(ind)
+                    val tVal = tmp()
+                    impl.appendLine("$ind$initCT $tVal = $expr;")
+                    impl.appendLine("$ind$mutComment$ct ${s.name} = (ktc_Any){$typeId, (void*)&$tVal};")
+                }
+            }
             // ── Non-nullable ──
             else -> {
                 // Interface variable initialized from implementing class → auto-wrap
@@ -238,7 +257,17 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
                 } else {
-                    impl.appendLine("$ind$mutComment$qual$ct ${s.name} = $expr;")
+                    // Auto-wrap init into ktc_Any trampoline when variable is typed Any
+                    if (tRaw == "Any" && s.init != null && s.init !is NullLit) {
+                        val initType = inferExprType(s.init)?.removeSuffix("?") ?: "Int"
+                        val typeId = getTypeId(initType)
+                        val initCT = cTypeStr(initType)
+                        val tVal = tmp()
+                        impl.appendLine("$ind$initCT $tVal = $expr;")
+                        impl.appendLine("$ind$mutComment$qual$ct ${s.name} = (ktc_Any){$typeId, (void*)&$tVal};")
+                    } else {
+                        impl.appendLine("$ind$mutComment$qual$ct ${s.name} = $expr;")
+                    }
                     if (isArrayType(t) && !t.endsWith("*?") && (t.endsWith("*") || isArrayType(t))) {
                         val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
                         impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
@@ -732,6 +761,24 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
         return
     }
     if (currentFnReturnsNullable) {
+        // Any? nullable return: uses ktc_Any with data==NULL for null (not Optional)
+        if (currentFnReturnBaseType() == "Any") {
+            if (s.value == null || s.value is NullLit) {
+                emitDeferredBlocks(ind)
+                impl.appendLine("${ind}return (ktc_Any){0};")
+            } else {
+                val srcType = inferExprType(s.value)?.removeSuffix("?") ?: "Int"
+                val typeId = getTypeId(srcType)
+                val ct = cTypeStr(srcType)
+                val expr = genExpr(s.value)
+                flushPreStmts(ind)
+                val tVal = tmp()
+                impl.appendLine("$ind$ct $tVal = $expr;")
+                emitDeferredBlocks(ind)
+                impl.appendLine("${ind}return (ktc_Any){$typeId, (void*)&$tVal};")
+            }
+            return
+        }
         val optType = currentFnOptReturnCTypeName
         if (s.value == null || s.value is NullLit) {
             emitDeferredBlocks(ind)
@@ -809,7 +856,17 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                     impl.appendLine("$ind$t.vt = &${cExprType}_${retIface}_vt;")
                     impl.appendLine("${ind}return $t;")
                 } else {
-                    impl.appendLine("${ind}return $expr;")
+                    // Auto-wrap Any return → ktc_Any trampoline
+                    if (currentFnReturnType == "Any") {
+                        val srcTy = inferExprType(s.value)?.removeSuffix("?") ?: "Int"
+                        val typeId = getTypeId(srcTy)
+                        val ct = cTypeStr(srcTy)
+                        val tVal = tmp()
+                        impl.appendLine("$ind$ct $tVal = $expr;")
+                        impl.appendLine("${ind}return (ktc_Any){$typeId, (void*)&$tVal};")
+                    } else {
+                        impl.appendLine("${ind}return $expr;")
+                    }
                 }
             }
         } else {
@@ -1182,7 +1239,10 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
     fun tryCastTo(name: String, targetType: String) {
         if (isMutable(name)) return
         val currentType = lookupVar(name)
-        if (currentType != null && currentType != targetType) {
+        // Don't narrow pointer types (Any* etc.) — they need original type for ->data dereference.
+        // But DO narrow trampoline types (Any) — genName handles .data dereference after narrowing.
+        if (currentType != null && currentType != targetType
+            && !currentType.endsWith("*")) {
             casts.add(name to targetType)
         }
     }
@@ -1211,6 +1271,11 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
         // this is Type
         cond is IsCheckExpr && !cond.negated && cond.expr is ThisExpr ->
             tryThisCastTo(resolveTypeName(cond.type))
+        // a && b → smart-cast both sides
+        cond is BinExpr && cond.op == "&&" -> {
+            casts.addAll(extractSmartCasts(cond.left))
+            casts.addAll(extractSmartCasts(cond.right))
+        }
     }
     return casts
 }
@@ -1228,7 +1293,9 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
     fun tryCastTo(name: String, targetType: String) {
         if (isMutable(name)) return
         val currentType = lookupVar(name)
-        if (currentType != null && currentType != targetType) {
+        // Don't narrow pointer types
+        if (currentType != null && currentType != targetType
+            && !currentType.endsWith("*")) {
             casts.add(name to targetType)
         }
     }
@@ -1270,7 +1337,14 @@ internal fun CCodeGen.emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
         val single = e.els.stmts.singleOrNull()
         if (single is ExprStmt && single.expr is IfExpr) {
             impl.appendLine("$ind} else ")
+            // Apply else-branch smart-casts before recursing (e.g. x == null → x non-null)
+            val elseCasts = extractElseSmartCasts(e.cond)
+            if (elseCasts.isNotEmpty()) {
+                pushScope()
+                for ((name, type) in elseCasts) defineVar(name, type)
+            }
             emitIfStmt(single.expr, ind, method)
+            if (elseCasts.isNotEmpty()) popScope()
             return
         }
         impl.appendLine("$ind} else {")
@@ -1327,20 +1401,29 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
         }
         is IsCond   -> {
             val target = resolveTypeName(c.type)
+            val exprType = if (subject != null) inferExprType(subject) else null
+            val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
             val check = if (classes.containsKey(target)) {
-                "$subj.__type_id == ${pfx(target)}_TYPE_ID"
+                "$subj${memOp}__type_id == ${pfx(target)}_TYPE_ID"
             } else if (interfaces.containsKey(target)) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
-                else impls.joinToString(" || ") { "$subj.__type_id == ${pfx(it)}_TYPE_ID" }
+                else impls.joinToString(" || ") { "$subj${memOp}__type_id == ${pfx(it)}_TYPE_ID" }
             } else if (isArrayType(target)) {
-                // Array type check: compare compile-time known types
-                val exprType = if (subject != null) inferExprType(subject) else null
-                if (exprType != null && isArrayType(exprType)) {
-                    if (exprType == target) "true" else "false"
+                val exprBase = exprType?.removeSuffix("?")
+                if (exprBase != null && isArrayType(exprBase)) {
+                    if (exprBase == target) "true" else "false"
                 } else {
                     val arrayId = getTypeId(target)
-                    "($subj.__array_type_id == $arrayId)"
+                    "($subj${memOp}__array_type_id == $arrayId)"
+                }
+            } else if (isBuiltinType(target)) {
+                val exprBase = exprType?.removeSuffix("?")
+                if (exprBase != null && exprBase != "Any" && !exprBase.endsWith("*")) {
+                    if (exprBase == target) "true" else "false"
+                } else {
+                    val typeId = getTypeId(target)
+                    "($subj${memOp}__type_id == $typeId)"
                 }
             } else {
                 "/* is ${c.type.name} */ true"

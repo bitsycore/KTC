@@ -425,6 +425,7 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
     val cRet = when {
         returnsSizedArray -> "void"
+        returnsNullable && retResolved == "Any" -> "ktc_Any"
         returnsNullable -> optRetCType
         retResolved.isNotEmpty() -> cTypeStr(retResolved)
         else -> "void"
@@ -486,7 +487,10 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = true)
     if (f.body?.stmts?.lastOrNull() !is ReturnStmt) {
         emitDeferredBlocks("    ", insideMethod = true)
-        if (returnsNullable) impl.appendLine("    return ${optNone(optRetCType)};")
+        if (returnsNullable) {
+            if (retResolved == "Any") impl.appendLine("    return (ktc_Any){0};")
+            else impl.appendLine("    return ${optNone(optRetCType)};")
+        }
     }
     deferStack.clear(); deferStack.addAll(savedDefers)
     trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined1)
@@ -519,6 +523,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
     val cRet = when {
         returnsSizedArray -> "void"
+        returnsNullable && retResolved == "Any" -> "ktc_Any"
         returnsNullable -> optRetCType
         f.returnType != null -> cType(f.returnType)
         else -> "void"
@@ -595,7 +600,10 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     if (f.body != null) for (s in f.body.stmts) emitStmt(s, "    ", insideMethod = isClassType)
     if (f.body?.stmts?.lastOrNull() !is ReturnStmt) {
         emitDeferredBlocks("    ", insideMethod = isClassType)
-        if (returnsNullable) impl.appendLine("    return ${optNone(optRetCType)};")
+        if (returnsNullable) {
+            if (retResolved == "Any") impl.appendLine("    return (ktc_Any){0};")
+            else impl.appendLine("    return ${optNone(optRetCType)};")
+        }
     }
     deferStack.clear(); deferStack.addAll(savedDefers2)
     trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined2)
@@ -1407,7 +1415,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     val returnsArray = !isMain && !returnsNullable && !returnsSizedArray && f.returnType != null && isArrayType(resolveTypeName(f.returnType))
     val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else f.body?.let { inferBlockType(it) } ?: ""
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
-    val cRet  = if (isMain) "int" else if (returnsSizedArray) "void" else if (returnsNullable) optRetCType else if (retResolved.isNotEmpty()) cTypeStr(retResolved) else "void"
+    val cRet  = if (isMain) "int" else if (returnsSizedArray) "void" else if (returnsNullable && retResolved == "Any") "ktc_Any" else if (returnsNullable) optRetCType else if (retResolved.isNotEmpty()) cTypeStr(retResolved) else "void"
     val cName = if (isMain) "main" else pfx(f.name)
     val params = when {
         isMainWithArgs -> "int argc, char** argv"
@@ -1493,7 +1501,10 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
         }
     }
     if (isMain) impl.appendLine("    return 0;")
-    else if (returnsNullable && lastStmt !is ReturnStmt) impl.appendLine("    return ${optNone(optRetCType)};")
+    else if (returnsNullable && lastStmt !is ReturnStmt) {
+        if (retResolved == "Any") impl.appendLine("    return (ktc_Any){0};")
+        else impl.appendLine("    return ${optNone(optRetCType)};")
+    }
     trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined7)
     popScope()
 

@@ -171,21 +171,29 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     is IsCheckExpr -> {
         val target = resolveTypeName(e.type)
         val inner = genExpr(e.expr)
+        val exprType = inferExprType(e.expr)
+        val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
         val check = if (classes.containsKey(target)) {
-            "${inner}.__type_id == ${pfx(target)}_TYPE_ID"
+            "${inner}${memOp}__type_id == ${pfx(target)}_TYPE_ID"
         } else if (interfaces.containsKey(target)) {
             val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
-            if (impls.isEmpty()) "false"  // no class implements this interface
-            else impls.joinToString(" || ") { "${inner}.__type_id == ${pfx(it)}_TYPE_ID" }
+            if (impls.isEmpty()) "false"
+            else impls.joinToString(" || ") { "${inner}${memOp}__type_id == ${pfx(it)}_TYPE_ID" }
         } else if (isArrayType(target)) {
-            // Array type check: compare compile-time known types when possible
-            val exprType = inferExprType(e.expr)
-            if (exprType != null && isArrayType(exprType)) {
-                if (exprType == target) "true" else "false"
+            val exprBase = exprType?.removeSuffix("?")
+            if (exprBase != null && isArrayType(exprBase)) {
+                if (exprBase == target) "true" else "false"
             } else {
-                // Runtime check via trampoline __array_type_id
                 val arrayId = getTypeId(target)
-                "(${inner}.__array_type_id == $arrayId)"
+                "(${inner}${memOp}__array_type_id == $arrayId)"
+            }
+        } else if (isBuiltinType(target)) {
+            val exprBase = exprType?.removeSuffix("?")
+            if (exprBase != null && exprBase != "Any" && !exprBase.endsWith("*")) {
+                if (exprBase == target) "true" else "false"
+            } else {
+                val typeId = getTypeId(target)
+                "(${inner}${memOp}__type_id == $typeId)"
             }
         } else {
             "/* is-check: unknown type '${target}' */ true"
@@ -195,27 +203,36 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     is CastExpr    -> {
         val target = resolveTypeName(e.type)
         val inner = genExpr(e.expr)
+        val srcType = inferExprType(e.expr)?.removeSuffix("?")
+        val isPtr = srcType?.endsWith("*") == true
         if (e.safe) {
-            // Safe cast: x as? Type → check runtime type, return nullable
             val optCType = optCTypeName("$target?")
+            val memOp = if (isPtr) "->" else "."
             val check = if (classes.containsKey(target)) {
-                "${inner}.__type_id == ${pfx(target)}_TYPE_ID"
+                "${inner}${memOp}__type_id == ${pfx(target)}_TYPE_ID"
             } else if (interfaces.containsKey(target)) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
-                else impls.joinToString(" || ") { "${inner}.__type_id == ${pfx(it)}_TYPE_ID" }
+                else impls.joinToString(" || ") { "${inner}${memOp}__type_id == ${pfx(it)}_TYPE_ID" }
+            } else if (isBuiltinType(target)) {
+                val typeId = getTypeId(target)
+                "${inner}${memOp}__type_id == $typeId"
             } else {
-                // Non-class/non-interface types: always succeed
                 "true"
             }
             val castVal = if (interfaces.containsKey(target)) {
                 "${pfx(target)}_as_$target(&($inner))"
+            } else if (srcType == "Any" || srcType == "Any*") {
+                "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
             } else {
                 "(${cTypeStr(target)})($inner)"
             }
             "($check) ? ${optSome(optCType, castVal)} : ${optNone(optCType)}"
         } else if (interfaces.containsKey(target)) {
             "${pfx(target)}_as_$target(&($inner))"
+        } else if (srcType == "Any" || srcType == "Any*") {
+            val memOp = if (isPtr) "->" else "."
+            "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
         } else {
             "(${cType(e.type)})($inner)"
         }
@@ -249,6 +266,11 @@ internal fun CCodeGen.genName(e: NameExpr): String {
         }
         // Trampolined array param: redirect to local stack copy
         if (e.name in trampolinedParams) return "local\$${e.name}"
+        // Any trampoline smart-cast: narrowed from Any, dereference .data
+        if (curType != "Any" && isAnySmartCastVar(e.name)) {
+            val ct = cTypeStr(curType)
+            return "(*(($ct*)(${e.name}.data)))"
+        }
         // Optional var smart-casted to non-nullable: unwrap to .value
         if (isOptional(e.name) && !curType.endsWith("?")) {
             return "${e.name}.value"
@@ -293,6 +315,10 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             // @Ptr T? → compare pointer to NULL
             if (varType.endsWith("*?")) {
                 return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
+            }
+            // Any? nullable → compare data pointer to NULL
+            if (varType == "Any?") {
+                return if (e.op == "==") "$varName.data == NULL" else "$varName.data != NULL"
             }
             // Value nullable → use Optional tag
             if (varType.endsWith("?") && isValueNullableType(varType)) {
@@ -914,6 +940,24 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                 if (arg.expr is NullLit) {
                     parts += "NULL"
                     if (isArrayType(paramType)) parts += "0"
+                } else if (paramType.removeSuffix("?").removeSuffix("*") == "Any") {
+                    // @Ptr Any → wrap as ktc_Any fat pointer, pass pointer to it.
+                    // For variables, take address of original (allows mutation).
+                    // For rvalues, copy to temp first (isolates the callee from the caller's stack).
+                    val argType = inferExprType(arg.expr)?.removeSuffix("?") ?: "Int"
+                    val typeId = getTypeId(argType)
+                    val ct = cTypeStr(argType)
+                    val dataRef: String
+                    if (arg.expr is NameExpr) {
+                        dataRef = "&$expr"
+                    } else {
+                        val tVal = tmp()
+                        preStmts += "$ct $tVal = $expr;"
+                        dataRef = "&$tVal"
+                    }
+                    val tAny = tmp()
+                    preStmts += "ktc_Any $tAny = {$typeId, (void*)$dataRef};"
+                    parts += "&$tAny"
                 } else {
                     parts += expr
                     if (isArrayType(paramType)) parts += "${expr}\$len"
@@ -966,6 +1010,17 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     }
                 } else {
                     parts += expr
+                }
+            } else if (paramType == "Any") {
+                if (arg.expr is NullLit) {
+                    parts += "(ktc_Any){0}"
+                } else {
+                    val argType = inferExprType(arg.expr)?.removeSuffix("?") ?: "Int"
+                    val typeId = getTypeId(argType)
+                    val ct = cTypeStr(argType)
+                    val tVal = tmp()
+                    preStmts += "$ct $tVal = $expr;"
+                    parts += "(ktc_Any){$typeId, (void*)&$tVal}"
                 }
             } else {
                 parts += expr
@@ -1822,6 +1877,8 @@ internal fun CCodeGen.narrowSubjectForBranch(br: WhenBranch, subjName: String?):
     val isCond = br.conds.find { it is IsCond && !it.negated } as? IsCond ?: return null
     val target = resolveTypeName(isCond.type)
     val current = lookupVar(subjName) ?: return null
+    // Don't narrow pointer types (Any* etc.) — they need original type for ->data dereference
+    if (current.endsWith("*")) return null
     return if (current != target) target else null
 }
 
