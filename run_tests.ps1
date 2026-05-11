@@ -51,6 +51,7 @@ if ($Help) {
 }
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $root = $PSScriptRoot
 $jar        = "$root\build\libs\KotlinToC-1.0-SNAPSHOT.jar"
 $releaseJar = "$root\build\libs\KotlinToC-1.0-SNAPSHOT-release.jar"
