@@ -59,7 +59,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 
     internal fun pfx(name: String): String {
         if (name == "main") return name
-        // Look up if this symbol belongs to a different package
+        if (name.startsWith("ktc_")) return name
         val sp = symbolPrefix[name]
         if (sp != null) return "$sp$name"
         return "$prefix$name"

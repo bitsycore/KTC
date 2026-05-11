@@ -98,6 +98,10 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
 internal fun CCodeGen.inferCallType(e: CallExpr): String? {
     val name = (e.callee as? NameExpr)?.name
     if (name != null) {
+        // StringBuffer constructor (intrinsic — only when no user-defined class named StringBuffer)
+        if (name == "StringBuffer" && !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer")) {
+            return "ktc_StrBuf"
+        }
         // Pair constructor (intrinsic — only when no user-defined class named Pair)
         if (name == "Pair" && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
             val a = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[0]) else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
@@ -465,6 +469,14 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
             if (idx != null && idx in components.indices) return components[idx]
         }
         return null
+    }
+    // StringBuffer field types
+    if (recvType == "ktc_StrBuf" || recvType == "StringBuffer") {
+        return when (e.name) {
+            "buffer" -> "CharArray*?"  // nullable pointer to char array
+            "len" -> "Int"
+            else -> null
+        }
     }
     if (e.name == "size" && recvType.endsWith("Array")) return "Int"
     if (e.name == "size" && recvType.removeSuffix("?").endsWith("*") && isArrayType(recvType)) return "Int"

@@ -337,6 +337,11 @@ internal fun CCodeGen.resolveTypeNameInner(t: TypeRef): String {
         ensureTupleType(types)
         return key
     }
+    // Intrinsic StringBuffer → ktc_StrBuf (only when no user-defined class named StringBuffer)
+    if (t.name == "StringBuffer" && t.typeArgs.isEmpty()
+        && !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer")) {
+        return "ktc_StrBuf"
+    }
     if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
         val elemRef     = t.typeArgs[0] // element TypeRef
         val elem        = elemRef.name  // element Kotlin type name

@@ -750,6 +750,36 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         return "(ktc_${key}){$fields}"
     }
 
+    // StringBuffer constructor (intrinsic — only when no user-defined class named StringBuffer)
+    if (name == "StringBuffer" && args.size == 2
+        && !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer")) {
+        val ptrExpr = genExpr(args[0].expr)
+        val lenExpr = genExpr(args[1].expr)
+        val capExpr = when {
+            args[0].expr is NullLit -> "0"
+            // array.ptr() — .ptr() is a DotExpr called as method with no extra args
+            args[0].expr is DotExpr && (args[0].expr as DotExpr).name == "ptr" -> {
+                val arrExpr = genExpr((args[0].expr as DotExpr).obj)
+                "$arrExpr\$len"
+            }
+            // array.ptr() — wrapped in CallExpr from method-call syntax
+            args[0].expr is CallExpr && (args[0].expr as CallExpr).callee is DotExpr
+                && ((args[0].expr as CallExpr).callee as DotExpr).name == "ptr" -> {
+                val dot = (args[0].expr as CallExpr).callee as DotExpr
+                val arrExpr = genExpr(dot.obj)
+                "$arrExpr\$len"
+            }
+            else -> {
+                val ptrType = inferExprType(args[0].expr)
+                if (ptrType != null && ptrType.removeSuffix("?").endsWith("*") && isArrayType(ptrType))
+                    "${ptrExpr}\$len"
+                else
+                    "0x7FFFFFFF"
+            }
+        }
+        return "(ktc_StrBuf){$ptrExpr, $lenExpr, $capExpr}"
+    }
+
     // Function pointer call: variable with function type → just call it
     val varType = lookupVar(name)
     if (varType != null && isFuncType(varType)) {
@@ -1054,7 +1084,15 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
 
     // Built-in methods
     when (method) {
-        "toString" -> return genToString(recv, recvType ?: "Int")
+        "toString" -> {
+            if (args.size == 1) {
+                val argType = inferExprType(args[0].expr)
+                if (argType == "ktc_StrBuf" || argType == "StringBuffer") {
+                    return genToStringInto(recv, recvType ?: "Int", genExpr(args[0].expr))
+                }
+            }
+            return genToString(recv, recvType ?: "Int")
+        }
         "toInt" -> {
             if (recvType == "String") return "ktc_str_toInt($recv)"
             return "((ktc_Int)($recv))"
@@ -1537,6 +1575,12 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
         if (allProps.any { it.name == e.name }) {
             return "$recv.vt->${e.name}((void*)&$recv)"
         }
+    }
+
+    // StringBuffer field access: sb.buffer → sb.ptr (the raw char pointer)
+    if (recvType == "ktc_StrBuf" || recvType == "StringBuffer") {
+        if (e.name == "buffer") return "$recv.ptr"
+        if (e.name == "len") return "$recv.len"
     }
 
     val fieldName = if (currentClass != null && e.obj is ThisExpr) {
@@ -2159,6 +2203,54 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             }
         }
     }
+}
+
+// ── toString into a StringBuffer (single pass) ────────────────────
+
+internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): String {
+    if (classes.containsKey(type) && classes[type]!!.isData) {
+        val vTmp = tmp()
+        preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
+        preStmts += "${pfx(type)}_toString(&$vTmp, &$sb);"
+        return "ktc_sb_to_string(&$sb)"
+    }
+    // For primitives and other types, append to the given StrBuf
+    when (type) {
+        "Byte"    -> preStmts += "ktc_sb_append_byte(&$sb, $recv);"
+        "Short"   -> preStmts += "ktc_sb_append_short(&$sb, $recv);"
+        "Int"     -> preStmts += "ktc_sb_append_int(&$sb, $recv);"
+        "Long"    -> preStmts += "ktc_sb_append_long(&$sb, $recv);"
+        "Float"   -> preStmts += "ktc_sb_append_double(&$sb, (double)$recv);"
+        "Double"  -> preStmts += "ktc_sb_append_double(&$sb, $recv);"
+        "Boolean" -> preStmts += "ktc_sb_append_bool(&$sb, $recv);"
+        "Char"    -> preStmts += "ktc_sb_append_char(&$sb, $recv);"
+        "String"  -> return recv
+        "UByte"   -> preStmts += "ktc_sb_append_ubyte(&$sb, $recv);"
+        "UShort"  -> preStmts += "ktc_sb_append_ushort(&$sb, $recv);"
+        "UInt"    -> preStmts += "ktc_sb_append_uint(&$sb, $recv);"
+        "ULong"   -> preStmts += "ktc_sb_append_ulong(&$sb, $recv);"
+        else -> {
+            val base = type.removeSuffix("*").removeSuffix("?")
+            val hasHash = classes.containsKey(base) || objects.containsKey(base)
+            val hasIface = interfaces.containsKey(base)
+            if (hasHash) {
+                val cName = pfx(base)
+                val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) recv else "&$recv"
+                val buf = tmp()
+                preStmts += "char ${buf}[64];"
+                preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
+                preStmts += "ktc_sb_append_cstr(&$sb, $buf);"
+            } else if (hasIface) {
+                val buf = tmp()
+                preStmts += "char ${buf}[64];"
+                preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
+                preStmts += "ktc_sb_append_cstr(&$sb, $buf);"
+            } else {
+                preStmts += "ktc_sb_append_str(&$sb, ktc_str(\"<$type>\"));"
+            }
+        }
+    }
+    return "ktc_sb_to_string(&$sb)"
 }
 
 // ── StrBuf append helper ─────────────────────────────────────────
