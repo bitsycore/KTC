@@ -97,6 +97,23 @@ KTC_OPTIONAL(ktc_UShort);
 KTC_OPTIONAL(ktc_UInt);
 KTC_OPTIONAL(ktc_ULong);
 
+/* ═══════════════════════════ Built-in type IDs ═══════════════════════ */
+#define ktc_Byte_TYPE_ID    0
+#define ktc_Short_TYPE_ID   1
+#define ktc_Int_TYPE_ID     2
+#define ktc_Long_TYPE_ID    3
+#define ktc_Float_TYPE_ID   4
+#define ktc_Double_TYPE_ID  5
+#define ktc_Boolean_TYPE_ID 6
+#define ktc_Char_TYPE_ID    7
+#define ktc_UByte_TYPE_ID   8
+#define ktc_UShort_TYPE_ID  9
+#define ktc_UInt_TYPE_ID    10
+#define ktc_ULong_TYPE_ID   11
+#define ktc_String_TYPE_ID  12
+#define ktc_Any_TYPE_ID     13
+/* total builtins: 14 — nextTypeId starts at 14 */
+
 /* ═══════════════════════════ Memory tracking ═════════════════════════ */
 /*
  * Enabled by #define KTC_MEM_TRACK before including this header.

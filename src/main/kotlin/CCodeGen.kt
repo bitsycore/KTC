@@ -112,7 +112,18 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal val interfaces = mutableMapOf<String, IfaceInfo>()
     // Type ID registry: each class/interface gets an incrementing integer ID for is/as checks
     internal val typeIds = mutableMapOf<String, Int>()
-    internal var nextTypeId = 0
+    internal var nextTypeId = 14  // 0-13 reserved for builtin types (ktc_intrinsic.h)
+
+    init {
+        for ((i, t) in listOf(
+            "Byte", "Short", "Int", "Long", "Float", "Double",
+            "Boolean", "Char", "UByte", "UShort", "UInt", "ULong",
+            "String", "Any"
+        ).withIndex()) {
+            typeIds[t] = i
+        }
+    }
+
     internal fun getTypeId(name: String): Int = typeIds.getOrPut(name) { nextTypeId++ }
     // Maps class name → synthetic companion object name (e.g. "Foo" → "Foo_Companion")
     internal val classCompanions = mutableMapOf<String, String>()
@@ -662,13 +673,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val hasStdlib = allFiles.any { it.pkg == "ktc.std" }
         if (hasStdlib && file.pkg != "ktc_std") {
             hdr.appendLine("#include \"ktc_std.h\"")
-        }
-        hdr.appendLine()
-
-        // Emit type IDs for built-in types (primitives, String, Any)
-        for (t in builtinTypes) {
-            val tid = getTypeId(t)
-            hdr.appendLine("#define ktc_${t}_TYPE_ID $tid")
         }
         hdr.appendLine()
 
