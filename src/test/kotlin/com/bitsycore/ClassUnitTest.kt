@@ -124,4 +124,87 @@ class ClassUnitTest : TranspilerTestBase() {
         """)
         r.sourceContains("p.health = 50;")
     }
+
+    // ── Nested / inner classes ─────────────────────────────────────
+
+    @Test fun `nested class struct emitted with dollar separator`() {
+        val r = transpile("""
+            package test.Main
+            class Outer {
+                class Inner(val x: Int)
+            }
+            fun main() { }
+        """)
+        r.headerContains("typedef struct {")
+        r.headerContains("Outer\$Inner")
+        r.headerContains("ktc_Int x;")
+    }
+
+    @Test fun `nested class constructor call resolved`() {
+        val r = transpile("""
+            package test.Main
+            class Outer {
+                class Inner(val x: Int)
+            }
+            fun main() {
+                val inner = Outer.Inner(42)
+            }
+        """)
+        r.sourceContains("Outer\$Inner_primaryConstructor(42)")
+    }
+
+    @Test fun `nested class in data class`() {
+        val r = transpile("""
+            package test.Main
+            data class Outer(val a: Int) {
+                class Inner(val b: Float)
+            }
+            fun main() {
+                val i = Outer.Inner(3f)
+            }
+        """)
+        r.headerContains("Outer\$Inner")
+        r.sourceContains("Outer\$Inner_primaryConstructor(3.0f)")
+    }
+
+    @Test fun `nested class field access`() {
+        val r = transpile("""
+            package test.Main
+            class Outer {
+                class Inner(val name: String)
+            }
+            fun main() {
+                val i = Outer.Inner("test")
+                println(i.name)
+            }
+        """)
+        r.sourceContains("i.name")
+    }
+
+    @Test fun `deeply nested class`() {
+        val r = transpile("""
+            package test.Main
+            class A {
+                class B {
+                    class C(val v: Int)
+                }
+            }
+            fun main() {
+                val c = A.B.C(1)
+            }
+        """)
+        r.headerContains("A\$B\$C")
+        r.sourceContains("A\$B\$C_primaryConstructor(1)")
+    }
+
+    @Test fun `nested class type annotation`() {
+        val r = transpile("""
+            package test.Main
+            class Outer {
+                class Inner(val x: Int)
+            }
+            fun make(): Outer.Inner = Outer.Inner(42)
+        """)
+        r.sourceContains("Outer\$Inner_primaryConstructor(42)")
+    }
 }

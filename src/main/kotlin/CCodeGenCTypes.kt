@@ -294,6 +294,14 @@ internal fun CCodeGen.resolveTypeNameInner(t: TypeRef): String {
         val ret = resolveTypeName(t.funcReturn)
         return "Fun($receiver$params)->$ret"
     }
+    // Nested class: Outer.Inner → Outer$Inner
+    if (t.name.contains('.') && !t.name.startsWith("ktc_")) {
+        val flatName = t.name.replace('.', '$')
+        if (classes.containsKey(flatName) || genericClassDecls.containsKey(flatName) || interfaces.containsKey(flatName)) {
+            val synthetic = TypeRef(flatName, t.nullable, t.typeArgs, t.funcParams, t.funcReturn, t.funcReceiver, t.annotations)
+            return resolveTypeNameInner(synthetic)
+        }
+    }
     // User-defined generic class takes priority over built-in aliases
     if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {
         val typeArgNames = t.typeArgs.map { it.name }

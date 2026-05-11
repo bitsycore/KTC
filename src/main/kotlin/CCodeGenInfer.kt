@@ -96,6 +96,27 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
 }
 
 internal fun CCodeGen.inferCallType(e: CallExpr): String? {
+    // Nested class constructor: Outer.Inner(...) or A.B.C(...) → flat name
+    if (e.callee is DotExpr) {
+        fun flattenDotCallee(callee: Expr): String? {
+            if (callee is NameExpr) return callee.name
+            if (callee is DotExpr && callee.obj is NameExpr)
+                return "${callee.obj.name}\$${callee.name}"
+            if (callee is DotExpr) {
+                val left = flattenDotCallee(callee.obj)
+                if (left != null) return "$left\$${callee.name}"
+            }
+            return null
+        }
+        val flatCallee = flattenDotCallee(e.callee)
+        if (flatCallee != null) {
+            if (classes.containsKey(flatCallee)) return flatCallee
+            if (genericClassDecls.containsKey(flatCallee)) {
+                val resolvedArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
+                return mangledGenericName(flatCallee, resolvedArgs)
+            }
+        }
+    }
     val name = (e.callee as? NameExpr)?.name
     if (name != null) {
         // StringBuffer constructor (intrinsic — only when no user-defined class named StringBuffer)

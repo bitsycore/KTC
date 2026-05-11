@@ -431,6 +431,22 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val argStr = e.args.joinToString(", ") { genCArg(it.expr) }
             return "$cFnName($argStr)"
         }
+        // Nested class constructor: Outer.Inner(...) or A.B.C(...) → flat name
+        fun flattenDotCallee(callee: Expr): String? {
+            if (callee is NameExpr) return callee.name
+            if (callee is DotExpr && callee.obj is NameExpr)
+                return "${callee.obj.name}\$${callee.name}"
+            if (callee is DotExpr) {
+                val left = flattenDotCallee(callee.obj)
+                if (left != null) return "$left\$${callee.name}"
+            }
+            return null
+        }
+        val flatCallee = flattenDotCallee(e.callee)
+        if (flatCallee != null && (classes.containsKey(flatCallee) || genericClassDecls.containsKey(flatCallee))) {
+            val synthCall = CallExpr(NameExpr(flatCallee), e.args, e.typeArgs)
+            return genCall(synthCall)
+        }
         // Reject non-safe call on nullable receiver (unless the extension accepts nullable receiver,
         // or the nullable is a Ptr/Heap/Value<Array<T>> where deref() etc. are valid on nullable)
         val recvType = inferExprType(e.callee.obj)

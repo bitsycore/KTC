@@ -741,6 +741,20 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     hdr.appendLine()
                     emitObject(ObjectDecl("${d.name}_${vMember.name}", vMember.members))
                 }
+                // Emit nested classes recursively
+                fun emitNested(parentOriginal: ClassDecl, parentFlatName: String) {
+                    for (nested in parentOriginal.members.filterIsInstance<ClassDecl>()) {
+                        if (nested.typeParams.isEmpty()) {
+                            val flatName = "$parentFlatName\$${nested.name}"
+                            hdr.appendLine()
+                            emitClass(ClassDecl(flatName, nested.isData,
+                                nested.ctorParams, nested.members, nested.initBlocks,
+                                nested.superInterfaces, nested.typeParams, nested.secondaryCtors))
+                            emitNested(nested, flatName)
+                        }
+                    }
+                }
+                emitNested(d, d.name)
             }
             is EnumDecl   -> emitEnum(d)
             is ObjectDecl -> {
@@ -1041,6 +1055,13 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     val vCompanionSynthName = "${d.name}_${vMember.name}" // e.g. "Foo_Companion"
                     classCompanions[d.name] = vCompanionSynthName
                     collectDecl(ObjectDecl(vCompanionSynthName, vMember.members))
+                }
+                // Collect nested classes/interfaces/enums (namespacing only — prefix with parent)
+                val nestedClasses = d.members.filterIsInstance<ClassDecl>()
+                for (nested in nestedClasses) {
+                    val nestedName = "${d.name}\$${nested.name}"  // e.g. "Outer$Inner"
+                    collectDecl(ClassDecl(nestedName, nested.isData, nested.ctorParams, nested.members,
+                        nested.initBlocks, nested.superInterfaces, nested.typeParams, nested.secondaryCtors))
                 }
             }
             is EnumDecl  -> enums[d.name] = EnumInfo(d.name, d.entries)
