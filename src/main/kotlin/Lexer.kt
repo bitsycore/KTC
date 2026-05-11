@@ -7,7 +7,7 @@ class Lexer(private val src: String) {
     private val tokens = mutableListOf<Token>()
 
     // ── Mode stack for string template handling ──────────────────────
-    private enum class Mode { NORMAL, STRING, TMPL_EXPR }
+    private enum class Mode { NORMAL, STRING, RAW_STRING, TMPL_EXPR }
     private val modes = ArrayDeque<Mode>().apply { addLast(Mode.NORMAL) }
     private var tmplBraceDepth = 0
     private var inTemplateLiteral = false   // has current string emitted STR_TMPL_START?
@@ -17,9 +17,10 @@ class Lexer(private val src: String) {
     fun tokenize(): List<Token> {
         while (pos < src.length) {
             when (modes.last()) {
-                Mode.NORMAL    -> lexNormal()
-                Mode.STRING    -> lexStringContent()
-                Mode.TMPL_EXPR -> lexTemplateExpr()
+                Mode.NORMAL     -> lexNormal()
+                Mode.STRING     -> lexStringContent()
+                Mode.RAW_STRING -> lexRawStringContent()
+                Mode.TMPL_EXPR  -> lexTemplateExpr()
             }
         }
         emit(TokenType.EOF, "")
@@ -64,6 +65,12 @@ class Lexer(private val src: String) {
     // ── String content mode ──────────────────────────────────────────
 
     private fun startString() {
+        // Check for triple-quoted raw string: """
+        if (pos + 2 < src.length && src[pos] == '"' && src[pos + 1] == '"' && src[pos + 2] == '"') {
+            advance(); advance(); advance() // skip opening """
+            modes.addLast(Mode.RAW_STRING)
+            return
+        }
         advance()                       // skip opening "
         inTemplateLiteral = false
         modes.addLast(Mode.STRING)
@@ -109,6 +116,25 @@ class Lexer(private val src: String) {
         error("Unterminated string at line $line")
     }
 
+    // ── Raw string content ("""...""") ────────────────────────────────
+
+    private fun lexRawStringContent() {
+        val sb = StringBuilder()
+        while (pos < src.length) {
+            // Check for closing """
+            if (cur() == '"' && pos + 1 < src.length && src[pos + 1] == '"' && pos + 2 < src.length && src[pos + 2] == '"') {
+                advance(); advance(); advance() // skip """
+                emit(TokenType.STRING_LIT, sb.toString())
+                modes.removeLast()
+                return
+            }
+            val c = cur()
+            if (c == '\n') { line++; col = 1 }
+            sb.append(c); advance()
+        }
+        error("Unterminated raw string at line $line")
+    }
+
     private fun ensureTmplStarted(sb: StringBuilder) {
         if (!inTemplateLiteral) {
             inTemplateLiteral = true
@@ -126,6 +152,7 @@ class Lexer(private val src: String) {
         advance()                           // skip opening '
         val ch = if (cur() == '\\') readEscape() else { val c = cur(); advance(); c }
         if (pos < src.length && cur() == '\'') advance() else error("Unterminated char at line $line")
+        if (ch.code > 0xFF) error("Multi-byte character '$ch' not supported in C (char is 8-bit) at line $line")
         emit(TokenType.CHAR_LIT, ch.toString())
     }
 
@@ -133,32 +160,86 @@ class Lexer(private val src: String) {
 
     private fun lexNumber() {
         val start = pos
+        var isHex = false
+        var isBin = false
         var isLong = false
         var isFloat = false
         var isDouble = false
+        var isUnsigned = false
 
-        while (pos < src.length && (cur().isDigit() || cur() == '_')) advance()
+        // Check for 0x / 0X hex prefix
+        if (pos + 1 < src.length && cur() == '0' && (src[pos + 1] == 'x' || src[pos + 1] == 'X')) {
+            advance(); advance() // skip 0x
+            isHex = true
+        } else if (pos + 1 < src.length && cur() == '0' && (src[pos + 1] == 'b' || src[pos + 1] == 'B')) {
+            advance(); advance() // skip 0b
+            isBin = true
+        }
 
-        if (pos < src.length && cur() == '.' && pos + 1 < src.length && src[pos + 1].isDigit()) {
-            advance()   // skip .
+        // Read digits (hex, binary, or decimal)
+        if (isHex) {
+            while (pos < src.length) {
+                val c = cur()
+                if (c == '_') { advance(); continue }
+                if (c.isDigit() || c in 'a'..'f' || c in 'A'..'F') { advance(); continue }
+                break
+            }
+        } else if (isBin) {
+            while (pos < src.length) {
+                val c = cur()
+                if (c == '_') { advance(); continue }
+                if (c == '0' || c == '1') { advance(); continue }
+                break
+            }
+        } else {
             while (pos < src.length && (cur().isDigit() || cur() == '_')) advance()
-            isDouble = true
+            if (pos < src.length && cur() == '.' && pos + 1 < src.length && src[pos + 1].isDigit()) {
+                advance()
+                while (pos < src.length && (cur().isDigit() || cur() == '_')) advance()
+                isDouble = true
+            }
+            if (pos < src.length && (cur() == 'e' || cur() == 'E')) {
+                advance()
+                if (pos < src.length && (cur() == '+' || cur() == '-')) advance()
+                while (pos < src.length && cur().isDigit()) advance()
+                isDouble = true
+            }
         }
-        if (pos < src.length && (cur() == 'e' || cur() == 'E')) {
-            advance()
-            if (pos < src.length && (cur() == '+' || cur() == '-')) advance()
-            while (pos < src.length && cur().isDigit()) advance()
-            isDouble = true
-        }
-        if (pos < src.length && (cur() == 'f' || cur() == 'F')) { isFloat = true; isDouble = false; advance() }
-        else if (pos < src.length && (cur() == 'L')) { isLong = true; isDouble = false; advance() }
 
-        val raw = src.substring(start, pos).replace("_", "")
+        // Suffixes: u/U and L only for integers; f/F can override double
+        if (!isDouble && pos < src.length && (cur() == 'u' || cur() == 'U')) { isUnsigned = true; advance() }
+        if (!isDouble && pos < src.length && (cur() == 'L')) { isLong = true; advance() }
+        if (!isUnsigned && !isDouble && pos < src.length && (cur() == 'u' || cur() == 'U')) { isUnsigned = true; advance() }
+        if (!isUnsigned && pos < src.length && (cur() == 'f' || cur() == 'F')) { isFloat = true; isDouble = false; advance() }
+
+        var raw = src.substring(start, pos).replace("_", "")
+        if (isBin) {
+            // Strip 0b/0B prefix and all suffix chars (u/U/L), then parse as binary
+            val digits = raw.removePrefix("0b").removePrefix("0B")
+                .replace("u", "").replace("U", "").replace("L", "")
+            val longVal = digits.toLong(2)
+            val suffix = when {
+                isUnsigned && isLong -> "UL"
+                isUnsigned -> "u"
+                isLong -> "L"
+                else -> ""
+            }
+            raw = "$longVal$suffix"
+        }
+        // hex: keep as-is (C supports 0x natively), just normalize suffix casing
+        if (isHex && isUnsigned) {
+            raw = raw.removeSuffix("u").removeSuffix("U")
+            if (isLong) raw = raw.removeSuffix("L")
+            raw += if (isLong) "UL" else "U"
+        }
+
         val type = when {
-            isFloat  -> TokenType.FLOAT_LIT
-            isDouble -> TokenType.DOUBLE_LIT
-            isLong   -> TokenType.LONG_LIT
-            else     -> TokenType.INT_LIT
+            isFloat    -> TokenType.FLOAT_LIT
+            isDouble   -> TokenType.DOUBLE_LIT
+            isUnsigned && isLong -> TokenType.ULONG_LIT
+            isUnsigned -> TokenType.UINT_LIT
+            isLong     -> TokenType.LONG_LIT
+            else       -> TokenType.INT_LIT
         }
         emit(type, raw)
     }
@@ -266,7 +347,22 @@ class Lexer(private val src: String) {
 
     private fun readEscape(): Char {
         advance()   // skip backslash
-        val c = cur(); advance()
+        val c = cur()
+        if (c == 'u') {
+            advance() // skip 'u'
+            // Read 4 hex digits
+            val hexDigits = StringBuilder()
+            for (i in 0 until 4) {
+                if (pos >= src.length) error("Unterminated unicode escape at line $line")
+                val h = cur()
+                if (!h.isDigit() && h !in 'a'..'f' && h !in 'A'..'F')
+                    error("Invalid unicode escape at line $line")
+                hexDigits.append(h)
+                advance()
+            }
+            return hexDigits.toString().toInt(16).toChar()
+        }
+        advance()
         return when (c) {
             'n' -> '\n'; 't' -> '\t'; 'r' -> '\r'
             '\\' -> '\\'; '\'' -> '\''; '"' -> '"'; '$' -> '$'; '0' -> '\u0000'

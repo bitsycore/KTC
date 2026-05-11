@@ -46,6 +46,8 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
     null        -> null
     is IntLit   -> "Int"
     is LongLit  -> "Long"
+    is UIntLit  -> "UInt"
+    is ULongLit -> "ULong"
     is DoubleLit -> "Double"
     is FloatLit -> "Float"
     is BoolLit  -> "Boolean"
@@ -199,6 +201,10 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         if (name == "doubleArrayOf" || name == "DoubleArray") return "DoubleArray"
         if (name == "booleanArrayOf" || name == "BooleanArray") return "BooleanArray"
         if (name == "charArrayOf" || name == "CharArray") return "CharArray"
+        if (name == "ubyteArrayOf" || name == "UByteArray") return "UByteArray"
+        if (name == "ushortArrayOf" || name == "UShortArray") return "UShortArray"
+        if (name == "uintArrayOf" || name == "UIntArray") return "UIntArray"
+        if (name == "ulongArrayOf" || name == "ULongArray") return "ULongArray"
         if (name == "arrayOf") {
             // Prefer explicit type argument (arrayOf<T?> or arrayOf<T>)
             if (e.typeArgs.isNotEmpty()) {
@@ -350,6 +356,8 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     val recvType = inferExprType(dot.obj) ?: return null
     val method = dot.name
     if (method == "toString") return "String"
+    if (method == "trimIndent") return "String"
+    if (method == "trimMargin") return "String"
     if (method == "toInt") return "Int"
     if (method == "toLong") return "Long"
     if (method == "toFloat") return "Float"

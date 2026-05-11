@@ -2,7 +2,7 @@ package com.bitsycore
 
 enum class TokenType {
     // Literals
-    INT_LIT, LONG_LIT, FLOAT_LIT, DOUBLE_LIT,
+    INT_LIT, LONG_LIT, UINT_LIT, ULONG_LIT, FLOAT_LIT, DOUBLE_LIT,
     STRING_LIT, CHAR_LIT,
 
     // String template tokens (for strings containing $ref or ${expr})

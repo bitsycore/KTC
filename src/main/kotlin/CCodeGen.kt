@@ -986,14 +986,14 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             is ClassDecl -> {
                 for (p in d.ctorParams) {
                     if ((p.isVal || p.isVar) && isRawArrayTypeRef(p.type)) {
-                        codegenError("Class property '${p.name}' cannot have raw array type '${p.type.name}'. Use @Ptr Array<T> instead")
+                        codegenError("Class property '${p.name}' cannot have raw array type '${p.type.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                     }
                 }
                 for (p in d.members.filterIsInstance<PropDecl>()) {
                     val propType = p.type ?: inferInitType(p.init)
                     if (isRawArrayTypeRef(propType)) {
                         currentStmtLine = p.line
-                        codegenError("Class property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
+                        codegenError("Class property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                     }
                 }
                 val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
@@ -1008,7 +1008,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
                 for (m in d.members) if (m is FunDecl && m.receiver == null) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
-                        codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
+                        codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                     }
                     ci.methods += m
                 }
@@ -1078,16 +1078,20 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     val propType = p.type ?: inferInitType(p.init)
                     if (isRawArrayTypeRef(propType)) {
                         currentStmtLine = p.line
-                        codegenError("Object property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
+                        codegenError("Object property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                     }
                 }
                 val props = d.members.filterIsInstance<PropDecl>().map { it.name to (it.type ?: TypeRef("Int")) }
                 val oi = ObjInfo(d.name, props)
                 for (m in d.members) if (m is FunDecl) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
-                        codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
+                        codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                     }
                     oi.methods += m
+                    // Register in funSigs for return type inference at call sites
+                    if (funSigs[m.name] == null) {
+                        funSigs[m.name] = FunSig(m.params, m.returnType)
+                    }
                 }
                 objects[d.name] = oi
                 // dispose()/hashCode() are implicitly overrides — always require the keyword (current file, non-stdlib)
@@ -1106,7 +1110,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             }
             is FunDecl -> {
                 if (d.returnType != null && isRawArrayTypeRef(d.returnType)) {
-                    codegenError("Function '${d.name}' cannot return raw array type '${d.returnType.name}'. Use @Ptr Array<T> or Ptr<Array<T>> instead")
+                    codegenError("Function '${d.name}' cannot return raw array type '${d.returnType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                 }
                 if (d.returnType != null && d.returnType.name == "Any" && d.returnType.annotations.none { it.name == "Ptr" }) {
                     codegenError("Function '${d.name}' cannot return value-type 'Any'. Use @Ptr Any instead")

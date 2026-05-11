@@ -55,8 +55,10 @@ internal fun CCodeGen.genCArg(e: Expr): String = when (e) {
 }
 
 fun CCodeGen.genExpr(e: Expr): String = when (e) {
-    is IntLit    -> "${e.value}"
-    is LongLit   -> "${e.value}LL"
+    is IntLit    -> if (e.hex) "0x${e.value.toString(16)}" else "${e.value}"
+    is LongLit   -> if (e.hex) "0x${e.value.toString(16)}LL" else "${e.value}LL"
+    is UIntLit   -> if (e.hex) "0x${e.value.toString(16)}U" else "${e.value}U"
+    is ULongLit  -> if (e.hex) "0x${e.value.toString(16)}ULL" else "${e.value}ULL"
     is DoubleLit -> "${e.value}"
     is FloatLit  -> "${e.value}f"
     is BoolLit   -> if (e.value) "true" else "false"
@@ -394,6 +396,24 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             val v = genExpr(e.left)
             return if (negated) "($v < $lo || $v > $hi)" else "($v >= $lo && $v <= $hi)"
         }
+    }
+    // Bitwise infix operators → C operators
+    if (e.op == "and") return "(${genExpr(e.left)} & ${genExpr(e.right)})"
+    if (e.op == "or")  return "(${genExpr(e.left)} | ${genExpr(e.right)})"
+    if (e.op == "xor") return "(${genExpr(e.left)} ^ ${genExpr(e.right)})"
+    if (e.op == "shl") return "(${genExpr(e.left)} << ${genExpr(e.right)})"
+    if (e.op == "shr") return "(${genExpr(e.left)} >> ${genExpr(e.right)})"
+    if (e.op == "ushr") {
+        val leftType = inferExprType(e.left)
+        val l = genExpr(e.left)
+        val r = genExpr(e.right)
+        // For unsigned types, >> is already unsigned; for signed, cast to unsigned first
+        if (leftType == "UInt" || leftType == "UByte" || leftType == "UShort" || leftType == "ULong") {
+            return "($l >> $r)"
+        }
+        if (leftType == "Long") return "(((ktc_ULong)$l) >> $r)"
+        // Default: cast to unsigned equivalent
+        return "(((ktc_UInt)$l) >> $r)"
     }
     return "(${genExpr(e.left)} ${e.op} ${genExpr(e.right)})"
 }
@@ -945,6 +965,21 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         }
     }
 
+    // Inside an object method: bare method call resolves to object's method
+    if (currentObject != null) {
+        val oi = objects[currentObject]
+        val hasMethod = oi != null && oi.methods.any { it.name == name }
+        if (hasMethod) {
+            return "${pfx(currentObject!!)}_${name}($expandedArgs)"
+        }
+    }
+
+    // Inside an object method but method not found in object directly — use object prefix anyway
+    // for private/internal calls that were registered in funSigs
+    if (currentObject != null && funSigs.containsKey(name)) {
+        return "${pfx(currentObject!!)}_${name}($expandedArgs)"
+    }
+
     return "${pfx(name)}($expandedArgs)"
 }
 
@@ -1100,6 +1135,29 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
 
     // Built-in methods
     when (method) {
+        "trimIndent" -> {
+            // Fold at transpile time if called on a string literal
+            if (dot.obj is StrLit) {
+                val str = (dot.obj as StrLit).value
+                val trimmed = trimIndentImpl(str)
+                return "ktc_str(\"${escapeStr(trimmed)}\")"
+            }
+            // Runtime: not supported
+            codegenError("trimIndent() only supported on string literals")
+        }
+        "trimMargin" -> {
+            // Fold at transpile time if called on a string literal
+            if (dot.obj is StrLit) {
+                val str = (dot.obj as StrLit).value
+                val marginPrefix = if (args.isNotEmpty()) {
+                    (args[0].expr as? StrLit)?.value ?: "|"
+                } else "|"
+                val trimmed = trimMarginImpl(str, marginPrefix)
+                return "ktc_str(\"${escapeStr(trimmed)}\")"
+            }
+            // Runtime: not supported
+            codegenError("trimMargin() only supported on string literals")
+        }
         "toString" -> {
             if (args.size == 1) {
                 val argType = inferExprType(args[0].expr)
@@ -1568,7 +1626,7 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     }
     // Array .size → trampolined param uses trampoline struct field; others use $len
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
-    if (e.name == "size" && recvType != null && isArrayType(recvType)) return "${recv}\$len"
+    if (e.name == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*"))) return "${recv}\$len"
     if (e.name == "length" && recvType == "String") return "$recv.len"
     // Enum .ordinal → the int value itself
     if (e.name == "ordinal" && recvType != null && recvType in enums) return recv
@@ -1633,7 +1691,7 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
     // Determine field access expression (same logic as genDot but without nullable check)
     val fieldAccess = when {
         anyIndirectClassName(recvType) != null -> "$recvVal->${e.name}"
-        e.name == "size" && recvType != null && isArrayType(recvType) -> "${recvVal}\$len"
+        e.name == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*")) -> "${recvVal}\$len"
         e.name == "length" && recvType?.removeSuffix("?") == "String" -> "$recvVal.len"
         else -> "$recvVal.${e.name}"
     }
@@ -2582,4 +2640,42 @@ internal fun CCodeGen.genLValue(e: Expr, method: Boolean): String {
         }
         else -> genExpr(e)
     }
+}
+
+// ── String helpers for transpile-time folding ──────────────────────
+
+private fun trimIndentImpl(raw: String): String {
+    val lines = raw.split("\n").toMutableList()
+    // Remove leading blank line if present
+    if (lines.isNotEmpty() && lines[0].isBlank()) lines.removeAt(0)
+    // Remove trailing blank line if present
+    if (lines.isNotEmpty() && lines.last().isBlank()) lines.removeAt(lines.lastIndex)
+    // Find minimum indent (only consider non-blank lines)
+    val minIndent = lines.filter { it.isNotBlank() }.minOfOrNull { it.indentCount() } ?: 0
+    // Remove min indent from each line
+    return lines.joinToString("\n") { if (it.length >= minIndent) it.substring(minIndent) else it }
+}
+
+private fun trimMarginImpl(raw: String, marginPrefix: String): String {
+    val lines = raw.split("\n").toMutableList()
+    // Remove leading blank line if present
+    if (lines.isNotEmpty() && lines[0].isBlank()) lines.removeAt(0)
+    // Remove trailing blank line if present
+    if (lines.isNotEmpty() && lines.last().isBlank()) lines.removeAt(lines.lastIndex)
+    return lines.joinToString("\n") { line ->
+        val idx = line.indexOf(marginPrefix)
+        if (idx >= 0 && line.substring(0, idx).all { it == ' ' || it == '\t' }) {
+            line.substring(idx + marginPrefix.length)
+        } else {
+            line
+        }
+    }
+}
+
+private fun String.indentCount(): Int {
+    var count = 0
+    for (c in this) {
+        if (c == ' ') count++ else if (c == '\t') count++ else break
+    }
+    return count
 }

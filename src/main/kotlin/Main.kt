@@ -341,8 +341,10 @@ private fun dumpStmt(s: Stmt, depth: Int): String {
 }
 
 private fun dumpExpr(e: Expr): String = when (e) {
-    is IntLit -> "${e.value}"
-    is LongLit -> "${e.value}L"
+    is IntLit -> if (e.hex) "0x${e.value.toString(16)}" else "${e.value}"
+    is LongLit -> if (e.hex) "0x${e.value.toString(16)}L" else "${e.value}L"
+    is UIntLit -> if (e.hex) "0x${e.value.toString(16)}u" else "${e.value}u"
+    is ULongLit -> if (e.hex) "0x${e.value.toString(16)}UL" else "${e.value}UL"
     is DoubleLit -> "${e.value}"
     is FloatLit -> "${e.value}f"
     is BoolLit -> "${e.value}"

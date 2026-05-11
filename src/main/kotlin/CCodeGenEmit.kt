@@ -964,7 +964,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     hdr.appendLine("typedef struct {")
     if (props.isEmpty()) hdr.appendLine("    char _dummy;")
     for (p in props) {
-        val pType = p.type ?: TypeRef("Int")
+        val pType = p.type ?: inferInitType(p.init)
         val resolved = resolveTypeName(pType)
         val sizeAnn = getSizeAnnotation(pType)
         if (isArrayType(resolved) && sizeAnn != null) {
@@ -996,10 +996,10 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     val prevObject = currentObject
     currentObject = d.name
     pushScope()
-    for (p in props) defineVar(p.name, resolveTypeName(p.type ?: TypeRef("Int")))
+    for (p in props) defineVar(p.name, resolveTypeName(p.type ?: inferInitType(p.init)))
     for (p in props) {
         if (p.init != null) {
-            val pType = p.type ?: TypeRef("Int")
+            val pType = p.type ?: inferInitType(p.init)
             val resolved = resolveTypeName(pType)
             val sizeAnn = getSizeAnnotation(pType)
             val expr = genExpr(p.init)
@@ -1024,15 +1024,45 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
 
     // methods — inject $ensure_init() at the top of each
     for (m in methods) {
-        val cRet = if (m.returnType != null) cType(m.returnType) else "void"
-        val params = expandParams(m.params)
+        val returnsSizedArray = m.returnType != null && isSizedArrayTypeRef(m.returnType)
+        val returnsArray = m.returnType != null && !returnsSizedArray && isArrayType(resolveTypeName(m.returnType))
+        val retResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+        val cRet = when {
+            returnsSizedArray -> "void"
+            retResolved.isNotEmpty() -> cTypeStr(retResolved)
+            else -> "void"
+        }
+        val baseParams = expandParams(m.params)
+        val extraParam = when {
+            returnsSizedArray -> {
+                val elemCType = arrayElementCType(resolveTypeName(m.returnType))
+                "$elemCType* \$out"
+            }
+            returnsArray -> "int32_t* \$len_out"
+            else -> null
+        }
+        val params = if (extraParam != null) {
+            if (baseParams.isEmpty()) extraParam else "$baseParams, $extraParam"
+        } else baseParams
         hdr.appendLine("$cRet ${cName}_${m.name}($params);")
         impl.appendLine("$cRet ${cName}_${m.name}($params) {")
         impl.appendLine("    ${cName}_\$ensure_init();")
         val prevObjectM = currentObject
         currentObject = d.name
+        val prevReturnsArray = currentFnReturnsArray
+        val prevReturnsSizedArray = currentFnReturnsSizedArray
+        val prevSizedArraySize = currentFnSizedArraySize
+        val prevSizedArrayElemType = currentFnSizedArrayElemType
+        val prevReturnType = currentFnReturnType
+        currentFnReturnsArray = returnsArray
+        currentFnReturnsSizedArray = returnsSizedArray
+        currentFnReturnType = retResolved
+        if (returnsSizedArray) {
+            currentFnSizedArraySize = getSizeAnnotation(m.returnType)!!
+            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(m.returnType))
+        }
         pushScope()
-        for (p in props) defineVar(p.name, resolveTypeName(p.type ?: TypeRef("Int")))
+        for (p in props) defineVar(p.name, resolveTypeName(p.type ?: inferInitType(p.init)))
         for (p in m.params) defineVar(p.name, if (p.isVararg) "${resolveTypeName(p.type)}Array" else resolveTypeName(p.type))
         val savedTrampolined6 = trampolinedParams.toHashSet(); trampolinedParams.clear()
         emitArrayParamCopies(m.params, "    ")
@@ -1042,6 +1072,11 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         deferStack.clear(); deferStack.addAll(savedDefers3)
         trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined6)
         popScope()
+        currentFnReturnsArray = prevReturnsArray
+        currentFnReturnsSizedArray = prevReturnsSizedArray
+        currentFnSizedArraySize = prevSizedArraySize
+        currentFnSizedArrayElemType = prevSizedArrayElemType
+        currentFnReturnType = prevReturnType
         currentObject = prevObjectM
         impl.appendLine("}")
         impl.appendLine()

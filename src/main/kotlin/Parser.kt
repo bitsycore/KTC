@@ -623,8 +623,33 @@ class Parser(private val tokens: List<Token>) {
     private fun parsePrimary(): Expr {
         skipNL()
         return when {
-            at(TokenType.INT_LIT)    -> IntLit(advance().value.toLong())
-            at(TokenType.LONG_LIT)   -> LongLit(advance().value.removeSuffix("L").toLong())
+            at(TokenType.INT_LIT)    -> {
+                val raw = advance().value
+                val hex = raw.startsWith("0x") || raw.startsWith("0X")
+                val value = if (hex) raw.substring(2).toLong(16) else raw.toLong()
+                IntLit(value, hex)
+            }
+            at(TokenType.LONG_LIT)   -> {
+                val raw = advance().value.removeSuffix("L")
+                val hex = raw.startsWith("0x") || raw.startsWith("0X")
+                val value = if (hex) raw.substring(2).toLong(16) else raw.toLong()
+                LongLit(value, hex)
+            }
+            at(TokenType.UINT_LIT)   -> {
+                var raw = advance().value
+                raw = raw.removeSuffix("u").removeSuffix("U")
+                val hex = raw.startsWith("0x") || raw.startsWith("0X")
+                val value = if (hex) raw.substring(2).toLong(16) else raw.toLong()
+                UIntLit(value, hex)
+            }
+            at(TokenType.ULONG_LIT)  -> {
+                var raw = advance().value
+                // Strip u/U and L in any order (42uL, 42UL, 42Lu are all valid)
+                raw = raw.replace("u", "").replace("U", "").replace("L", "")
+                val hex = raw.startsWith("0x") || raw.startsWith("0X")
+                val value = if (hex) raw.substring(2).toLong(16) else raw.toLong()
+                ULongLit(value, hex)
+            }
             at(TokenType.FLOAT_LIT)  -> FloatLit(advance().value.removeSuffix("f").removeSuffix("F").toDouble())
             at(TokenType.DOUBLE_LIT) -> DoubleLit(advance().value.toDouble())
             at(TokenType.CHAR_LIT)   -> CharLit(advance().value[0])
@@ -868,7 +893,7 @@ class Parser(private val tokens: List<Token>) {
     // ═══════════════════════════ Precedence table ════════════════════
 
     companion object {
-        val INFIX_IDS = setOf("until", "downTo", "step", "to")
+        val INFIX_IDS = setOf("until", "downTo", "step", "to", "and", "or", "xor", "shl", "shr", "ushr")
         // Levels — higher binds tighter
         const val PREC_DISJUNCTION  = 1   // ||
         const val PREC_CONJUNCTION  = 2   // &&
@@ -943,7 +968,8 @@ class Parser(private val tokens: List<Token>) {
 
     /** True when the current token could be the start of an expression. */
     private fun atExprStart(): Boolean = when (cur().type) {
-        TokenType.INT_LIT, TokenType.LONG_LIT, TokenType.FLOAT_LIT, TokenType.DOUBLE_LIT,
+        TokenType.INT_LIT, TokenType.LONG_LIT, TokenType.UINT_LIT, TokenType.ULONG_LIT,
+        TokenType.FLOAT_LIT, TokenType.DOUBLE_LIT,
         TokenType.STRING_LIT, TokenType.CHAR_LIT, TokenType.STR_TMPL_START,
         TokenType.TRUE, TokenType.FALSE, TokenType.NULL, TokenType.THIS,
         TokenType.IDENT, TokenType.LPAREN, TokenType.IF, TokenType.WHEN,

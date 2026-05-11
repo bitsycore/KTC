@@ -480,6 +480,15 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
                 return TypeRef("Array", nullable = true, typeArgs = listOf(ta), annotations = listOf(Annotation("Ptr")))
             }
         }
+        if (name == "arrayOf" && inner.typeArgs.isNotEmpty()) {
+            val ta = inner.typeArgs[0]
+            val size = inner.args.size
+            val sizeAnn = Annotation("Size", listOf(IntLit(size.toLong())))
+            if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                return ta.typeArgs[0].copy(annotations = ta.typeArgs[0].annotations + sizeAnn)
+            }
+            return TypeRef(ta.name, typeArgs = ta.typeArgs, annotations = listOf(sizeAnn))
+        }
     }
     return TypeRef(inferExprType(init) ?: "Int")
 }
@@ -504,7 +513,7 @@ internal fun CCodeGen.emitBodyPropLenIfArray(bp: BodyProp) {
 internal fun CCodeGen.genExprWithNullableOut(e: Expr, outVar: String): String {
     if (e !is CallExpr) return genExpr(e)
     val name = (e.callee as? NameExpr)?.name ?: return genExpr(e)
-    val cName = pfx(name)
+    val cName = if (currentObject != null) "${pfx(currentObject!!)}_$name" else pfx(name)
     val sig = funSigs[name]
     val args = expandCallArgs(e.args, sig?.params)
     val extraArg = "&$outVar"
@@ -532,7 +541,7 @@ internal fun CCodeGen.genExprWithArrayLenOut(e: Expr, varName: String): String {
         return "${pfx(mangledName)}($allArgs)"
     }
     // Regular function
-    val cName = pfx(name)
+    val cName = if (currentObject != null) "${pfx(currentObject!!)}_$name" else pfx(name)
     val sig = funSigs[name]
     val filledArgs = if (sig != null) fillDefaults(e.args, sig.params, sig.params.associate { it.name to it.default }) else e.args
     val args = expandCallArgs(filledArgs, sig?.params)
@@ -559,7 +568,7 @@ internal fun CCodeGen.genExprWithSizedArrayOut(e: Expr, varName: String) {
         preStmts += "${pfx(mangledName)}($allArgs);"
         return
     }
-    val cName = pfx(name)
+    val cName = if (currentObject != null) "${pfx(currentObject!!)}_$name" else pfx(name)
     val sig = funSigs[name]
     val filledArgs = if (sig != null) fillDefaults(e.args, sig.params, sig.params.associate { it.name to it.default }) else e.args
     val args = expandCallArgs(filledArgs, sig?.params)
