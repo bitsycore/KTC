@@ -1475,6 +1475,10 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     hdr.appendLine("$cRet $cName($params);")
     impl.appendLine("$cRet $cName($params) {")
 
+    if (isMain) {
+        impl.appendLine("    ktc_mainInit();")
+    }
+
     val prevReturnsNullable = currentFnReturnsNullable
     val prevReturnsArray = currentFnReturnsArray
     val prevReturnsSizedArray = currentFnReturnsSizedArray

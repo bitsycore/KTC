@@ -1158,6 +1158,12 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             // Runtime: not supported
             codegenError("trimMargin() only supported on string literals")
         }
+        "runeAt" -> {
+            if (recvType == "String" && args.size == 1) {
+                return "ktc_str_runeAt($recv, ${genExpr(args[0].expr)})"
+            }
+            codegenError("runeAt() only supported on String with a byteIndex argument")
+        }
         "toString" -> {
             if (args.size == 1) {
                 val argType = inferExprType(args[0].expr)
@@ -1628,6 +1634,7 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
     if (e.name == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*"))) return "${recv}\$len"
     if (e.name == "length" && recvType == "String") return "$recv.len"
+    if (e.name == "runeLen" && recvType == "String") return "ktc_str_runeLen($recv)"
     // Enum .ordinal → the int value itself
     if (e.name == "ordinal" && recvType != null && recvType in enums) return recv
     // Enum .name → lookup in names array

@@ -100,3 +100,16 @@ void ktc_time_sleep_seconds(ktc_Double seconds)
 {
     ktc_time_sleep_ms((ktc_UInt)(seconds * 1000.0));
 }
+
+/* ═══════════════════════════ Initialization ═══════════════════════ */
+
+static void ktc_console_init(void) {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+}
+
+void ktc_mainInit(void) {
+    ktc_console_init();
+}

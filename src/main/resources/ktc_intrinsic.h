@@ -27,10 +27,14 @@ typedef float    ktc_Float;
 typedef double   ktc_Double;
 typedef bool     ktc_Bool;
 typedef char     ktc_Char;
+typedef int32_t  ktc_Rune;       // Unicode code point (0x0000..0x10FFFF)
 typedef uint8_t  ktc_UByte;
 typedef uint16_t ktc_UShort;
 typedef uint32_t ktc_UInt;
 typedef uint64_t ktc_ULong;
+
+/* ═══════════════════════════ Initialization ═════════════════════ */
+void ktc_mainInit(void);
 
 /* ═══════════════════════════ time ═══════════════════════════ */
 ktc_ULong ktc_time_ms(void);
@@ -384,6 +388,85 @@ static inline void ktc_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v) {
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu64, v);
     if (n > 0) sb->len += ((ktc_Int)n < rem) ? (ktc_Int)n : rem - 1;
+}
+
+/* ═══════════════════════════ UTF-8 helpers ═══════════════════════════ */
+/* Decode one UTF-8 code point from p. Returns the rune and sets *byteLen to bytes consumed (1-4).
+ * Invalid sequences return 0xFFFD (replacement character) and *byteLen = 1. */
+static inline ktc_Rune ktc_utf8_decode(const ktc_Char* p, ktc_Int* byteLen) {
+    unsigned char c = (unsigned char)p[0];
+    if (c < 0x80) { *byteLen = 1; return (ktc_Rune)c; }
+    ktc_Rune r = 0; ktc_Int len = 1;
+    if ((c & 0xE0) == 0xC0)      { r = c & 0x1F; len = 2; }
+    else if ((c & 0xF0) == 0xE0) { r = c & 0x0F; len = 3; }
+    else if ((c & 0xF8) == 0xF0) { r = c & 0x07; len = 4; }
+    else { *byteLen = 1; return 0xFFFD; }
+    for (ktc_Int i = 1; i < len; i++) {
+        unsigned char b = (unsigned char)p[i];
+        if ((b & 0xC0) != 0x80) { *byteLen = 1; return 0xFFFD; }
+        r = (r << 6) | (b & 0x3F);
+    }
+    /* Reject overlong sequences and surrogates */
+    if (r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF)) { *byteLen = 1; return 0xFFFD; }
+    if (len == 2 && r < 0x80)   { *byteLen = 1; return 0xFFFD; }
+    if (len == 3 && r < 0x800)  { *byteLen = 1; return 0xFFFD; }
+    if (len == 4 && r < 0x10000){ *byteLen = 1; return 0xFFFD; }
+    *byteLen = len;
+    return r;
+}
+
+/* Encode a code point into UTF-8 at out[4], returns byte count (1-4). */
+static inline ktc_Int ktc_utf8_encode(ktc_Rune r, ktc_Char* out) {
+    if (r < 0x80) {
+        out[0] = (ktc_Char)r; return 1;
+    } else if (r < 0x800) {
+        out[0] = (ktc_Char)(0xC0 | (r >> 6));
+        out[1] = (ktc_Char)(0x80 | (r & 0x3F));
+        return 2;
+    } else if (r < 0x10000) {
+        out[0] = (ktc_Char)(0xE0 | (r >> 12));
+        out[1] = (ktc_Char)(0x80 | ((r >> 6) & 0x3F));
+        out[2] = (ktc_Char)(0x80 | (r & 0x3F));
+        return 3;
+    } else {
+        out[0] = (ktc_Char)(0xF0 | (r >> 18));
+        out[1] = (ktc_Char)(0x80 | ((r >> 12) & 0x3F));
+        out[2] = (ktc_Char)(0x80 | ((r >> 6) & 0x3F));
+        out[3] = (ktc_Char)(0x80 | (r & 0x3F));
+        return 4;
+    }
+}
+
+/* Count Unicode code points in a string (O(n) scan). */
+static inline ktc_Int ktc_str_runeLen(ktc_String s) {
+    ktc_Int count = 0; ktc_Int i = 0;
+    while (i < s.len) {
+        unsigned char c = (unsigned char)s.ptr[i];
+        ktc_Int skip = 1;
+        if      (c < 0x80)       skip = 1;
+        else if ((c & 0xE0) == 0xC0) skip = 2;
+        else if ((c & 0xF0) == 0xE0) skip = 3;
+        else if ((c & 0xF8) == 0xF0) skip = 4;
+        i += skip; count++;
+    }
+    return count;
+}
+
+/* Decode the code point at byte offset `pos` in the string. */
+static inline ktc_Rune ktc_str_runeAt(ktc_String s, ktc_Int pos) {
+    if (pos < 0 || pos >= s.len) return 0xFFFD;
+    ktc_Int blen;
+    return ktc_utf8_decode(s.ptr + pos, &blen);
+}
+
+/* Append a Unicode code point (as UTF-8) to a StrBuf. */
+static inline void ktc_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r) {
+    ktc_Char enc[4];
+    ktc_Int n = ktc_utf8_encode(r, enc);
+    for (ktc_Int i = 0; i < n; i++) {
+        if (sb->ptr && sb->len < sb->cap) sb->ptr[sb->len] = enc[i];
+        sb->len++;
+    }
 }
 
 /* ═══════════════════════════ Hash helpers (for monomorphized HashMap) */

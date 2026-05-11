@@ -358,6 +358,7 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     if (method == "toString") return "String"
     if (method == "trimIndent") return "String"
     if (method == "trimMargin") return "String"
+    if (method == "runeAt") return "Rune"
     if (method == "toInt") return "Int"
     if (method == "toLong") return "Long"
     if (method == "toFloat") return "Float"
@@ -524,6 +525,7 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
         return "${internal}*"
     }
     if (e.name == "length" && recvType == "String") return "Int"
+    if (e.name == "runeLen" && recvType == "String") return "Int"
     // Enum value .name / .ordinal
     if (e.name == "name" && recvType in enums) return "String"
     if (e.name == "ordinal" && recvType in enums) return "Int"
