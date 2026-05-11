@@ -349,7 +349,59 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
             "UIntArray" -> "ktc_UInt"; "ULongArray" -> "ktc_ULong"
             else -> return null
         }
-        val size = if (init.args.isNotEmpty()) genExpr(init.args[0].expr) else "0"
+        val sizeArg = init.args[0]
+        val size = genExpr(sizeArg.expr)
+        // Array<T>(size) { lambda } — inline init loop
+        if (init.args.size >= 2 && init.args[1].expr is LambdaExpr) {
+            val lambda = init.args[1].expr as LambdaExpr
+            val itName = lambda.params.firstOrNull() ?: "it"
+            flushPreStmts(ind)
+            val sb = StringBuilder()
+            sb.appendLine("${ind}$elemC* ${varName} = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));")
+            sb.appendLine("${ind}const int32_t ${varName}\$len = $size;")
+            sb.appendLine("${ind}for (ktc_Int $itName = 0; $itName < $size; $itName++) {")
+            pushScope()
+            defineVar(itName, "Int")
+            // Lambda body: emit all statements, last one produces the element value
+            for ((i, stmt) in lambda.body.withIndex()) {
+                val isLast = i == lambda.body.lastIndex
+                when {
+                    isLast && stmt is ExprStmt -> {
+                        sb.appendLine("${ind}    $varName[$itName] = ${genExpr(stmt.expr)};")
+                    }
+                    stmt is ExprStmt -> {
+                        // Non-last expression statement: evaluate for side effects and discard
+                        sb.appendLine("${ind}    (void)${genExpr(stmt.expr)};")
+                    }
+                    stmt is VarDeclStmt -> {
+                        // Local val/var inside the loop body
+                        val vType = stmt.type?.let { resolveTypeName(it) } ?: (inferExprType(stmt.init) ?: "Int")
+                        defineVar(stmt.name, vType)
+                        val vCT = cTypeStr(vType)
+                        val mut = if (stmt.mutable) "" else "const "
+                        val initExpr = stmt.init?.let { genExpr(it) } ?: "0"
+                        sb.appendLine("${ind}    ${mut}$vCT ${stmt.name} = $initExpr;")
+                    }
+                    stmt is AssignStmt -> {
+                        val lhs = genLValue(stmt.target, false)
+                        val rhs = genExpr(stmt.value)
+                        val op = when (stmt.op) {
+                            "+=" -> "+"; "-=" -> "-"; "*=" -> "*"; "/=" -> "/"; "%=" -> "%"
+                            else -> ""
+                        }
+                        if (op.isNotEmpty()) {
+                            sb.appendLine("${ind}    $lhs = ($lhs $op $rhs);")
+                        } else {
+                            sb.appendLine("${ind}    $lhs = $rhs;")
+                        }
+                    }
+                    else -> codegenError("Unsupported statement in Array init lambda body")
+                }
+            }
+            sb.appendLine("${ind}}")
+            popScope()
+            return sb.toString()
+        }
         flushPreStmts(ind)
         return "${ind}$elemC* ${varName} = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));\n" +
                "${ind}const int32_t ${varName}\$len = $size;"

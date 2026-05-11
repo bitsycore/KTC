@@ -582,7 +582,8 @@ class Parser(private val tokens: List<Token>) {
                     expect(TokenType.LPAREN); nesting++; skipNL()
                     val args = parseArgList()
                     expect(TokenType.RPAREN); nesting--
-                    CallExpr(e, args, typeArgs)
+                    val allArgs = if (at(TokenType.LBRACE)) args + Arg(null, parseLambdaExpr()) else args
+                    CallExpr(e, allArgs, typeArgs)
                 }
                 at(TokenType.LBRACKET) -> {
                     advance(); nesting++; skipNL()

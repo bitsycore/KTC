@@ -749,6 +749,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             if (e.typeArgs.isNotEmpty()) {
                 val elemName = resolveTypeName(e.typeArgs[0])
                 val elemC = cTypeStr(elemName)
+                if (args.size >= 2 && args[1].expr is LambdaExpr) {
+                    return genNewArrayWithLambda(elemC, e, args)
+                }
                 return genNewArray(elemC, args)
             }
         }
@@ -2558,6 +2561,25 @@ internal fun CCodeGen.genNewArray(elemCType: String, args: List<Arg>): String {
     val t = tmp()
     preStmts += "$elemCType* $t = ($elemCType*)ktc_alloca(sizeof($elemCType) * (size_t)($size));"
     preStmts += "const int32_t ${t}\$len = $size;"
+    return t
+}
+
+/** Array<T>(size) { init } — stack-allocated with inline lambda init loop. */
+internal fun CCodeGen.genNewArrayWithLambda(elemCType: String, e: CallExpr, args: List<Arg>): String {
+    val size = genExpr(args[0].expr)
+    val lambda = args[1].expr as LambdaExpr
+    val itName = lambda.params.firstOrNull() ?: "it"
+    val t = tmp()
+    preStmts += "$elemCType* $t = ($elemCType*)ktc_alloca(sizeof($elemCType) * (size_t)($size));"
+    preStmts += "const int32_t ${t}\$len = $size;"
+    preStmts += "for (ktc_Int $itName = 0; $itName < $size; $itName++) {"
+    // Lambda body: must be a single expression producing the element value
+    val bodyExpr = when {
+        lambda.body.size == 1 && lambda.body[0] is ExprStmt -> (lambda.body[0] as ExprStmt).expr
+        else -> { codegenError("Array init lambda must be a single expression"); return t }
+    }
+    preStmts += "    $t[$itName] = ${genExpr(bodyExpr)};"
+    preStmts += "}"
     return t
 }
 
