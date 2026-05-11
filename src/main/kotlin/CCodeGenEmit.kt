@@ -394,14 +394,13 @@ internal fun CCodeGen.emitDataClassEquals(cName: String, ci: ClassInfo) {
 internal fun CCodeGen.emitDataClassToString(ktName: String, cName: String, ci: ClassInfo) {
     hdr.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb);")
     impl.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb) {")
-    impl.appendLine("    ktc_sb_append_cstr(sb, \"$ktName(\");")
     for ((i, prop) in ci.props.withIndex()) {
         val (name, type) = prop
         val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
         val tBase = resolveTypeName(type)
         val tFull = if (type.nullable) "${tBase}?" else tBase
-        if (i > 0) impl.appendLine("    ktc_sb_append_cstr(sb, \", \");")
-        impl.appendLine("    ktc_sb_append_cstr(sb, \"$name=\");")
+        val prefix = if (i == 0) "$ktName($name=" else ", $name="
+        impl.appendLine("    ktc_sb_append_str(sb, ktc_str(\"$prefix\"));")
         impl.appendLine("    ${genSbAppend("sb", "\$self->$fieldName", tFull)}")
     }
     impl.appendLine("    ktc_sb_append_char(sb, ')');")

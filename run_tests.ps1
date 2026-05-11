@@ -49,7 +49,6 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $jar        = "$root\build\libs\KotlinToC-1.0-SNAPSHOT.jar"
 $releaseJar = "$root\build\libs\KotlinToC-1.0-SNAPSHOT-release.jar"
-$outDir = "$root\test_out"
 $testsDir = "$root\tests"
 
 # ── Colors ──────────────────────────────────────────────────────
@@ -263,7 +262,7 @@ if ($Run -ne "") {
     if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
     $allArgs = $allArgs.Trim()
 
-    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$outDir\$Run" -Verbose $true -ExtraArgs $allArgs
+    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$testSrcDir\out" -Verbose $true -ExtraArgs $allArgs
     if ($result) { exit 0 } else { exit 1 }
 }
 
@@ -319,10 +318,6 @@ if ($BuildMode -ne "gradle") {
     }
 }
 
-# ── Prepare output directory ────────────────────────────────────
-if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
-New-Item $outDir -ItemType Directory -Force | Out-Null
-
 # ── 3. Integration Tests — auto-discover from tests/ ───────────
 Write-Section "Integration Tests"
 
@@ -342,7 +337,7 @@ if ($testDirs.Count -eq 0) {
     $results = $testDirs | ForEach-Object -Parallel {
         $dir = $_
         $dirName = Split-Path $dir -Leaf
-        $testOutDir = "$using:outDir\$dirName"
+        $testOutDir = "$($dir.FullName)\out"
 
         # Collect .kt files
         $ktFiles = @(Get-ChildItem "$dir\*.kt" -ErrorAction SilentlyContinue)

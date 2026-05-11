@@ -1998,15 +1998,23 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
     val buf = tmp()
     preStmts += "char ${buf}[256];"
     preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
+    var merged = ""
     for (part in e.parts) {
         when (part) {
-            is LitPart -> preStmts += "ktc_sb_append_cstr(&${buf}_sb, \"${escapeStr(part.text)}\");"
+            is LitPart -> merged += part.text
             is ExprPart -> {
+                if (merged.isNotEmpty()) {
+                    preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));"
+                    merged = ""
+                }
                 val t = inferExprType(part.expr) ?: "Int"
                 val expr = genExpr(part.expr)
                 preStmts += genSbAppend("&${buf}_sb", expr, t)
             }
         }
+    }
+    if (merged.isNotEmpty()) {
+        preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));"
     }
     return "ktc_sb_to_string(&${buf}_sb)"
 }
@@ -2137,10 +2145,10 @@ internal fun CCodeGen.genSbAppend(sbRef: String, expr: String, type: String): St
         val baseT = type.removeSuffix("?")
         if (isValueNullableType(type)) {
             val inner = genSbAppend(sbRef, "($expr).value", baseT).removeSuffix(";")
-            return "if (($expr).tag == ktc_SOME) { $inner; } else { ktc_sb_append_cstr($sbRef, \"null\"); }"
+            return "if (($expr).tag == ktc_SOME) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
         } else {
             val inner = genSbAppend(sbRef, expr, baseT).removeSuffix(";")
-            return "if (${expr}\$has) { $inner; } else { ktc_sb_append_cstr($sbRef, \"null\"); }"
+            return "if (${expr}\$has) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
         }
     }
     return when (type) {
@@ -2178,7 +2186,7 @@ internal fun CCodeGen.genSbAppend(sbRef: String, expr: String, type: String): St
                     preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $expr.vt->hashCode((void*)&$expr));"
                     "ktc_sb_append_cstr($sbRef, $buf);"
                 } else {
-                    "ktc_sb_append_cstr($sbRef, \"<$type>\");"
+                    "ktc_sb_append_str($sbRef, ktc_str(\"<$type>\"));"
                 }
             }
         }

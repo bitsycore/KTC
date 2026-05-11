@@ -200,7 +200,7 @@ class NullableUnitTest : TranspilerTestBase() {
             var x: Int? = null
             println("value=${'$'}x")
         """)
-        r.sourceContains("ktc_sb_append_cstr")
-        r.sourceContains("\"null\"")
+        r.sourceContains("ktc_sb_append_str")
+        r.sourceContains("ktc_str(\"null\")")
     }
 }

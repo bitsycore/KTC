@@ -1134,7 +1134,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
             impl.appendLine("${ind}char ${buf}[256];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
             impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
-            impl.appendLine("${ind}else { ktc_sb_append_cstr(&${buf}_sb, \"null\"); }")
+            impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
         } else {
             val fmt = printfFmt(baseT) + nl
@@ -1198,10 +1198,15 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
     val buf = tmp()
     impl.appendLine("${ind}char ${buf}[256];")
     impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
+    var merged = ""
     for (part in tmpl.parts) {
         when (part) {
-            is LitPart -> impl.appendLine("${ind}ktc_sb_append_cstr(&${buf}_sb, \"${escapeStr(part.text)}\");")
+            is LitPart -> merged += part.text
             is ExprPart -> {
+                if (merged.isNotEmpty()) {
+                    impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));")
+                    merged = ""
+                }
                 val t = inferExprType(part.expr) ?: "Int"
                 val expr = genExpr(part.expr)
                 val appendStmt = genSbAppend("&${buf}_sb", expr, t)
@@ -1209,6 +1214,9 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
                 impl.appendLine("$ind$appendStmt")
             }
         }
+    }
+    if (merged.isNotEmpty()) {
+        impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));")
     }
     val nl = if (newline) "\\n" else ""
     impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")

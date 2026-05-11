@@ -45,8 +45,7 @@ bin/
 .DS_Store
 
 ### KtC test output ###
-/test_out/
-/tests/out/
+/tests/**/out/
 
 
 .idea/
