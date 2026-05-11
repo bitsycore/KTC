@@ -13,6 +13,9 @@
 #   .\run_tests.ps1 -Run game -Ast         # Run single test with --ast
 #   .\run_tests.ps1 -Run game -DumpSemantics # Run single test with --dump-semantics
 #   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
+#   .\run_tests.ps1 -Clean                  # Remove all test out/ directories
+#   .\run_tests.ps1 -Rebuild                # Force clean rebuild of JAR + run all tests
+#   .\run_tests.ps1 -Rebuild -Run Utf8Test  # Rebuild JAR + run single test
 #   .\run_tests.ps1 -Compiler clang        # Use clang instead of auto-detected gcc
 #   .\run_tests.ps1 -CCArgs "-j14 -O2"     # Pass flags to the C compiler
 #   .\run_tests.ps1 -Build Jar             # Build fat JAR (default)
@@ -29,6 +32,8 @@ param(
     [switch]$MemTrack,
     [switch]$Ast,
     [switch]$DumpSemantics,
+    [switch]$Clean,
+    [switch]$Rebuild,
     [string]$Build = "Jar"
 )
 
@@ -50,6 +55,26 @@ $root = $PSScriptRoot
 $jar        = "$root\build\libs\KotlinToC-1.0-SNAPSHOT.jar"
 $releaseJar = "$root\build\libs\KotlinToC-1.0-SNAPSHOT-release.jar"
 $testsDir = "$root\tests"
+
+# ── Clean mode ──────────────────────────────────────────────────
+if ($Clean) {
+    Write-Host "Cleaning all test output directories..." -ForegroundColor Cyan
+    $cleaned = 0
+    Get-ChildItem $testsDir -Directory | ForEach-Object {
+        $outPath = Join-Path $_.FullName "out"
+        if (Test-Path $outPath) {
+            Remove-Item $outPath -Recurse -Force
+            Write-Host "  removed $outPath" -ForegroundColor DarkGray
+            $cleaned++
+        }
+    }
+    Write-Host "Cleaned $cleaned test output directories." -ForegroundColor Green
+    exit 0
+}
+
+# Gradle build command — optionally force clean rebuild
+$gradleJarCmd  = if ($Rebuild) { "clean jar" } else { "jar" }
+$gradleProCmd  = if ($Rebuild) { "clean proguard" } else { "proguard" }
 
 # ── Colors ──────────────────────────────────────────────────────
 function Write-Pass($msg) { Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host $msg }
@@ -228,16 +253,16 @@ if ($Run -ne "") {
     if ($BuildMode -ne "gradle") {
         Write-Section "Build"
         if ($BuildMode -eq "proguard") {
-            Write-Cmd "gradlew proguard"
-            & "$root\gradlew.bat" proguard 2>&1
+            Write-Cmd "gradlew $gradleProCmd"
+            & "$root\gradlew.bat" $gradleProCmd.Split(' ') 2>&1
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
                 Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
                 exit 1
             }
             Write-Pass "Built $releaseJar"
         } else {
-            Write-Cmd "gradlew jar"
-            & "$root\gradlew.bat" jar 2>&1
+            Write-Cmd "gradlew $gradleJarCmd"
+            & "$root\gradlew.bat" $gradleJarCmd.Split(' ') 2>&1
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
                 Write-Host "ERROR: JAR build failed" -ForegroundColor Red
                 exit 1
@@ -301,7 +326,7 @@ if ($Skip -ne "unit") {
 if ($BuildMode -ne "gradle") {
     if ($BuildMode -eq "proguard") {
         Write-Section "Building ProGuard release JAR"
-        & "$root\gradlew.bat" proguard 2>&1
+        & "$root\gradlew.bat" $gradleProCmd.Split(' ') 2>&1
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
             Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
             exit 1
@@ -309,7 +334,7 @@ if ($BuildMode -ne "gradle") {
         Write-Pass "Built $releaseJar"
     } else {
         Write-Section "Building transpiler JAR"
-        & "$root\gradlew.bat" jar 2>&1
+        & "$root\gradlew.bat" $gradleJarCmd.Split(' ') 2>&1
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
             Write-Host "ERROR: JAR build failed" -ForegroundColor Red
             exit 1

@@ -18,6 +18,8 @@
 #   ./run_tests.sh --build jar                # Build fat JAR (default for suite)
 #   ./run_tests.sh --build gradle             # Use gradle run (no JAR)
 #   ./run_tests.sh --build proguard           # Use ProGuard-optimized JAR
+#   ./run_tests.sh --clean                  # Remove all test output directories
+#   ./run_tests.sh --rebuild                # Force clean rebuild of JAR + run all tests
 #
 set -euo pipefail
 
@@ -38,6 +40,8 @@ EXTRA_ARGS=""
 COMPILER=""
 CC_ARGS=""
 BUILD="jar"
+CLEAN=false
+REBUILD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -51,11 +55,39 @@ while [[ $# -gt 0 ]]; do
         --compiler)    COMPILER="$2"; shift 2 ;;
         --cc-args)     CC_ARGS="$2"; shift 2 ;;
         --build)       BUILD="$2"; shift 2 ;;
+        --clean)        CLEAN=true; shift ;;
+        --rebuild)      REBUILD=true; shift ;; 
         *)             echo "Unknown option: $1 (use --help)"; exit 1 ;;
     esac
 done
 
 BUILD="$(echo "$BUILD" | tr '[:upper:]' '[:lower:]')"
+
+# Gradle build commands — optionally force clean rebuild
+if [[ "$REBUILD" == true ]]; then
+    GRADLE_JAR="clean jar"
+    GRADLE_PRO="clean proguard"
+else
+    GRADLE_JAR="jar"
+    GRADLE_PRO="proguard"
+fi
+
+# ── Clean mode ──────────────────────────────────────────────────
+if [[ "$CLEAN" == true ]]; then
+    echo "Cleaning all test output directories..."
+    cleaned=0
+    for d in "$TESTS_DIR"/*/; do
+        [[ -d "$d" ]] || continue
+        out="$d/out"
+        if [[ -d "$out" ]]; then
+            rm -rf "$out"
+            echo "  removed $out"
+            ((cleaned++)) || true
+        fi
+    done
+    echo "Cleaned $cleaned test output directories."
+    exit 0
+fi
 
 # ── Colors ──────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -297,7 +329,7 @@ if [[ -n "$RUN_TEST" ]]; then
         case "$BUILD" in
             proguard)
                 showcmd "gradlew proguard"
-                "$ROOT/gradlew" proguard --quiet 2>&1
+                "$ROOT/gradlew" $GRADLE_PRO --quiet 2>&1
                 if [[ ! -f "$RELEASE_JAR" ]]; then
                     echo "ERROR: ProGuard build failed"
                     exit 1
@@ -306,7 +338,7 @@ if [[ -n "$RUN_TEST" ]]; then
                 ;;
             *)
                 showcmd "gradlew jar"
-                "$ROOT/gradlew" jar --quiet 2>&1
+                "$ROOT/gradlew" $GRADLE_JAR --quiet 2>&1
                 if [[ ! -f "$JAR" ]]; then
                     echo "ERROR: JAR build failed"
                     exit 1
@@ -361,7 +393,7 @@ if [[ "$BUILD" != "gradle" ]]; then
     case "$BUILD" in
         proguard)
             section "Building ProGuard release JAR"
-            "$ROOT/gradlew" proguard --quiet 2>&1
+            "$ROOT/gradlew" $GRADLE_PRO --quiet 2>&1
             if [[ ! -f "$RELEASE_JAR" ]]; then
                 echo "ERROR: ProGuard build failed"
                 exit 1
@@ -370,7 +402,7 @@ if [[ "$BUILD" != "gradle" ]]; then
             ;;
         *)
             section "Building transpiler JAR"
-            "$ROOT/gradlew" jar --quiet 2>&1
+            "$ROOT/gradlew" $GRADLE_JAR --quiet 2>&1
             if [[ ! -f "$JAR" ]]; then
                 echo "ERROR: JAR build failed"
                 exit 1
