@@ -392,7 +392,9 @@ internal fun CCodeGen.emitDataClassEquals(cName: String, ci: ClassInfo) {
 }
 
 internal fun CCodeGen.emitDataClassToString(ktName: String, cName: String, ci: ClassInfo) {
-    hdr.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb);")
+    val maxLen = toStringMaxLen(ci.name)
+    val maxComment = if (maxLen != null) " // max output: $maxLen chars" else ""
+    hdr.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb);${maxComment}")
     impl.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb) {")
     for ((i, prop) in ci.props.withIndex()) {
         val (name, type) = prop

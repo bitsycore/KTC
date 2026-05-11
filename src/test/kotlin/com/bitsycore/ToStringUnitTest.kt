@@ -165,4 +165,96 @@ class ToStringUnitTest : TranspilerTestBase() {
         r.sourceContains("buf\$len")
         r.sourceContains("Point_toString")
     }
+
+    // ── toString maxLength optimization ────────────────────────────
+
+    @Test fun `bounded data class uses single-pass fixed buffer`() {
+        val r = transpileMain(
+            decls = "data class Vec2(val x: Float, val y: Float)",
+            body = "val v = Vec2(1f, 2f)\nval s = v.toString()"
+        )
+        // Should NOT have two-pass pattern (no NULL-init StrBuf counting)
+        assertFalse(Regex("ktc_StrBuf \\w+_sb = \\{NULL, 0, 0\\};").containsMatchIn(r.source),
+            "Bounded data class should use fixed buffer, not two-pass")
+        // Should use fixed stack buffer with computed size
+        r.sourceContains("char ")
+        r.sourceContains("[")
+        r.sourceContains("];")
+    }
+
+    @Test fun `data class with String field still uses two-pass`() {
+        val r = transpileMain(
+            decls = "data class Person(val name: String, val age: Int)",
+            body = "val p = Person(\"Alice\", 30)\nval s = p.toString()"
+        )
+        // Should have two-pass (String field makes it unbounded)
+        r.sourceContains("ktc_alloca")
+    }
+
+    @Test fun `nested bounded data class uses single-pass`() {
+        val r = transpileMain(
+            decls = """
+                data class Point(val x: Int, val y: Int)
+                data class Rect(val topLeft: Point, val bottomRight: Point)
+            """.trimIndent(),
+            body = """
+                val r = Rect(Point(0, 0), Point(10, 20))
+                val s = r.toString()
+            """.trimIndent()
+        )
+        // No two-pass pattern for bounded nested data classes
+        assertFalse(Regex("ktc_StrBuf \\w+_sb = \\{NULL, 0, 0\\};").containsMatchIn(r.source))
+    }
+
+    @Test fun `max output comment in header for bounded data class`() {
+        val r = transpileMain(
+            decls = "data class Point(val x: Int, val y: Int)",
+            body = "val p = Point(1, 2)"
+        )
+        r.headerContains("// max output: ")
+        r.headerContains("chars")
+    }
+
+    @Test fun `no max output comment for unbounded data class`() {
+        val r = transpileMain(
+            decls = "data class Person(val name: String)",
+            body = "val p = Person(\"A\")"
+        )
+        // Person has String field → unbounded → no max comment
+        val hasComment = "// max output:" in r.header
+        // The Person_toString line should NOT have the max comment
+        val toStringLine = r.header.lines().find { it.contains("Person_toString") }
+        assertFalse(
+            toStringLine?.contains("// max output:") == true,
+            "Person should not have max output comment (String field)"
+        )
+    }
+
+    @Test fun `primitive toString uses tighter buffer sizes`() {
+        // Int toString should use ~12 bytes instead of 32
+        val r = transpileMain("val s = 42.toString()")
+        r.sourceContains("ktc_sb_append_int")
+        // Check that buffer is not 32 bytes (should be 12)
+        assertFalse(Regex("char \\w+\\[32\\];").containsMatchIn(r.source),
+            "Int toString should use 12-byte buffer, not 32")
+    }
+
+    @Test fun `boolean toString uses tight buffer`() {
+        val r = transpileMain("val s = true.toString()")
+        // Should use 6 bytes, not 8
+        assertFalse(Regex("char \\w+\\[8\\];").containsMatchIn(r.source),
+            "Boolean toString should use 6-byte buffer, not 8")
+    }
+
+    @Test fun `nullable bounded field uses correct buffer`() {
+        val r = transpileMain(
+            decls = "data class Opt(val x: Int?)",
+            body = """
+                val o = Opt(42)
+                val s = o.toString()
+            """.trimIndent()
+        )
+        // Nullable Int → max(Int, "null") = max(11, 4) = 11 + overhead → bounded
+        assertFalse(Regex("ktc_StrBuf \\w+_sb = \\{NULL, 0, 0\\};").containsMatchIn(r.source))
+    }
 }

@@ -1129,13 +1129,22 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         if (dataClass != null) {
             val buf = tmp()
             val recv = if (dataClass != baseT) valExpr else "&($valExpr)"
-            impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
-            impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
-            impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
-            impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
-            impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
-            impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
-            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+            val maxLen = toStringMaxLen(dataClass)
+            if (maxLen != null && maxLen <= 512) {
+                impl.appendLine("${ind}char ${buf}[$maxLen];")
+                impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
+                impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
+                impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
+                impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+            } else {
+                impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
+                impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
+                impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
+                impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
+                impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
+                impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
+                impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+            }
         } else {
             val fmt = printfFmt(baseT) + nl
             val a = printfArg(valExpr, baseT)
@@ -1145,30 +1154,47 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         return
     }
 
-    // data class → two-pass toString into StrBuf, then printf
+    // data class → toString into StrBuf, then printf (fixed buffer if bounded)
     if (classes.containsKey(t) && classes[t]!!.isData) {
         val buf = tmp()
         val vTmp = tmp()
-        impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
-        impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
-        impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
-        impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
-        impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
-        impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
-        impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        val maxLen = toStringMaxLen(t)
+        if (maxLen != null && maxLen <= 512) {
+            impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+            impl.appendLine("${ind}char ${buf}[$maxLen];")
+            impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
+            impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        } else {
+            impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+            impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
+            impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
+            impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
+            impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        }
         return
     }
 
-    // Heap/Ptr/Value pointer to data class → pass pointer directly (no dereference)
+    // Heap/Ptr/Value pointer to data class → pass pointer directly
     val indirectBase = anyIndirectClassName(t)
     if (indirectBase != null && classes[indirectBase]?.isData == true) {
         val buf = tmp()
-        impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
-        impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
-        impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
-        impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
-        impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
-        impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        val maxLen = toStringMaxLen(indirectBase)
+        if (maxLen != null && maxLen <= 512) {
+            impl.appendLine("${ind}char ${buf}[$maxLen];")
+            impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
+            impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        } else {
+            impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
+            impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
+            impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
+            impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        }
         return
     }
 
@@ -1216,6 +1242,23 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
             }
         }
     }
+    val nl = if (newline) "\\n" else ""
+    val maxLen = templateMaxLen(tmpl)
+    if (maxLen != null && maxLen <= 512) {
+        impl.appendLine("${ind}char ${buf}[$maxLen];")
+        impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
+        for (p in parts) {
+            when {
+                p.lit != null -> impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));")
+                p.sbAppend != null -> {
+                    flushPreStmts(ind)
+                    impl.appendLine("$ind${p.sbAppend}")
+                }
+            }
+        }
+        impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        return
+    }
     // First pass: count
     impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
     for (p in parts) {
@@ -1227,7 +1270,7 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
             }
         }
     }
-    // Allocate + second pass (preStmts already flushed, don't flush again)
+    // Allocate + second pass
     impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
     impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
     for (p in parts) {
@@ -1236,7 +1279,6 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
             p.sbAppend != null -> impl.appendLine("$ind${p.sbAppend}")
         }
     }
-    val nl = if (newline) "\\n" else ""
     impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
 }
 

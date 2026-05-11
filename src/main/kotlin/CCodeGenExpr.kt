@@ -1986,8 +1986,18 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
     }
 
-    // data class → two-pass StrBuf for exact-size alloca
+    // data class → two-pass StrBuf for exact-size alloca (or fixed buffer if bounded)
     if (classes.containsKey(t) && classes[t]!!.isData) {
+        val maxLen = toStringMaxLen(t)
+        if (maxLen != null && maxLen <= 512) {
+            val buf = tmp()
+            val vTmp = tmp()
+            preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
+            preStmts += "char ${buf}[$maxLen];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
+            preStmts += "${pfx(t)}_toString(&$vTmp, &${buf}_sb);"
+            return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
+        }
         val buf = tmp()
         val vTmp = tmp()
         preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
@@ -2005,9 +2015,17 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         preStmts += "ktc_String $tmpStr = $str;"
         return "printf(\"%.*s$nl\", (int)${tmpStr}.len, ${tmpStr}.ptr)"
     }
-    // Heap/Ptr/Value to data class → pass pointer directly (no dereference)
+    // Heap/Ptr/Value to data class → pass pointer directly
     val indirectBase = anyIndirectClassName(t)
     if (indirectBase != null && classes[indirectBase]?.isData == true) {
+        val maxLen = toStringMaxLen(indirectBase)
+        if (maxLen != null && maxLen <= 512) {
+            val buf = tmp()
+            preStmts += "char ${buf}[$maxLen];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
+            preStmts += "${pfx(indirectBase)}_toString($expr, &${buf}_sb);"
+            return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
+        }
         val buf = tmp()
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${pfx(indirectBase)}_toString($expr, &${buf}_sb);"
@@ -2064,6 +2082,19 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
             }
         }
     }
+    val maxLen = templateMaxLen(e)
+    if (maxLen != null && maxLen <= 512) {
+        // Single pass with fixed stack buffer
+        preStmts += "char ${buf}[$maxLen];"
+        preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
+        for (p in parts) {
+            when {
+                p.lit != null -> preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));"
+                p.sbAppend != null -> preStmts += p.sbAppend
+            }
+        }
+        return "ktc_sb_to_string(&${buf}_sb)"
+    }
     // First pass: count length with NULL buffer
     preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
     for (p in parts) {
@@ -2085,10 +2116,94 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
     return "ktc_sb_to_string(&${buf}_sb)"
 }
 
+// ── compile-time toString max length inference ──────────────────
+
+private val toStringPrimitiveMaxLen = mapOf(
+    "Boolean" to 5,   // "false"
+    "Byte"    to 4,   // "-128"
+    "UByte"   to 3,   // "255"
+    "Short"   to 6,   // "-32768"
+    "UShort"  to 5,   // "65535"
+    "Int"     to 11,  // "-2147483648"
+    "UInt"    to 10,  // "4294967295"
+    "Long"    to 20,  // "-9223372036854775808"
+    "ULong"   to 20,  // "18446744073709551615"
+    "Float"   to 64,  // %f via ktc_sb_append_double
+    "Double"  to 64,  // %f via ktc_sb_append_double
+    "Char"    to 8    // %c format buffer
+)
+
+internal fun CCodeGen.toStringMaxLen(baseType: String, visited: MutableSet<String> = mutableSetOf()): Int? {
+    val t = baseType.removeSuffix("?").removeSuffix("*")
+    if (t in visited) return null
+    visited.add(t)
+
+    val primMax = toStringPrimitiveMaxLen[t]
+    if (primMax != null) {
+        visited.remove(t)
+        return primMax
+    }
+
+    // Data class: compute from field types recursively
+    val ci = classes[t]
+    if (ci != null && ci.isData) {
+        var total = t.length + 2  // "Name(" + ")"
+        for ((i, prop) in ci.props.withIndex()) {
+            val (name, propType) = prop
+            val tBase = resolveTypeName(propType)
+            val baseClean = tBase.removeSuffix("?")
+            val fieldMax = toStringMaxLen(baseClean, visited)
+            if (fieldMax == null) { visited.remove(t); return null }
+            val prefixLen = name.length + if (i == 0) 1 else 3  // "name=" or ", name="
+            total += prefixLen
+            total += if (propType.nullable) maxOf(fieldMax, 4) else fieldMax
+        }
+        visited.remove(t)
+        return total
+    }
+
+    // Default class / object / interface: "Name@XXXXXXXX"
+    if (classes.containsKey(t) || objects.containsKey(t) || interfaces.containsKey(t)) {
+        visited.remove(t)
+        return ktDisplayName(t).length + 10
+    }
+
+    visited.remove(t)
+    return null
+}
+
+/** Compute max output length for a string template, or null if any part is unbounded. */
+internal fun CCodeGen.templateMaxLen(tmpl: StrTemplateExpr): Int? {
+    var total = 0
+    for (part in tmpl.parts) {
+        when (part) {
+            is LitPart -> total += part.text.length
+            is ExprPart -> {
+                val t = inferExprType(part.expr) ?: return null
+                val max = toStringMaxLen(t) ?: return null
+                total += max
+            }
+        }
+    }
+    return total
+}
+
 // ── toString dispatch ────────────────────────────────────────────
 
 internal fun CCodeGen.genToString(recv: String, type: String): String {
     if (classes.containsKey(type) && classes[type]!!.isData) {
+        val maxLen = toStringMaxLen(type)
+        if (maxLen != null && maxLen <= 512) {
+            // Single pass with fixed stack buffer (maxLen known at compile time)
+            val buf = tmp()
+            val vTmp = tmp()
+            preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
+            preStmts += "char ${buf}[$maxLen];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
+            preStmts += "${pfx(type)}_toString(&$vTmp, &${buf}_sb);"
+            return "ktc_sb_to_string(&${buf}_sb)"
+        }
+        // Two-pass with alloca (unbounded fields or too large)
         val buf = tmp()
         val vTmp = tmp()
         preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
@@ -2102,57 +2217,65 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
     return when (type) {
         "Byte" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[8];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+            val sz = 6   // "-128\0" = 5+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_byte(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "Short" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[8];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+            val sz = 7   // "-32768\0" = 6+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_short(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "Int" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[32];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+            val sz = 12   // "-2147483648\0" = 11+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_int(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "Long" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[32];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+            val sz = 21   // "-9223372036854775808\0" = 20+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_long(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "UByte" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[8];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+            val sz = 4   // "255\0" = 3+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_ubyte(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "UShort" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[8];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 8};"
+            val sz = 6   // "65535\0" = 5+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_ushort(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "UInt" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[32];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+            val sz = 11   // "4294967295\0" = 10+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_uint(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "ULong" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[32];"
-            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 32};"
+            val sz = 21   // "18446744073709551615\0" = 20+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_ulong(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
@@ -2170,8 +2293,9 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         }
         "Boolean" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[8];"
-            preStmts += "snprintf($buf, 8, \"%s\", ($recv) ? \"true\" : \"false\");"
+            val sz = 6   // "false\0" = 5+1
+            preStmts += "char ${buf}[$sz];"
+            preStmts += "snprintf($buf, $sz, \"%s\", ($recv) ? \"true\" : \"false\");"
             "ktc_str($buf)"
         }
         "Char" -> {
@@ -2186,17 +2310,19 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val base = type.removeSuffix("*").removeSuffix("?")
             val hasHash = classes.containsKey(base) || objects.containsKey(base)
             val hasIface = interfaces.containsKey(base)
+            val maxLen = toStringMaxLen(base)  // name@XXXXXXXX
+            val sz = if (maxLen != null) maxLen + 2 else 64
             if (hasHash) {
                 val cName = pfx(base)
                 val buf = tmp()
                 val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) recv else "&$recv"
-                preStmts += "char ${buf}[64];"
-                preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
+                preStmts += "char ${buf}[$sz];"
+                preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
                 "ktc_str($buf)"
             } else if (hasIface) {
                 val buf = tmp()
-                preStmts += "char ${buf}[64];"
-                preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
+                preStmts += "char ${buf}[$sz];"
+                preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
                 "ktc_str($buf)"
             } else {
                 "ktc_str(\"<$type>\")"
