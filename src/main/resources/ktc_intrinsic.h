@@ -268,13 +268,15 @@ typedef struct {
     ktc_Int cap;
 } ktc_StrBuf;
 
-/* Stack-backed string builder: ktc_Char buf[256]; ktc_StrBuf sb = {buf, 0, 256}; */
+/* Stack-backed string builder: ktc_Char buf[256]; ktc_StrBuf sb = {buf, 0, 256};
+ * NULL-buffer mode: {NULL, 0, 0} counts required length without writing. */
 
 static inline ktc_String ktc_sb_to_string(ktc_StrBuf* sb) {
     return (ktc_String){sb->ptr, sb->len};
 }
 
 static inline void ktc_sb_append_str(ktc_StrBuf* sb, ktc_String s) {
+    if (!sb->ptr) { sb->len += s.len; return; }  // counting mode
     ktc_Int n = s.len;
     if (sb->len + n > sb->cap) n = sb->cap - sb->len;
     if (n <= 0) return;
@@ -287,10 +289,12 @@ static inline void ktc_sb_append_cstr(ktc_StrBuf* sb, const ktc_Char* s) {
 }
 
 static inline void ktc_sb_append_char(ktc_StrBuf* sb, ktc_Char c) {
+    if (!sb->ptr) { sb->len++; return; }
     if (sb->len < sb->cap) sb->ptr[sb->len++] = c;
 }
 
 static inline void ktc_sb_append_int(ktc_StrBuf* sb, ktc_Int v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRId32, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId32, v);
@@ -298,6 +302,7 @@ static inline void ktc_sb_append_int(ktc_StrBuf* sb, ktc_Int v) {
 }
 
 static inline void ktc_sb_append_long(ktc_StrBuf* sb, ktc_Long v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRId64, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId64, v);
@@ -305,6 +310,7 @@ static inline void ktc_sb_append_long(ktc_StrBuf* sb, ktc_Long v) {
 }
 
 static inline void ktc_sb_append_double(ktc_StrBuf* sb, ktc_Double v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%f", v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%f", v);
@@ -312,10 +318,11 @@ static inline void ktc_sb_append_double(ktc_StrBuf* sb, ktc_Double v) {
 }
 
 static inline void ktc_sb_append_bool(ktc_StrBuf* sb, ktc_Bool v) {
-    ktc_sb_append_cstr(sb, v ? "true" : "false");
+    ktc_sb_append_str(sb, v ? ktc_str("true") : ktc_str("false"));
 }
 
 static inline void ktc_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRId8, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId8, v);
@@ -323,6 +330,7 @@ static inline void ktc_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v) {
 }
 
 static inline void ktc_sb_append_short(ktc_StrBuf* sb, ktc_Short v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRId16, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRId16, v);
@@ -330,6 +338,7 @@ static inline void ktc_sb_append_short(ktc_StrBuf* sb, ktc_Short v) {
 }
 
 static inline void ktc_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRIu8, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu8, v);
@@ -337,6 +346,7 @@ static inline void ktc_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v) {
 }
 
 static inline void ktc_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRIu16, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu16, v);
@@ -344,6 +354,7 @@ static inline void ktc_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v) {
 }
 
 static inline void ktc_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRIu32, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu32, v);
@@ -351,6 +362,7 @@ static inline void ktc_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v) {
 }
 
 static inline void ktc_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v) {
+    if (!sb->ptr) { sb->len += snprintf(NULL, 0, "%" PRIu64, v); return; }
     ktc_Int rem = sb->cap - sb->len;
     if (rem <= 0) return;
     ktc_Int n = snprintf(sb->ptr + sb->len, (ktc_ULong)rem, "%" PRIu64, v);

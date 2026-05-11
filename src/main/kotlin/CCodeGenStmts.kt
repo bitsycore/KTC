@@ -1128,11 +1128,11 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
                        else anyIndirectClassName(baseT)?.takeIf { classes[it]?.isData == true }
         if (dataClass != null) {
             val buf = tmp()
-            // dataClass != baseT means baseT is a pointer type (e.g. Vec2^); pass ptr directly
-            // dataClass == baseT means baseT is the value struct itself; take its address
             val recv = if (dataClass != baseT) valExpr else "&($valExpr)"
-            impl.appendLine("${ind}char ${buf}[256];")
-            impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
+            impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
+            impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
+            impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
+            impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
             impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
             impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
@@ -1145,13 +1145,15 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         return
     }
 
-    // data class → emit toString into StrBuf, then printf
+    // data class → two-pass toString into StrBuf, then printf
     if (classes.containsKey(t) && classes[t]!!.isData) {
         val buf = tmp()
         val vTmp = tmp()
-        impl.appendLine("${ind}char ${buf}[256];")
-        impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
         impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+        impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
+        impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
+        impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
+        impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
         impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
         impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
         return
@@ -1161,8 +1163,10 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     val indirectBase = anyIndirectClassName(t)
     if (indirectBase != null && classes[indirectBase]?.isData == true) {
         val buf = tmp()
-        impl.appendLine("${ind}char ${buf}[256];")
-        impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
+        impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
+        impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
+        impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
+        impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
         impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
         impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
         return
@@ -1196,27 +1200,41 @@ internal fun CCodeGen.templateNeedsStrBuf(tmpl: StrTemplateExpr): Boolean {
 /** Emit a println/print of a complex string template via ktc_StrBuf. */
 internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: String, newline: Boolean) {
     val buf = tmp()
-    impl.appendLine("${ind}char ${buf}[256];")
-    impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};")
-    var merged = ""
+    data class PartData(val lit: String? = null, val sbAppend: String? = null)
+    val parts = mutableListOf<PartData>()
     for (part in tmpl.parts) {
         when (part) {
-            is LitPart -> merged += part.text
+            is LitPart -> {
+                val last = parts.lastOrNull()
+                if (last?.lit != null) parts[parts.lastIndex] = PartData(lit = last.lit + part.text)
+                else parts += PartData(lit = part.text)
+            }
             is ExprPart -> {
-                if (merged.isNotEmpty()) {
-                    impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));")
-                    merged = ""
-                }
                 val t = inferExprType(part.expr) ?: "Int"
                 val expr = genExpr(part.expr)
-                val appendStmt = genSbAppend("&${buf}_sb", expr, t)
-                flushPreStmts(ind)
-                impl.appendLine("$ind$appendStmt")
+                parts += PartData(sbAppend = genSbAppend("&${buf}_sb", expr, t))
             }
         }
     }
-    if (merged.isNotEmpty()) {
-        impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));")
+    // First pass: count
+    impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
+    for (p in parts) {
+        when {
+            p.lit != null -> impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));")
+            p.sbAppend != null -> {
+                flushPreStmts(ind)
+                impl.appendLine("$ind${p.sbAppend}")
+            }
+        }
+    }
+    // Allocate + second pass (preStmts already flushed, don't flush again)
+    impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
+    impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
+    for (p in parts) {
+        when {
+            p.lit != null -> impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));")
+            p.sbAppend != null -> impl.appendLine("$ind${p.sbAppend}")
+        }
     }
     val nl = if (newline) "\\n" else ""
     impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")

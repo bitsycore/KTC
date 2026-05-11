@@ -1942,13 +1942,15 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
     }
 
-    // data class → use preStmts for toString buffer
+    // data class → two-pass StrBuf for exact-size alloca
     if (classes.containsKey(t) && classes[t]!!.isData) {
         val buf = tmp()
         val vTmp = tmp()
-        preStmts += "char ${buf}[256];"
-        preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
         preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
+        preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
+        preStmts += "${pfx(t)}_toString(&$vTmp, &${buf}_sb);"
+        preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${pfx(t)}_toString(&$vTmp, &${buf}_sb);"
         return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
     }
@@ -1963,8 +1965,10 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
     val indirectBase = anyIndirectClassName(t)
     if (indirectBase != null && classes[indirectBase]?.isData == true) {
         val buf = tmp()
-        preStmts += "char ${buf}[256];"
-        preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
+        preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
+        preStmts += "${pfx(indirectBase)}_toString($expr, &${buf}_sb);"
+        preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${pfx(indirectBase)}_toString($expr, &${buf}_sb);"
         return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
     }
@@ -1996,25 +2000,43 @@ internal fun CCodeGen.genPrintfFromTemplate(tmpl: StrTemplateExpr, nl: String): 
 
 internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
     val buf = tmp()
-    preStmts += "char ${buf}[256];"
-    preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
-    var merged = ""
+    // Pre-compute expressions (genExpr increments tmp counter, so do this once)
+    data class PartData(val lit: String? = null, val sbAppend: String? = null)
+    val parts = mutableListOf<PartData>()
     for (part in e.parts) {
         when (part) {
-            is LitPart -> merged += part.text
-            is ExprPart -> {
-                if (merged.isNotEmpty()) {
-                    preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));"
-                    merged = ""
+            is LitPart -> {
+                val last = parts.lastOrNull()
+                if (last?.lit != null) {
+                    parts[parts.lastIndex] = PartData(lit = last.lit + part.text)
+                } else {
+                    parts += PartData(lit = part.text)
                 }
+            }
+            is ExprPart -> {
                 val t = inferExprType(part.expr) ?: "Int"
                 val expr = genExpr(part.expr)
-                preStmts += genSbAppend("&${buf}_sb", expr, t)
+                parts += PartData(sbAppend = genSbAppend("&${buf}_sb", expr, t))
             }
         }
     }
-    if (merged.isNotEmpty()) {
-        preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(merged)}\"));"
+    // First pass: count length with NULL buffer
+    preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
+    for (p in parts) {
+        when {
+            p.lit != null -> preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));"
+            p.sbAppend != null -> preStmts += p.sbAppend
+        }
+    }
+    // Allocate exact size
+    preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+    preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
+    // Second pass: write to real buffer
+    for (p in parts) {
+        when {
+            p.lit != null -> preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));"
+            p.sbAppend != null -> preStmts += p.sbAppend
+        }
     }
     return "ktc_sb_to_string(&${buf}_sb)"
 }
@@ -2025,9 +2047,11 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
     if (classes.containsKey(type) && classes[type]!!.isData) {
         val buf = tmp()
         val vTmp = tmp()
-        preStmts += "char ${buf}[256];"
-        preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, 256};"
         preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
+        preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
+        preStmts += "${pfx(type)}_toString(&$vTmp, &${buf}_sb);"
+        preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${pfx(type)}_toString(&$vTmp, &${buf}_sb);"
         return "ktc_sb_to_string(&${buf}_sb)"
     }
