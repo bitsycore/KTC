@@ -1,6 +1,6 @@
 package ArrayInitTest
 
-fun main() {
+fun main(): Int {
     var ok = true
 
     // ── Array<Int>(n) { init } ────────────────────────────────────────
@@ -50,7 +50,9 @@ fun main() {
 
     if (ok) {
         println("ALL OK")
+        return 0
     } else {
         println("SOME FAILED")
+        return -1
     }
 }
