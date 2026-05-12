@@ -118,6 +118,12 @@ internal fun CCodeGen.ptrNullComment(inResolved: String): String = when {
     inResolved.endsWith("*")  -> " /* notnull */"
     else -> ""
 }
+// KtcType overload
+internal fun CCodeGen.ptrNullComment(kt: KtcType): String = when {
+    kt is KtcType.Nullable && (kt.inner is KtcType.Ptr || (kt.inner is KtcType.Arr && kt.inner.ptr)) -> " /* nullable */"
+    kt is KtcType.Ptr || (kt is KtcType.Arr && kt.ptr) -> " /* notnull */"
+    else -> ""
+}
 
 /** Expand a parameter list: variable array params → ktc_ArrayTrampoline, @Size arrays → T*, nullable params → OptT name. */
 internal fun CCodeGen.expandParams(params: List<Param>): String {
@@ -155,75 +161,9 @@ internal fun CCodeGen.expandParams(params: List<Param>): String {
     return parts.joinToString(", ")
 }
 
-internal fun CCodeGen.cTypeStr(t: String): String = when {
-    // Function pointer type — can't be expressed as a simple type, use void* as fallback
-    // (actual declarations use cFuncPtrDecl which embeds the variable name)
-    t.startsWith("Fun(") -> "void*"
-    // Strip nullable marker — handled by companion $has variable or Optional
-    t.endsWith("?") -> cTypeStr(t.dropLast(1))
-    t == "Byte"    -> "ktc_Byte"
-    t == "Short"   -> "ktc_Short"
-    t == "Int"     -> "ktc_Int"
-    t == "Long"    -> "ktc_Long"
-    t == "Float"   -> "ktc_Float"
-    t == "Double"  -> "ktc_Double"
-    t == "Boolean" -> "ktc_Bool"
-    t == "Char"    -> "ktc_Char"
-    t == "Rune"    -> "ktc_Rune"
-    t == "UByte"   -> "ktc_UByte"
-    t == "UShort"  -> "ktc_UShort"
-    t == "UInt"    -> "ktc_UInt"
-    t == "ULong"   -> "ktc_ULong"
-    t == "String"  -> "ktc_String"
-    t == "Any"     -> "ktc_Any"
-    t == "Unit"    -> "void"
-    t == "void"    -> "void"
-    t == "Nothing" -> "void"
-    t == "ByteArray"    -> "ktc_Byte*"
-    t == "ShortArray"   -> "ktc_Short*"
-    t == "IntArray"     -> "ktc_Int*"
-    t == "LongArray"    -> "ktc_Long*"
-    t == "FloatArray"   -> "ktc_Float*"
-    t == "DoubleArray"  -> "ktc_Double*"
-    t == "BooleanArray" -> "ktc_Bool*"
-    t == "CharArray"    -> "ktc_Char*"
-    t == "UByteArray"   -> "ktc_UByte*"
-    t == "UShortArray"  -> "ktc_UShort*"
-    t == "UIntArray"    -> "ktc_UInt*"
-    t == "ULongArray"   -> "ktc_ULong*"
-    t == "StringArray"  -> "ktc_String*"
-    t == "ByteOptArray"    -> "ktc_Byte_Optional*"
-    t == "ShortOptArray"   -> "ktc_Short_Optional*"
-    t == "IntOptArray"     -> "ktc_Int_Optional*"
-    t == "LongOptArray"    -> "ktc_Long_Optional*"
-    t == "FloatOptArray"   -> "ktc_Float_Optional*"
-    t == "DoubleOptArray"  -> "ktc_Double_Optional*"
-    t == "BooleanOptArray" -> "ktc_Bool_Optional*"
-    t == "CharOptArray"    -> "ktc_Char_Optional*"
-    t == "UByteOptArray"   -> "ktc_UByte_Optional*"
-    t == "UShortOptArray"  -> "ktc_UShort_Optional*"
-    t == "UIntOptArray"    -> "ktc_UInt_Optional*"
-    t == "ULongOptArray"   -> "ktc_ULong_Optional*"
-    t == "StringOptArray"  -> "ktc_String_Optional*"
-    // Pointer type: "Int*" → "int32_t*", "Vec2*" → "game_Vec2*"
-    // For array types, don't add another * level — Array is already a pointer
-    t.endsWith("*") -> {
-        val base = t.dropLast(1)
-        if (base.endsWith("Array")) cTypeStr(base) else "${cTypeStr(base)}*"
-    }
-    else -> {
-        // Class array types: "Vec2Array" → "game_Vec2*" (pointer to element)
-        if (t.endsWith("Array") && t.length > 5) {
-            val elem = t.removeSuffix("Array")
-            if (classArrayTypes.contains(elem) || enums.containsKey(elem)) return "${pfx(elem)}*"
-            if (elem.startsWith("Pair_")) return "ktc_${elem}*"
-            if (elem.startsWith("Triple_")) return "ktc_${elem}*"
-        }
-        // Pair types: "Pair_Int_String" → "ktc_Pair_Int_String"
-        if (t.startsWith("Pair_")) return "ktc_$t"
-        if (t.startsWith("Triple_")) return "ktc_$t"
-        pfx(t)   // class/enum/object type
-    }
+internal fun CCodeGen.cTypeStr(t: String): String {
+    val ktc = stringToKtc(t)
+    return cTypeStr(ktc)
 }
 
 internal fun CCodeGen.ensurePairType(a: String, b: String) {
@@ -630,3 +570,117 @@ internal fun CCodeGen.escapeStr(s: String): String = s
     .replace("\n", "\\n")
     .replace("\t", "\\t")
     .replace("\r", "\\r")
+
+// ── Typed bridge (KtcType) ──────────────────────────────────────────
+
+/**
+ * Build a KtcType from a TypeRef using the existing string-based resolveTypeName.
+ * This is the migration bridge — eventually resolveTypeName will return KtcType directly.
+ */
+internal fun CCodeGen.typeToKtc(t: TypeRef?): KtcType {
+    if (t == null) return KtcType.Prim(KtcType.PrimKind.Int)
+    val resolved = resolveTypeName(t)
+    return stringToKtc(resolved, t)
+}
+
+internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType {
+    // Pointer suffix — for array types that are already pointers, don't double-wrap
+    if (resolved.endsWith("*?")) {
+        val base = resolved.dropLast(2)
+        if (base.endsWith("Array")) return stringToKtc(base, t)  // Array* → already a pointer
+        return KtcType.Nullable(KtcType.Ptr(stringToKtc(base, t)))
+    }
+    if (resolved.endsWith("*")) {
+        val base = resolved.dropLast(1)
+        if (base.endsWith("Array")) return stringToKtc(base, t)  // Array* → already a pointer
+        return KtcType.Ptr(stringToKtc(base, t))
+    }
+    // Nullable suffix
+    if (resolved.endsWith("?")) return KtcType.Nullable(stringToKtc(resolved.dropLast(1)))
+
+    // Function type
+    if (resolved.startsWith("Fun(")) return KtcType.Func(emptyList(), KtcType.Void)
+
+    // Primitives
+    for (kind in KtcType.PrimKind.entries) {
+        if (resolved == kind.name) return KtcType.Prim(kind)
+    }
+
+    // String, void
+    if (resolved == "String") return KtcType.Str
+    if (resolved == "void" || resolved == "Nothing" || resolved == "Unit") return KtcType.Void
+    if (resolved == "Any") return KtcType.User("Any")
+
+    // StringBuffer
+    if (resolved == "ktc_StrBuf") return KtcType.User("ktc_StrBuf")
+
+    // Array types: IntArray, ByteArray, Vec2Array, etc.
+    if (resolved.endsWith("Array") && resolved.length > 5) {
+        val elemName = resolved.removeSuffix("Array")
+        val elem = when {
+            elemName in KtcType.PrimKind.entries.map { it.name } -> KtcType.Prim(KtcType.PrimKind.valueOf(elemName))
+            elemName == "String" -> KtcType.Str
+            elemName.startsWith("Pair_") || elemName.startsWith("Triple_") -> KtcType.User(elemName)
+            classArrayTypes.contains(elemName) || enums.containsKey(elemName) -> KtcType.User(elemName)
+            else -> KtcType.User(elemName)
+        }
+        val sized = t?.let { getSizeAnnotation(it) }
+        val isTypedArray = elemName in KtcType.PrimKind.entries.map { it.name } || elemName == "String"
+            || elemName.startsWith("Pair_") || elemName.startsWith("Triple_")
+            || classArrayTypes.contains(elemName) || enums.containsKey(elemName)
+        return KtcType.Arr(elem, ptr = isTypedArray, sized = sized)
+    }
+
+    // Optional arrays: IntOptArray, etc.
+    if (resolved.endsWith("OptArray")) {
+        val elemName = resolved.removeSuffix("OptArray")
+        val elem = stringToKtc(elemName)
+        return KtcType.OptArray(elem)
+    }
+
+    // Pair/Triple types
+    if (resolved.startsWith("Pair_") || resolved.startsWith("Triple_"))
+        return KtcType.User(resolved)
+
+    // User-defined classes, interfaces
+    if (classes.containsKey(resolved) || objects.containsKey(resolved) || interfaces.containsKey(resolved))
+        return KtcType.User(resolved, isData = classes[resolved]?.isData == true, isEnum = enums.containsKey(resolved))
+
+    // Fallback: unknown type as User
+    return KtcType.User(resolved)
+}
+
+/** C type string from KtcType, uses pfx for user types. */
+internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
+    is KtcType.Prim -> ktc.toCType()
+    is KtcType.Str -> "ktc_String"
+    is KtcType.Void -> "void"
+    is KtcType.User -> {
+        val name = ktc.name
+        when {
+            name == "Any" -> "ktc_Any"
+            name == "ktc_StrBuf" -> "ktc_StrBuf"
+            name.startsWith("Pair_") -> "ktc_$name"
+            name.startsWith("Triple_") -> "ktc_$name"
+            else -> pfx(name)
+        }
+    }
+    is KtcType.Ptr -> "${cTypeStr(ktc.inner)}*"
+    is KtcType.Arr -> {
+        val elem = cTypeStr(ktc.elem)
+        when {
+            ktc.sized != null -> elem  // sized array: T[], not T*
+            ktc.ptr -> "$elem*"
+            else -> "ktc_ArrayTrampoline"
+        }
+    }
+    is KtcType.Nullable -> {
+        val inner = ktc.inner
+        if (inner is KtcType.Ptr || (inner is KtcType.Arr && inner.ptr))
+            cTypeStr(inner)  // T* for nullable pointers (NULL = null)
+        else
+            cTypeStr(inner)  // fallback (Optional handled elsewhere)
+    }
+    is KtcType.Func -> "void*"
+    is KtcType.OptArray -> "${cTypeStr(ktc.elem)}*"
+}
