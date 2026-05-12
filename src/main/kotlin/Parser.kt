@@ -359,17 +359,19 @@ class Parser(private val tokens: List<Token>) {
         } else null
         val init = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
         var isPrivateSet = false
-        if (at(TokenType.NEWLINE)) advance()
-        if (at(TokenType.PRIVATE)) {
-            if (!mutable) error("'private set' is not allowed on 'val'")
-            val savedPos = pos
-            advance()
-            skipNL()
-            if (at(TokenType.IDENT) && cur().value == "set") {
+        if (!isPrivate) {
+            if (at(TokenType.NEWLINE)) advance()
+            if (at(TokenType.PRIVATE)) {
+                if (!mutable) error("'private set' is not allowed on 'val'")
+                val savedPos = pos
                 advance()
-                isPrivateSet = true
-            } else {
-                pos = savedPos
+                skipNL()
+                if (at(TokenType.IDENT) && cur().value == "set") {
+                    advance()
+                    isPrivateSet = true
+                } else {
+                    pos = savedPos
+                }
             }
         }
         skipTerminator()

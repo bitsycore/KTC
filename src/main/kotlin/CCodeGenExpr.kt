@@ -829,14 +829,23 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     }
 
     // Constructor call (known class)
+    // Resolve nested class name within current object/class scope
+    var resolvedName = name
+    if (!classes.containsKey(name)) {
+        val parent = currentObject ?: currentClass
+        if (parent != null) {
+            val nested = "$parent\$${name}"
+            if (classes.containsKey(nested)) resolvedName = nested
+        }
+    }
     // Handle generic class constructor: MyList<Int>(8) → MyList_Int_primaryConstructor(8)
-    if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
+    if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && e.typeArgs.isNotEmpty()) {
         // Apply typeSubst so type params (e.g. T) resolve to concrete types (e.g. Int)
         // when inside a generic function body
         val resolvedTypeArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
-        val mangledName = mangledGenericName(name, resolvedTypeArgs)
+        val mangledName = mangledGenericName(resolvedName, resolvedTypeArgs)
         val ci = classes[mangledName] ?: error("Generic class '$mangledName' not materialized (typeSubst=$typeSubst)")
-        val templateDecl = genericClassDecls[name]
+        val templateDecl = genericClassDecls[resolvedName]
         val allParams = ci.ctorProps + ci.ctorPlainParams
         val ctorParamList = allParams.map { Param(it.first, it.second) }
         val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
@@ -847,9 +856,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
     }
     // Generic class constructor without explicit type args: infer from arguments
-    if (classes.containsKey(name) && classes[name]!!.isGeneric && e.args.isNotEmpty()) {
+    if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && e.args.isNotEmpty()) {
         val inferredArgs = e.args.map { inferExprType(it.expr) ?: "Int" }
-        val mangledName = recordGenericInstantiation(name, inferredArgs)
+        val mangledName = recordGenericInstantiation(resolvedName, inferredArgs)
         materializeGenericInstantiations()
         val ci = classes[mangledName]
         if (ci != null) {
@@ -862,28 +871,28 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
         }
     }
-    if (classes.containsKey(name)) {
-        val ci = classes[name]!!
+    if (classes.containsKey(resolvedName)) {
+        val ci = classes[resolvedName]!!
         // Check secondary constructors by argument count (skip those with same count as primary)
-        val declClass = file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == name }
+        val declClass = file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == resolvedName }
         val primaryParamCount = ci.ctorProps.size + ci.ctorPlainParams.size
         val sctor = declClass?.secondaryCtors?.find { it.params.size == args.size && it.params.size != primaryParamCount }
         if (sctor != null) {
             val types = sctor.params.map { resolveTypeName(it.type).removeSuffix("*") }
             val suffix = if (types.isEmpty()) "emptyConstructor" else "constructorWith${types.joinToString("_")}"
             val argStr = args.joinToString(", ") { genExpr(it.expr) }
-            return "${pfx(name)}_$suffix($argStr)"
+            return "${pfx(resolvedName)}_$suffix($argStr)"
         }
         val allParams = ci.ctorProps + ci.ctorPlainParams
         val ctorParamList = allParams.map { Param(it.first, it.second) }
         val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
             // find matching ctor param default
-            val cp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == name })
+            val cp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == resolvedName })
                 ?.ctorParams?.find { p -> p.name == it.first }
             it.first to cp?.default
         })
         val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
-        return "${pfx(name)}_primaryConstructor($expandedArgs)"
+        return "${pfx(resolvedName)}_primaryConstructor($expandedArgs)"
     }
 
     // Enum access (should be handled as DotExpr, but just in case)

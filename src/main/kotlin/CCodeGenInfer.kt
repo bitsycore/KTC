@@ -442,6 +442,11 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
             return resolveMethodReturnType(recvType, m.returnType)
         }
     }
+    // Object method
+    if (objects.containsKey(baseClass)) {
+        val m = objects[baseClass]!!.methods.find { it.name == method }
+        if (m != null) return resolveMethodReturnType(baseClass, m.returnType)
+    }
     // Class method
     val ci = classes[recvType]
     if (ci != null) {

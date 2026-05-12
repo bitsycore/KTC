@@ -964,6 +964,13 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 }
             }
         }
+        // Register symbol prefix for nested classes (created during collectDecl)
+        for ((name, ci) in classes) {
+            if ('$' in name && name !in symbolPrefix) {
+                val parent = name.substringBefore('$')
+                symbolPrefix[name] = symbolPrefix[parent] ?: prefix
+            }
+        }
         // Current file's symbols use current prefix (overwrite any from allFiles)
         for (d in file.decls) {
             collectDecl(d, validate = true)
@@ -1113,6 +1120,12 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                         val cName = pfx(d.name)
                         if (cName !in objectsWithDispose) objectsWithDispose.add(cName)
                     }
+                }
+                // Collect nested classes inside object (namespacing with parent prefix)
+                for (nested in d.members.filterIsInstance<ClassDecl>()) {
+                    val nestedName = "${d.name}\$${nested.name}"  // e.g. "Sha256$Context"
+                    collectDecl(ClassDecl(nestedName, nested.isData, nested.ctorParams, nested.members,
+                        nested.initBlocks, nested.superInterfaces, nested.typeParams, nested.secondaryCtors))
                 }
             }
             is FunDecl -> {

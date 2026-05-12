@@ -109,11 +109,27 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
             if (bp.init != null) {
                 if (bp.line > 0) currentStmtLine = bp.line
                 heapAllocTargetType = bp.type
-                val expr = genExpr(bp.init)
-                heapAllocTargetType = null
-                flushPreStmts("    ")
                 val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
-                impl.appendLine("    \$self.$bodyFieldName = $expr;")
+                val sizeAnn = bp.type?.let { getSizeAnnotation(it) }
+                // @Size(N) Array → zero-init: struct is already {0}, skip unless lambda init
+                if (sizeAnn != null && bp.type != null && isSizedArrayTypeRef(bp.type)) {
+                    val isZeroInit = bp.init is CallExpr && (bp.init.callee as? NameExpr)?.name?.endsWith("Array") == true &&
+                        bp.init.args.size == 1 && bp.init.args[0].expr !is LambdaExpr
+                    if (!isZeroInit) {
+                        val expr = genExpr(bp.init)
+                        heapAllocTargetType = null
+                        flushPreStmts("    ")
+                        val elemType = arrayElementCType(resolveTypeName(bp.type))
+                        impl.appendLine("    memcpy(\$self.$bodyFieldName, $expr, $sizeAnn * sizeof($elemType));")
+                    } else {
+                        heapAllocTargetType = null
+                    }
+                } else {
+                    val expr = genExpr(bp.init)
+                    heapAllocTargetType = null
+                    flushPreStmts("    ")
+                    impl.appendLine("    \$self.$bodyFieldName = $expr;")
+                }
                 emitBodyPropLenIfArray(bp)
             }
         }
@@ -306,11 +322,28 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
             if (bp.init != null) {
                 if (bp.line > 0) currentStmtLine = bp.line
                 heapAllocTargetType = bp.type
-                val expr = genExpr(bp.init)
-                heapAllocTargetType = null
-                flushPreStmts("    ")
                 val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
-                impl.appendLine("    \$self.$bodyFieldName = $expr;")
+                // @Size(N) arrays → memcpy (C arrays can't be assigned)
+                val sizeAnn = bp.type?.let { getSizeAnnotation(it) }
+                if (sizeAnn != null && bp.type != null && isSizedArrayTypeRef(bp.type)) {
+                    // Zero-init (struct already {0}): skip alloca+memcpy
+                    val isZeroInit = bp.init is CallExpr && (bp.init.callee as? NameExpr)?.name?.endsWith("Array") == true &&
+                        bp.init.args.size == 1 && bp.init.args[0].expr !is LambdaExpr
+                    if (!isZeroInit) {
+                        val expr = genExpr(bp.init)
+                        heapAllocTargetType = null
+                        flushPreStmts("    ")
+                        val elemType = arrayElementCType(resolveTypeName(bp.type))
+                        impl.appendLine("    memcpy(\$self.$bodyFieldName, $expr, $sizeAnn * sizeof($elemType));")
+                    } else {
+                        heapAllocTargetType = null
+                    }
+                } else {
+                    val expr = genExpr(bp.init)
+                    heapAllocTargetType = null
+                    flushPreStmts("    ")
+                    impl.appendLine("    \$self.$bodyFieldName = $expr;")
+                }
                 emitBodyPropLenIfArray(bp)
             }
         }
@@ -1027,7 +1060,20 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     impl.appendLine("}")
     impl.appendLine()
 
+    // Emit nested classes BEFORE methods so method return types can reference them
+    for (nested in d.members.filterIsInstance<ClassDecl>()) {
+        if (nested.typeParams.isEmpty()) {
+            impl.appendLine()
+            hdr.appendLine()
+            emitClass(ClassDecl("${d.name}\$${nested.name}", nested.isData,
+                nested.ctorParams, nested.members, nested.initBlocks,
+                nested.superInterfaces, nested.typeParams, nested.secondaryCtors))
+        }
+    }
+
     // methods — inject $ensure_init() at the top of each
+    val prevObjectForMethods = currentObject
+    currentObject = d.name
     for (m in methods) {
         val returnsSizedArray = m.returnType != null && isSizedArrayTypeRef(m.returnType)
         val returnsArray = m.returnType != null && !returnsSizedArray && isArrayType(resolveTypeName(m.returnType))
@@ -1053,7 +1099,6 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         impl.appendLine("$cRet ${cName}_${m.name}($params) {")
         impl.appendLine("    ${cName}_\$ensure_init();")
         val prevObjectM = currentObject
-        currentObject = d.name
         val prevReturnsArray = currentFnReturnsArray
         val prevReturnsSizedArray = currentFnReturnsSizedArray
         val prevSizedArraySize = currentFnSizedArraySize
@@ -1086,6 +1131,8 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         impl.appendLine("}")
         impl.appendLine()
     }
+    currentObject = prevObjectForMethods
+    // (nested classes already emitted above, before methods)
 }
 
 // ── interface ────────────────────────────────────────────────────

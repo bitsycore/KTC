@@ -59,6 +59,7 @@ fun testNextBoolean() {
 }
 
 fun main() {
+
     testNextInt()
     testNextIntBetween()
     testNextLong()

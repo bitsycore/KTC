@@ -402,6 +402,22 @@ internal fun CCodeGen.resolveTypeNameInner(t: TypeRef): String {
         && t.name !in setOf("Array", "Pair", "Triple", "Tuple", "RawArray")) {
         codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
     }
+    // Resolve nested class within current object/class scope (e.g., Context → Sha256$Context)
+    if (!classes.containsKey(t.name) && !enums.containsKey(t.name) && !interfaces.containsKey(t.name)
+        && !genericClassDecls.containsKey(t.name)) {
+        val parent = currentObject ?: currentClass
+        if (parent != null) {
+            val nestedName = "$parent\$${t.name}"
+            if (classes.containsKey(nestedName) || genericClassDecls.containsKey(nestedName))
+                return nestedName
+        }
+        // Scan all objects for nested class (used when calling obj.method() from outside)
+        for (obj in objects.keys) {
+            val nestedName = "$obj\$${t.name}"
+            if (classes.containsKey(nestedName) || genericClassDecls.containsKey(nestedName))
+                return nestedName
+        }
+    }
     return t.name
 }
 
