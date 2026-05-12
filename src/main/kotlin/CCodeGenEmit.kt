@@ -989,7 +989,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
 
     // global instance (zero-initialized), init flag + ensure_init are internal
     impl.appendLine("${tls}${cName}_t $cName = {0};")
-    impl.appendLine("static bool ${cName}\$init = false;")
+    impl.appendLine("${tls}static bool ${cName}\$init = false;")
     impl.appendLine()
 
     // $ensure_init: lazy initialization function
