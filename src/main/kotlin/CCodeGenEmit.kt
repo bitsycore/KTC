@@ -1060,6 +1060,20 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     impl.appendLine("}")
     impl.appendLine()
 
+    // Forward-declare private methods so nested classes can call them
+    for (m in methods) {
+        if (m.isPrivate) {
+            val retResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+            val cRet = when {
+                m.returnType != null && isSizedArrayTypeRef(m.returnType) -> "void"
+                retResolved.isNotEmpty() -> cTypeStr(retResolved)
+                else -> "void"
+            }
+            val fwdParams = expandParams(m.params)
+            impl.appendLine("$cRet ${cName}_PRIV_${m.name}($fwdParams);")
+        }
+    }
+
     // Emit nested classes BEFORE methods so method return types can reference them
     for (nested in d.members.filterIsInstance<ClassDecl>()) {
         if (nested.typeParams.isEmpty()) {
@@ -1083,6 +1097,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
             retResolved.isNotEmpty() -> cTypeStr(retResolved)
             else -> "void"
         }
+        val fnName = if (m.isPrivate) "PRIV_${m.name}" else m.name
         val baseParams = expandParams(m.params)
         val extraParam = when {
             returnsSizedArray -> {
@@ -1095,8 +1110,12 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         val params = if (extraParam != null) {
             if (baseParams.isEmpty()) extraParam else "$baseParams, $extraParam"
         } else baseParams
-        hdr.appendLine("$cRet ${cName}_${m.name}($params);")
-        impl.appendLine("$cRet ${cName}_${m.name}($params) {")
+        if (m.isPrivate) {
+            impl.appendLine("$cRet ${cName}_$fnName($params);")
+        } else {
+            hdr.appendLine("$cRet ${cName}_$fnName($params);")
+        }
+        impl.appendLine("$cRet ${cName}_$fnName($params) {")
         impl.appendLine("    ${cName}_\$ensure_init();")
         val prevObjectM = currentObject
         val prevReturnsArray = currentFnReturnsArray

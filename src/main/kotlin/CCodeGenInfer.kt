@@ -58,7 +58,16 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
     is NameExpr -> lambdaParamTypes[e.name] ?: lookupVar(e.name) ?: run {
         if (enums.containsKey(e.name)) e.name
         else if (objects.containsKey(e.name)) e.name
-        else null
+        else {
+            // Parent object field inside nested class
+            val parentObj = currentClass?.substringBefore('$')
+            if (parentObj != null && currentObject == null) {
+                val oi = objects[parentObj]
+                if (oi?.props?.any { it.first == e.name } == true)
+                    resolveTypeName(oi.props.find { it.first == e.name }!!.second)
+                else null
+            } else null
+        }
     }
     is BinExpr  -> {
         if (e.op in setOf("==", "!=", "<", ">", "<=", ">=", "&&", "||", "in", "!in")) "Boolean"

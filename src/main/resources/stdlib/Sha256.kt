@@ -88,6 +88,167 @@ object Sha256 {
 
         private var bufferSize = 0
         private var totalBytes = 0L
+
+        fun update(buff: @Ptr ByteArray, offset: Int = 0, length: Int = buff.size) {
+            var off = offset
+            var len = length
+
+            totalBytes += len.toLong()
+
+            // fill existing partial block
+            if (bufferSize > 0) {
+                val needed = 64 - bufferSize
+                val take = if (needed < len) needed else len
+
+                for (i in 0 until take) {
+                    buffer[bufferSize + i] = buff[off + i]
+                }
+
+                bufferSize += take
+                off += take
+                len -= take
+
+                if (bufferSize == 64) {
+                    compress(buffer, 0)
+                    bufferSize = 0
+                }
+            }
+
+            // process full blocks directly from input (NO COPY)
+            while (len >= 64) {
+                compress(buff, off)
+                off += 64
+                len -= 64
+            }
+
+            // store remainder
+            if (len > 0) {
+                for (i in 0 until len) {
+                    buffer[i] = buff[off + i]
+                }
+                bufferSize = len
+            }
+        }
+
+        private fun compress(block: @Ptr ByteArray, offset: Int) {
+
+            for (i in 0 until 16) {
+                val j = offset + i * 4
+
+                w[i] = ((block[j].toInt() and 0xff) shl 24) or
+                        ((block[j + 1].toInt() and 0xff) shl 16) or
+                        ((block[j + 2].toInt() and 0xff) shl 8) or
+                        (block[j + 3].toInt() and 0xff)
+            }
+
+            for (i in 16 until 64) {
+                val s0 = smallSigma0(w[i - 15])
+                val s1 = smallSigma1(w[i - 2])
+                w[i] = w[i - 16] + s0 + w[i - 7] + s1
+            }
+
+            var a = state[0]
+            var b = state[1]
+            var c = state[2]
+            var d = state[3]
+            var e = state[4]
+            var f = state[5]
+            var g = state[6]
+            var h = state[7]
+
+            for (i in 0 until 64) {
+                val t1 = h + bigSigma1(e) + ch(e, f, g) + K[i] + w[i]
+                val t2 = bigSigma0(a) + maj(a, b, c)
+                h = g
+                g = f
+                f = e
+                e = d + t1
+                d = c
+                c = b
+                b = a
+                a = t1 + t2
+            }
+
+            state[0] += a
+            state[1] += b
+            state[2] += c
+            state[3] += d
+            state[4] += e
+            state[5] += f
+            state[6] += g
+            state[7] += h
+        }
+
+        fun finalizeHash(): @Size(32) ByteArray {
+            val bitLength = totalBytes * 8L
+
+            // append 0x80
+            buffer[bufferSize++] = 0x80.toByte()
+
+            // not enough room for length
+            if (bufferSize > 56) {
+                while (bufferSize < 64) {
+                    buffer[bufferSize++] = 0
+                }
+
+                compress(buffer, 0)
+                bufferSize = 0
+            }
+
+            // zero pad
+            while (bufferSize < 56) {
+                buffer[bufferSize++] = 0
+            }
+
+            // append length (big endian)
+            for (i in 7 downTo 0) {
+                buffer[bufferSize++] =
+                    ((bitLength ushr (i * 8)) and 0xff).toByte()
+            }
+
+            compress(buffer, 0)
+
+            val out: @Size(32) ByteArray = ByteArray(32)
+
+            for (i in 0 until 8) {
+                val v = state[i]
+                val j = i * 4
+
+                out[j] = (v ushr 24).toByte()
+                out[j + 1] = (v ushr 16).toByte()
+                out[j + 2] = (v ushr 8).toByte()
+                out[j + 3] = v.toByte()
+            }
+
+            return out
+        }
     }
 
+    private fun rotr(x: Int, n: Int): Int {
+        return (x ushr n) or (x shl (32 - n))
+    }
+
+    private fun ch(x: Int, y: Int, z: Int): Int {
+        return (x and y) xor (x.inv() and z)
+    }
+
+    private fun maj(x: Int, y: Int, z: Int): Int {
+        return (x and y) xor (x and z) xor (y and z)
+    }
+
+    private fun bigSigma0(x: Int): Int {
+        return rotr(x, 2) xor rotr(x, 13) xor rotr(x, 22)
+    }
+
+    private fun bigSigma1(x: Int): Int {
+        return rotr(x, 6) xor rotr(x, 11) xor rotr(x, 25)
+    }
+
+    private fun smallSigma0(x: Int): Int {
+        return rotr(x, 7) xor rotr(x, 18) xor (x ushr 3)
+    }
+
+    private fun smallSigma1(x: Int): Int {
+        return rotr(x, 17) xor rotr(x, 19) xor (x ushr 10)
+    }
 }

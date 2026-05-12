@@ -268,6 +268,14 @@ internal fun CCodeGen.genName(e: NameExpr): String {
             val fn = if (e.name in objInfo.privateProps) "PRIV_${e.name}" else e.name
             return "${pfx(vCurObj)}.$fn"
         }
+        // Inside a class nested within an object: resolve to parent object's field
+        val parentObj = currentClass?.substringBefore('$')
+        if (parentObj != null && currentObject == null
+            && objects[parentObj]?.props?.any { it.first == e.name } == true) {
+            val objInfo = objects[parentObj]!!
+            val fn = if (e.name in objInfo.privateProps) "PRIV_${e.name}" else e.name
+            return "${pfx(parentObj)}.$fn"
+        }
         // Trampolined array param: redirect to local stack copy
         if (e.name in trampolinedParams) return "local\$${e.name}"
         // Any trampoline smart-cast: narrowed from Any, dereference .data
@@ -283,6 +291,15 @@ internal fun CCodeGen.genName(e: NameExpr): String {
     }
     // Top-level property: apply package prefix
     if (e.name in topProps) return pfx(e.name)
+    // Inside a class nested within an object: resolve to parent object's field/function
+    val parentObj2 = currentClass?.substringBefore('$')
+    if (parentObj2 != null && currentObject == null) {
+        val objInfo = objects[parentObj2]
+        if (objInfo?.props?.any { it.first == e.name } == true) {
+            val fn = if (e.name in objInfo.privateProps) "PRIV_${e.name}" else e.name
+            return "${pfx(parentObj2)}.$fn"
+        }
+    }
     return e.name
 }
 
@@ -971,20 +988,38 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     // Inside a class method or extension: bare method call resolves to $self.method()
     if (currentClass != null) {
         val ci = classes[currentClass]
-        val hasMethod = ci?.methods?.any { it.name == name } == true
-        if (hasMethod) {
+        val methodDecl = ci?.methods?.find { it.name == name }
+        if (methodDecl != null) {
+            val fnName = if (methodDecl.isPrivate) "PRIV_${name}" else name
+            // Re-expand args with the method's actual param types (ensures $len is added for @Ptr arrays)
+            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
             val selfArg = if (selfIsPointer) "\$self" else "&\$self"
-            val allArgs = if (expandedArgs.isEmpty()) selfArg else "$selfArg, $expandedArgs"
-            return "${pfx(currentClass!!)}_$name($allArgs)"
+            val allArgs = if (expandedArgs2.isEmpty()) selfArg else "$selfArg, $expandedArgs2"
+            return "${pfx(currentClass!!)}_$fnName($allArgs)"
+        }
+        // Inside a class nested within an object: resolve to parent object's method
+        val parentObj = currentClass?.substringBefore('$')
+        if (parentObj != null && objects.containsKey(parentObj)) {
+            val methodDecl = objects[parentObj]!!.methods.find { it.name == name }
+            if (methodDecl != null) {
+                val fnName = if (methodDecl.isPrivate) "PRIV_${name}" else name
+                val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+                val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
+                return "${pfx(parentObj)}_$fnName($expandedArgs2)"
+            }
         }
     }
 
     // Inside an object method: bare method call resolves to object's method
     if (currentObject != null) {
         val oi = objects[currentObject]
-        val hasMethod = oi != null && oi.methods.any { it.name == name }
-        if (hasMethod) {
-            return "${pfx(currentObject!!)}_${name}($expandedArgs)"
+        val methodDecl = oi?.methods?.find { it.name == name }
+        if (methodDecl != null) {
+            val fnName = if (methodDecl.isPrivate) "PRIV_${name}" else name
+            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
+            return "${pfx(currentObject!!)}_$fnName($expandedArgs2)"
         }
     }
 
@@ -998,6 +1033,21 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 }
 
 /** Expand call arguments: array → (arg, arg$len); nullable → (arg, arg$has); class→interface wrapping; vararg packing. */
+/** If expr accesses a @Size(N) array field, return N. */
+private fun CCodeGen.getSizedArrayFieldSize(expr: Expr): Int? {
+    val fieldName = when (expr) {
+        is DotExpr -> expr.name.removePrefix("PRIV_")
+        is NameExpr -> expr.name
+        else -> return null
+    }
+    val ci = currentClass?.let { classes[it] }
+    val bp = ci?.bodyProps?.find { it.name == fieldName }
+    if (bp != null && bp.type != null && hasSizeAnnotation(bp.type)) {
+        return getSizeAnnotation(bp.type)
+    }
+    return null
+}
+
 internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCtorCall: Boolean = false): String {
     val parts = mutableListOf<String>()
     if (params == null) {
@@ -1055,7 +1105,12 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     parts += "&$tAny"
                 } else {
                     parts += expr
-                    if (isArrayType(paramType)) parts += "${expr}\$len"
+                    if (isArrayType(paramType)) {
+                        // Check if argument is a @Size array (fixed-size, no $len member)
+                        val sizeFromAnn = getSizedArrayFieldSize(arg.expr)
+                        if (sizeFromAnn != null) parts += sizeFromAnn.toString()
+                        else parts += "${expr}\$len"
+                    }
                 }
             } else if (isArrayType(paramType)) {
                 if (hasSizeAnnotation(param.type)) {
