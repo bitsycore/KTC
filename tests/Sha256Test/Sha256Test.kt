@@ -24,33 +24,33 @@ fun printHash(hash: @Size(32) ByteArray) {
 }
 
 fun testEmpty() {
-    c.printf("--- empty string ---\n")
+    println("--- empty string ---")
     val ctx = Sha256.new()
     val hash = ctx.finalizeHash()
     printHash(hash)
     if (!checkHex(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")) {
-        c.printf("FAIL\n")
-        c.exit(1)
+        println("FAIL")
+        error("Hash failed")
     }
-    c.printf("OK\n")
+    println("OK")
 }
 
 fun testAbc() {
-    c.printf("--- abc ---\n")
+    println("--- abc ---")
     val buf = byteArrayOf('a'.toByte(), 'b'.toByte(), 'c'.toByte())
     val ctx = Sha256.new()
     ctx.update(buf.ptr(), 0, buf.size)
     val hash = ctx.finalizeHash()
     printHash(hash)
     if (!checkHex(hash, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
-        c.printf("FAIL\n")
-        c.exit(1)
+        println("FAIL")
+        error("Hash failed")
     }
-    c.printf("OK\n")
+    println("OK")
 }
 
 fun testHelloWorld() {
-    c.printf("--- hello world ---\n")
+    println("--- hello world ---")
     val buf = byteArrayOf(
         'h'.toByte(), 'e'.toByte(), 'l'.toByte(), 'l'.toByte(), 'o'.toByte(),
         ' '.toByte(),
@@ -61,14 +61,14 @@ fun testHelloWorld() {
     val hash = ctx.finalizeHash()
     printHash(hash)
     if (!checkHex(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")) {
-        c.printf("FAIL\n")
-        c.exit(1)
+        println("FAIL")
+        error("Hash failed")
     }
-    c.printf("OK\n")
+    println("OK")
 }
 
 fun testLongMessage() {
-    c.printf("--- 64 bytes 'a' ---\n")
+    println("--- 64 bytes 'a' ---")
     val buf = ByteArray(64)
     for (i in 0 until 64) {
         buf[i] = 'a'.toByte()
@@ -78,14 +78,14 @@ fun testLongMessage() {
     val hash = ctx.finalizeHash()
     printHash(hash)
     if (!checkHex(hash, "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb")) {
-        c.printf("FAIL\n")
-        c.exit(1)
+        println("FAIL")
+        error("Hash failed")
     }
-    c.printf("OK\n")
+    println("OK")
 }
 
 fun testPartialUpdates() {
-    c.printf("--- partial updates ---\n")
+    println("--- partial updates ---")
     val ctx = Sha256.new()
     val buf1 = byteArrayOf('a'.toByte(), 'b'.toByte())
     ctx.update(buf1.ptr(), 0, buf1.size)
@@ -94,10 +94,10 @@ fun testPartialUpdates() {
     val hash = ctx.finalizeHash()
     printHash(hash)
     if (!checkHex(hash, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
-        c.printf("FAIL\n")
-        c.exit(1)
+        println("FAIL")
+        error("Hash failed")
     }
-    c.printf("OK\n")
+    println("OK")
 }
 
 fun main() {
@@ -106,5 +106,5 @@ fun main() {
     testHelloWorld()
     testLongMessage()
     testPartialUpdates()
-    c.printf("ALL OK\n")
+    println("ALL OK")
 }
