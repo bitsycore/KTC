@@ -73,8 +73,8 @@ internal fun CCodeGen.expandCtorParams(props: List<Pair<String, TypeRef>>): Stri
 }
 
 internal fun CCodeGen.cType(t: TypeRef): String {
-    val resolved = resolveTypeName(t)
-    return cTypeStr(resolved)
+    val ktc = typeToKtc(t)
+    return cTypeStr(ktc)
 }
 
 // Emit alloca+memcpy copies for all variable array params and record them as trampolined.
@@ -120,8 +120,8 @@ internal fun CCodeGen.ptrNullComment(inResolved: String): String = when {
 }
 // KtcType overload
 internal fun CCodeGen.ptrNullComment(kt: KtcType): String = when {
-    kt is KtcType.Nullable && (kt.inner is KtcType.Ptr || (kt.inner is KtcType.Arr && kt.inner.ptr)) -> " /* nullable */"
-    kt is KtcType.Ptr || (kt is KtcType.Arr && kt.ptr) -> " /* notnull */"
+    kt is KtcType.Nullable && kt.inner is KtcType.Ptr -> " /* nullable */"
+    kt is KtcType.Ptr -> " /* notnull */"
     else -> ""
 }
 
@@ -628,14 +628,15 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
         val isTypedArray = elemName in KtcType.PrimKind.entries.map { it.name } || elemName == "String"
             || elemName.startsWith("Pair_") || elemName.startsWith("Triple_")
             || classArrayTypes.contains(elemName) || enums.containsKey(elemName)
-        return KtcType.Arr(elem, ptr = isTypedArray, sized = sized)
+        val arr = KtcType.Arr(elem, sized = sized)
+        return if (isTypedArray) KtcType.Ptr(arr) else arr
     }
 
-    // Optional arrays: IntOptArray, etc.
+    // Optional arrays: IntOptArray → Ptr(Arr(Nullable(elem)))
     if (resolved.endsWith("OptArray")) {
         val elemName = resolved.removeSuffix("OptArray")
         val elem = stringToKtc(elemName)
-        return KtcType.OptArray(elem)
+        return KtcType.Ptr(KtcType.Arr(KtcType.Nullable(elem)))
     }
 
     // Pair/Triple types
@@ -665,22 +666,24 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
             else -> pfx(name)
         }
     }
-    is KtcType.Ptr -> "${cTypeStr(ktc.inner)}*"
+    is KtcType.Ptr -> {
+        // Ptr(Arr(elem)) → elem*, not trampoline*
+        if (ktc.inner is KtcType.Arr) "${cTypeStr((ktc.inner as KtcType.Arr).elem)}*"
+        else "${cTypeStr(ktc.inner)}*"
+    }
     is KtcType.Arr -> {
         val elem = cTypeStr(ktc.elem)
         when {
-            ktc.sized != null -> elem  // sized array: T[], not T*
-            ktc.ptr -> "$elem*"
+            ktc.sized != null -> elem  // sized array: T[]
             else -> "ktc_ArrayTrampoline"
         }
     }
     is KtcType.Nullable -> {
         val inner = ktc.inner
-        if (inner is KtcType.Ptr || (inner is KtcType.Arr && inner.ptr))
+        if (inner is KtcType.Ptr)
             cTypeStr(inner)  // T* for nullable pointers (NULL = null)
         else
             cTypeStr(inner)  // fallback (Optional handled elsewhere)
     }
     is KtcType.Func -> "void*"
-    is KtcType.OptArray -> "${cTypeStr(ktc.elem)}*"
 }

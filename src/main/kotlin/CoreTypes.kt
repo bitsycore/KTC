@@ -68,13 +68,11 @@ sealed class KtcType {
 
     data class Arr(
         val elem: KtcType,
-        val ptr: Boolean = false,      // @Ptr Array<T> → T*
         val sized: Int? = null         // @Size(N) Array<T> → T[N]
     ) : KtcType() {
         override fun toCType(): String = when {
             sized != null -> "${elem.toCType()}[${sized}]"
-            ptr          -> "${elem.toCType()}*"
-            else         -> "ktc_ArrayTrampoline"
+            else          -> "ktc_ArrayTrampoline"
         }
     }
 
@@ -89,7 +87,7 @@ sealed class KtcType {
     data class Nullable(val inner: KtcType) : KtcType() {
         override fun toCType(): String {
             val c = inner.toCType()
-            return if (inner is Ptr || inner is Arr && inner.ptr) c else "ktc_${c}_Optional"
+            return if (inner is Ptr) c else "ktc_${c}_Optional"
         }
     }
 
@@ -99,12 +97,6 @@ sealed class KtcType {
         override fun toCType() = "void*"
     }
 
-    // ── Optional array (nullable elements) ───────────────────────────
-
-    data class OptArray(val elem: KtcType) : KtcType() {
-        override fun toCType() = "${elem.toCType()}*"
-    }
-
     // ── Abstract methods ─────────────────────────────────────────────
 
     abstract fun toCType(): String
@@ -112,7 +104,7 @@ sealed class KtcType {
     // ── Queries (replace string checks) ──────────────────────────────
 
     val isArray: Boolean get() = this is Arr
-    val isPointer: Boolean get() = this is Ptr || (this is Arr && ptr)
+    val isPointer: Boolean get() = this is Ptr
     val isSizedArray: Boolean get() = this is Arr && sized != null
     val isPrimitive: Boolean get() = this is Prim
     val isString: Boolean get() = this is Str
@@ -120,7 +112,6 @@ sealed class KtcType {
 
     val elementType: KtcType? get() = when (this) {
         is Arr -> elem
-        is OptArray -> elem
         is Ptr -> inner
         is Nullable -> inner
         else -> null
@@ -160,17 +151,15 @@ sealed class KtcType {
                     Ptr(from(typeRef.typeArgs[0], resolveName))
                 base == "Array" && typeRef.typeArgs.isNotEmpty() -> {
                     val elem = from(typeRef.typeArgs[0], resolveName)
-                    Arr(elem, ptr = isPtr, sized = sizeAnn?.value?.toInt())
+                    val arr = Arr(elem, sized = sizeAnn?.value?.toInt())
+                    if (isPtr) Ptr(arr) else arr
                 }
                 base.endsWith("Array") && base !in setOf("Array", "RawArray") -> {
                     // IntArray, ByteArray, UIntArray, etc.
                     val elemName = base.removeSuffix("Array")
                     val elem = from(TypeRef(elemName), resolveName)
-                    Arr(elem, ptr = isPtr, sized = sizeAnn?.value?.toInt())
-                }
-                base.endsWith("OptArray") -> {
-                    val elemName = base.removeSuffix("OptArray")
-                    OptArray(from(TypeRef(elemName), resolveName))
+                    val arr = Arr(elem, sized = sizeAnn?.value?.toInt())
+                    if (isPtr) Ptr(arr) else arr
                 }
                 base.startsWith("Pair_") || base.startsWith("Triple_") -> {
                     val typeArgNames = base.removePrefix("Pair_").removePrefix("Triple_").split("_")
