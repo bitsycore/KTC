@@ -119,4 +119,31 @@ class OverloadUnitTest : TranspilerTestBase() {
         v.headerContains("test_doItNoArg")
         v.headerContains("test_doItWithInt")
     }
+
+    // ── Bug fixes: if-assignment, equals, != ─────────────────────────
+
+    @Test fun ifAssignmentGeneratesProperIfBlock() {
+        val v = transpileMain("var ok = true; if (1 != 2) ok = false")
+        // Must NOT contain broken ternary: ((cond) ? ok : 0) = false
+        v.sourceContains("if (")
+        v.sourceContains("ok = false;")
+    }
+
+    @Test fun regularClassHasEquals() {
+        val v = transpileMain("", "class C(val x: Int)")
+        v.headerContains("test_Main_C_equals")
+    }
+
+    @Test fun dataClassNotEqualsGeneratesNegatedEquals() {
+        val v = transpileMain("val a = Vec2(1f,2f); val b = Vec2(2f,3f); val r = a != b", """
+            data class Vec2(val x: Float, val y: Float)
+        """)
+        v.sourceContains("!test_Main_Vec2_equals")
+    }
+
+    @Test fun regularClassEqualsReturnsTrueForEmpty() {
+        val v = transpileMain("", "class Empty()")
+        v.sourceContains("test_Main_Empty_equals")
+        v.sourceContains("return true;")
+    }
 }

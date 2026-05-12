@@ -728,7 +728,17 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.RETURN)   -> { advance(); val v = if (atExprStart()) parseExpr() else null; ReturnStmt(v) }
             at(TokenType.BREAK)    -> { advance(); BreakStmt() }
             at(TokenType.CONTINUE) -> { advance(); ContinueStmt() }
-            else -> ExprStmt(parseExpr())
+            else -> {
+                val expr = parseExpr()
+                if (at(TokenType.EQ) || at(TokenType.PLUS_EQ) || at(TokenType.MINUS_EQ) ||
+                    at(TokenType.STAR_EQ) || at(TokenType.SLASH_EQ) || at(TokenType.PERCENT_EQ)) {
+                    val op = advance().value; skipNL()
+                    val value = parseExpr()
+                    AssignStmt(expr, op, value)
+                } else {
+                    ExprStmt(expr)
+                }
+            }
         }
         stmt.line = stmtLine
         return stmt

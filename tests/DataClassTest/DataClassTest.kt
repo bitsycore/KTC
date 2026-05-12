@@ -12,8 +12,8 @@ fun main() {
     val a = Vec2(1.0f, 2.0f)
     val b = Vec2(1.0f, 2.0f)
     val c = Vec2(3.0f, 4.0f)
-    if (a.x != b.x || a.y != b.y) error("FAIL a==b")
-    if (a.x == c.x && a.y == c.y) error("FAIL a!=c")
+    if (a != b) error("FAIL a==b")
+    if (a == c) error("FAIL a!=c")
     println("a == b = true")
     println("a == c = false")
 
