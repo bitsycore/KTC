@@ -195,6 +195,8 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
             }
             return "void*"
         }
+        if (name == "byteArrayOf" || name == "ByteArray") return "ByteArray"
+        if (name == "shortArrayOf" || name == "ShortArray") return "ShortArray"
         if (name == "intArrayOf" || name == "IntArray") return "IntArray"
         if (name == "longArrayOf" || name == "LongArray") return "LongArray"
         if (name == "floatArrayOf" || name == "FloatArray") return "FloatArray"
@@ -236,9 +238,12 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
             // Fall back to inference from first argument
             val elemType = if (e.args.isNotEmpty()) inferExprType(e.args[0].expr) ?: "Int" else "Int"
             return when (elemType) {
+                "Byte" -> "ByteArray"; "Short" -> "ShortArray"
                 "Int" -> "IntArray"; "Long" -> "LongArray"
                 "Float" -> "FloatArray"; "Double" -> "DoubleArray"
                 "Boolean" -> "BooleanArray"; "Char" -> "CharArray"
+                "UByte" -> "UByteArray"; "UShort" -> "UShortArray"
+                "UInt" -> "UIntArray"; "ULong" -> "ULongArray"
                 "String" -> "StringArray"
                 else -> { classArrayTypes.add(elemType); "${elemType}Array" }
             }

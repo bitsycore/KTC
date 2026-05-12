@@ -438,9 +438,12 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         return sb.toString().trimEnd()
     }
     val elemType = when (callee) {
+        "byteArrayOf" -> "ktc_Byte"; "shortArrayOf" -> "ktc_Short"
         "intArrayOf" -> "ktc_Int"; "longArrayOf" -> "ktc_Long"
         "floatArrayOf" -> "ktc_Float"; "doubleArrayOf" -> "ktc_Double"
         "booleanArrayOf" -> "ktc_Bool"; "charArrayOf" -> "ktc_Char"
+        "ubyteArrayOf" -> "ktc_UByte"; "ushortArrayOf" -> "ktc_UShort"
+        "uintArrayOf" -> "ktc_UInt"; "ulongArrayOf" -> "ktc_ULong"
         "arrayOf" -> {
             if (init.typeArgs.isNotEmpty()) cTypeStr(typeSubst[init.typeArgs[0].name] ?: init.typeArgs[0].name)
             else { val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"; cTypeStr(elemKt) }
