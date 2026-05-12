@@ -1478,8 +1478,25 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             }
         } else if (isExtFun) "$recv"
         else "&$recv"
-        val allArgs = if (argStr.isEmpty()) selfArg else "$selfArg, $argStr"
+        // Use expandCallArgs for proper @Ptr expansion and default arg filling
+        val expandedArgs = if (methodDecl != null) {
+            val filled = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            expandCallArgs(filled, methodDecl.params)
+        } else argStr
+        val allArgs = if (expandedArgs.isEmpty()) selfArg else "$selfArg, $expandedArgs"
         val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_${method}" else method
+        // @Size(N) return → out-parameter ABI
+        if (methodDecl?.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
+            val retType = resolveTypeName(methodDecl.returnType)
+            val elemCType = arrayElementCType(retType)
+            val size = getSizeAnnotation(methodDecl.returnType)!!
+            val t = tmp()
+            preStmts += "$elemCType ${t}[$size];"
+            preStmts += "const int32_t ${t}\$len = $size;"
+            preStmts += "${pfx(recvType)}_$fnPrefix($allArgs, $t);"
+            defineVar(t, retType)
+            return t
+        }
         // Nullable return: use out-pointer pattern
         if (methodDecl?.returnType?.nullable == true) {
             return genNullableMethodCall(recvType, "${pfx(recvType)}_$fnPrefix", allArgs, methodDecl)
@@ -1489,22 +1506,46 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     // Object method
     if (recvType != null && objects.containsKey(recvType)) {
         val vObjMethod = objects[recvType]?.methods?.find { it.name == method }
-        val vObjArgs = if (vObjMethod != null)
-            fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default })
-            else args
-        val vObjArgStr = vObjArgs.joinToString(", ") { genExpr(it.expr) }
-        return "${pfx(recvType)}_$method($vObjArgStr)"
+        val vObjArgs = if (vObjMethod != null) {
+            val filled = fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default })
+            expandCallArgs(filled, vObjMethod.params)
+        } else argStr
+        // @Size(N) return → out-parameter ABI
+        if (vObjMethod?.returnType != null && isSizedArrayTypeRef(vObjMethod.returnType)) {
+            val retType = resolveTypeName(vObjMethod.returnType)
+            val elemCType = arrayElementCType(retType)
+            val size = getSizeAnnotation(vObjMethod.returnType)!!
+            val t = tmp()
+            preStmts += "$elemCType ${t}[$size];"
+            preStmts += "const int32_t ${t}\$len = $size;"
+            preStmts += "${pfx(recvType)}_${method}($vObjArgs, $t);"
+            defineVar(t, retType)
+            return t
+        }
+        return "${pfx(recvType)}_${method}($vObjArgs)"
     }
     // Companion object method: Foo.bar() where Foo has a companion object
     val vDotObjName = (dot.obj as? NameExpr)?.name
     if (vDotObjName != null && classCompanions.containsKey(vDotObjName)) {
         val vCompanionName = classCompanions[vDotObjName]!!
         val vCompMethod = objects[vCompanionName]?.methods?.find { it.name == method }
-        val vCompArgs = if (vCompMethod != null)
-            fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default })
-            else args
-        val vCompArgStr = vCompArgs.joinToString(", ") { genExpr(it.expr) }
-        return "${pfx(vCompanionName)}_$method($vCompArgStr)"
+        val vCompArgs = if (vCompMethod != null) {
+            val filled = fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default })
+            expandCallArgs(filled, vCompMethod.params)
+        } else argStr
+        // @Size(N) return → out-parameter ABI
+        if (vCompMethod?.returnType != null && isSizedArrayTypeRef(vCompMethod.returnType)) {
+            val retType = resolveTypeName(vCompMethod.returnType)
+            val elemCType = arrayElementCType(retType)
+            val size = getSizeAnnotation(vCompMethod.returnType)!!
+            val t = tmp()
+            preStmts += "$elemCType ${t}[$size];"
+            preStmts += "const int32_t ${t}\$len = $size;"
+            preStmts += "${pfx(vCompanionName)}_${method}($vCompArgs, $t);"
+            defineVar(t, retType)
+            return t
+        }
+        return "${pfx(vCompanionName)}_${method}($vCompArgs)"
     }
     // Enum → static method/field access
     if (recvType != null && enums.containsKey(recvType)) {
