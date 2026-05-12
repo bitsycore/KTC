@@ -1082,7 +1082,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     }
                 }
                 val props = d.members.filterIsInstance<PropDecl>().map { it.name to (it.type ?: TypeRef("Int")) }
-                val oi = ObjInfo(d.name, props)
+                val privateProps = d.members.filterIsInstance<PropDecl>().filter { it.isPrivate }.map { it.name }.toSet()
+                val oi = ObjInfo(d.name, props, privateProps = privateProps)
                 for (m in d.members) if (m is FunDecl) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
                         codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")

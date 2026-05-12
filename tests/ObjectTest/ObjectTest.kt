@@ -10,7 +10,7 @@ object Config {
 }
 
 object Config2 {
-    private val buffer: @Ptr Array<Int> = HeapAlloc<Array<Int>>(128)
+    val buffer: @Ptr Array<Int> = HeapAlloc<Array<Int>>(128)
 
     override fun dispose() {
         println("AutoFreeing Config2")
@@ -40,7 +40,7 @@ class TestCompanion {
 }
 
 fun main() {
-
+    println("Value: ${Config2.buffer.size}")
     println("first: ${Config.next()}")
     println("second: ${Config.next()}")
 

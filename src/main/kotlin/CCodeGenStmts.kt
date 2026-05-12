@@ -1164,7 +1164,9 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         if (templateNeedsStrBuf(arg)) {
             emitPrintTemplateViaStrBuf(arg, ind, newline)
         } else {
-            impl.appendLine("$ind${genPrintfFromTemplate(arg, nl)};")
+            val printfStr = genPrintfFromTemplate(arg, nl)
+            flushPreStmts(ind)
+            impl.appendLine("$ind$printfStr;")
         }
         return
     }

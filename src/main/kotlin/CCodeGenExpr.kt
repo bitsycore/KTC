@@ -264,7 +264,9 @@ internal fun CCodeGen.genName(e: NameExpr): String {
         }
         val vCurObj = currentObject
         if (vCurObj != null && objects[vCurObj]?.props?.any { it.first == e.name } == true) {
-            return "${pfx(vCurObj)}.${e.name}"
+            val objInfo = objects[vCurObj]!!
+            val fn = if (e.name in objInfo.privateProps) "PRIV_${e.name}" else e.name
+            return "${pfx(vCurObj)}.$fn"
         }
         // Trampolined array param: redirect to local stack copy
         if (e.name in trampolinedParams) return "local\$${e.name}"

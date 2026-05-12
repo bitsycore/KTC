@@ -956,6 +956,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     val props = d.members.filterIsInstance<PropDecl>()
     val initBlocks = d.members.filterIsInstance<FunDecl>().filter { it.name == "init" }
     val methods = d.members.filterIsInstance<FunDecl>().filter { it.name != "init" }
+    val privPrefix = { p: PropDecl -> if (p.isPrivate) "PRIV_" else "" }
 
     impl.appendLine("// ══ object ${d.name} ($currentSourceFile) ══")
     impl.appendLine()
@@ -969,13 +970,16 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         val sizeAnn = getSizeAnnotation(pType)
         if (isArrayType(resolved) && sizeAnn != null) {
             val elemType = arrayElementCType(resolved)
-            hdr.appendLine("    $elemType ${p.name}[${sizeAnn}];")
-            hdr.appendLine("    int32_t ${p.name}\$len;")
+            val fn = privPrefix(p) + p.name
+            hdr.appendLine("    $elemType ${fn}[${sizeAnn}];")
+            hdr.appendLine("    int32_t ${fn}\$len;")
         } else if (isArrayType(resolved)) {
-            hdr.appendLine("    ${cTypeStr(resolved)} ${p.name};")
-            hdr.appendLine("    int32_t ${p.name}\$len;")
+            val fn = privPrefix(p) + p.name
+            hdr.appendLine("    ${cTypeStr(resolved)} ${fn};")
+            hdr.appendLine("    int32_t ${fn}\$len;")
         } else {
-            hdr.appendLine("    ${cType(pType)} ${p.name};${ptrNullComment(resolved)}")
+            val fn = privPrefix(p) + p.name
+            hdr.appendLine("    ${cType(pType)} ${fn};${ptrNullComment(resolved)}")
         }
     }
     hdr.appendLine("} ${cName}_t;")
@@ -1004,10 +1008,12 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
             flushPreStmts("    ")
             if (isArrayType(resolved) && sizeAnn != null) {
                 val elemType = arrayElementCType(resolved)
-                impl.appendLine("    memcpy($cName.${p.name}, $expr, $sizeAnn * sizeof($elemType));")
-                impl.appendLine("    $cName.${p.name}\$len = ${sizeAnn};")
+                val fn = privPrefix(p) + p.name
+                impl.appendLine("    memcpy($cName.$fn, $expr, $sizeAnn * sizeof($elemType));")
+                impl.appendLine("    $cName.${fn}\$len = ${sizeAnn};")
             } else {
-                impl.appendLine("    $cName.${p.name} = $expr;")
+                val fn = privPrefix(p) + p.name
+                impl.appendLine("    $cName.$fn = $expr;")
             }
         }
     }
@@ -1529,14 +1535,14 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     // Emit deferred blocks at end unless last stmt was a return (already emitted there)
     val lastStmt = f.body?.stmts?.lastOrNull()
     if (lastStmt !is ReturnStmt) emitDeferredBlocks("    ")
-    if (isMain && memTrack) {
-        impl.appendLine("    fflush(stdout);")
-        impl.appendLine("    ktc_mem_report();")
-    }
     if (isMain && objectsWithDispose.isNotEmpty()) {
         for (cName in objectsWithDispose.distinct()) {
             impl.appendLine("    ${cName}_dispose();")
         }
+    }
+    if (isMain && memTrack) {
+        impl.appendLine("    fflush(stdout);")
+        impl.appendLine("    ktc_mem_report();")
     }
     if (isMain) impl.appendLine("    return 0;")
     else if (returnsNullable && lastStmt !is ReturnStmt) {

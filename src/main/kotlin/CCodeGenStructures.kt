@@ -56,7 +56,8 @@ internal data class EnumInfo(val name: String, val entries: List<String>)
 internal data class ObjInfo(
     val name: String,
     val props: List<Pair<String, TypeRef>>,
-    val methods: MutableList<FunDecl> = mutableListOf()
+    val methods: MutableList<FunDecl> = mutableListOf(),
+    val privateProps: Set<String> = emptySet()
 )
 
 internal data class FunSig(val params: List<Param>, val returnType: TypeRef?)
