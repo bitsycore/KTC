@@ -1164,4 +1164,32 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             is PropDecl  -> { topProps.add(d.name); if (!d.mutable) valTopProps.add(d.name); if (d.annotations.any { it.name == "Tls" }) tlsProps.add(d.name) }
         }
     }
+
+    /**
+     * Returns the method name with overload type suffixes if multiple methods share the same name.
+     * e.g. `digest(buff: @Ptr ByteArray)` → `digest`, `digest(buff: @Ptr ByteArray, offset: Int, length: Int)` → `digest_ByteArray_Int_Int`
+     */
+    internal fun methodName(f: FunDecl, siblings: List<FunDecl>): String {
+        val base = f.name
+        val overloads = siblings.filter { it.name == base }
+        if (overloads.size <= 1) return base
+        val types = f.params.map { resolveTypeName(it.type).removeSuffix("*") }
+        return "${base}With${types.joinToString("_")}"
+    }
+
+    /**
+     * Find the matching overloaded method from the given siblings that best matches the call args.
+     * Returns the matched FunDecl, or null.
+     */
+    internal fun findOverload(name: String, args: List<Arg>, siblings: List<FunDecl>): FunDecl? {
+        val candidates = siblings.filter { it.name == name }
+        if (candidates.size <= 1) return candidates.firstOrNull()
+        // Match by exact arg count (after accounting for vararg/ptr expansion)
+        for (c in candidates) {
+            val nonDefaultParams = c.params.count { it.default == null }
+            val totalParams = c.params.size
+            if (args.size in nonDefaultParams..totalParams) return c
+        }
+        return candidates.firstOrNull()
+    }
 }

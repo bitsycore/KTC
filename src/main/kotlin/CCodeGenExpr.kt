@@ -968,7 +968,93 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 
     val expandedArgs = expandCallArgs(filledArgs, sig?.params)
 
-    // If function returns sized array (@Size(N) Array<T>), allocate temp and pass as out-param
+    // Value-nullable functions now return Optional directly; no hoisting needed.
+    // The variable declaration code handles wrapping for already-Opt values.
+
+    // Inside a class method or extension: bare method call resolves to $self.method()
+    if (currentClass != null) {
+        val ci = classes[currentClass]
+        val methodDecl = ci?.let { findOverload(name, args, it.methods) }
+        if (methodDecl != null) {
+            val overloadedName = methodName(methodDecl, ci!!.methods)
+            val fnName = if (methodDecl.isPrivate) "PRIV_$overloadedName" else overloadedName
+            // Re-expand args with the method's actual param types (ensures $len is added for @Ptr arrays)
+            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
+            val selfArg = if (selfIsPointer) "\$self" else "&\$self"
+            val allArgs = if (expandedArgs2.isEmpty()) selfArg else "$selfArg, $expandedArgs2"
+            // @Size(N) return → out-parameter ABI
+            if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
+                val retType = resolveTypeName(methodDecl.returnType)
+                val elemCType = arrayElementCType(retType)
+                val size = getSizeAnnotation(methodDecl.returnType)!!
+                val t = tmp()
+                preStmts += "$elemCType ${t}[$size];"
+                preStmts += "const int32_t ${t}\$len = $size;"
+                preStmts += "${pfx(currentClass!!)}_$fnName($allArgs, $t);"
+                defineVar(t, retType)
+                return t
+            }
+            return "${pfx(currentClass!!)}_$fnName($allArgs)"
+        }
+        // Inside a class nested within an object: resolve to parent object's method
+        val parentObj = currentClass?.substringBefore('$')
+        if (parentObj != null && objects.containsKey(parentObj)) {
+            val methodDecl = objects[parentObj]?.let { findOverload(name, args, it.methods) }
+            if (methodDecl != null) {
+                val overloadedName = methodName(methodDecl, objects[parentObj]!!.methods)
+                val fnName = if (methodDecl.isPrivate) "PRIV_$overloadedName" else overloadedName
+                val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+                val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
+                // @Size(N) return → out-parameter ABI
+                if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
+                    val retType = resolveTypeName(methodDecl.returnType)
+                    val elemCType = arrayElementCType(retType)
+                    val size = getSizeAnnotation(methodDecl.returnType)!!
+                    val t = tmp()
+                    preStmts += "$elemCType ${t}[$size];"
+                    preStmts += "const int32_t ${t}\$len = $size;"
+                    preStmts += "${pfx(parentObj)}_$fnName($expandedArgs2, $t);"
+                    defineVar(t, retType)
+                    return t
+                }
+                return "${pfx(parentObj)}_$fnName($expandedArgs2)"
+            }
+        }
+    }
+
+    // Inside an object method: bare method call resolves to object's method
+    if (currentObject != null) {
+        val oi = objects[currentObject]
+        val methodDecl = oi?.let { findOverload(name, args, it.methods) }
+        if (methodDecl != null) {
+            val overloadedName = methodName(methodDecl, oi.methods)
+            val fnName = if (methodDecl.isPrivate) "PRIV_$overloadedName" else overloadedName
+            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
+            // @Size(N) return → out-parameter ABI
+            if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
+                val retType = resolveTypeName(methodDecl.returnType)
+                val elemCType = arrayElementCType(retType)
+                val size = getSizeAnnotation(methodDecl.returnType)!!
+                val t = tmp()
+                preStmts += "$elemCType ${t}[$size];"
+                preStmts += "const int32_t ${t}\$len = $size;"
+                preStmts += "${pfx(currentObject!!)}_$fnName($expandedArgs2, $t);"
+                defineVar(t, retType)
+                return t
+            }
+            return "${pfx(currentObject!!)}_$fnName($expandedArgs2)"
+        }
+    }
+
+    // Inside an object method but method not found in object directly — use object prefix anyway
+    // for private/internal calls that were registered in funSigs
+    if (currentObject != null && funSigs.containsKey(name)) {
+        return "${pfx(currentObject!!)}_${name}($expandedArgs)"
+    }
+
+    // Top-level @Size(N) return → out-parameter ABI
     if (sig?.returnType != null && isSizedArrayTypeRef(sig.returnType)) {
         val retType = resolveTypeName(sig.returnType)
         val elemCType = arrayElementCType(retType)
@@ -980,53 +1066,6 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         preStmts += "${pfx(name)}($allArgs);"
         defineVar(t, retType)
         return t
-    }
-
-    // Value-nullable functions now return Optional directly; no hoisting needed.
-    // The variable declaration code handles wrapping for already-Opt values.
-
-    // Inside a class method or extension: bare method call resolves to $self.method()
-    if (currentClass != null) {
-        val ci = classes[currentClass]
-        val methodDecl = ci?.methods?.find { it.name == name }
-        if (methodDecl != null) {
-            val fnName = if (methodDecl.isPrivate) "PRIV_${name}" else name
-            // Re-expand args with the method's actual param types (ensures $len is added for @Ptr arrays)
-            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
-            val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
-            val selfArg = if (selfIsPointer) "\$self" else "&\$self"
-            val allArgs = if (expandedArgs2.isEmpty()) selfArg else "$selfArg, $expandedArgs2"
-            return "${pfx(currentClass!!)}_$fnName($allArgs)"
-        }
-        // Inside a class nested within an object: resolve to parent object's method
-        val parentObj = currentClass?.substringBefore('$')
-        if (parentObj != null && objects.containsKey(parentObj)) {
-            val methodDecl = objects[parentObj]!!.methods.find { it.name == name }
-            if (methodDecl != null) {
-                val fnName = if (methodDecl.isPrivate) "PRIV_${name}" else name
-                val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
-                val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
-                return "${pfx(parentObj)}_$fnName($expandedArgs2)"
-            }
-        }
-    }
-
-    // Inside an object method: bare method call resolves to object's method
-    if (currentObject != null) {
-        val oi = objects[currentObject]
-        val methodDecl = oi?.methods?.find { it.name == name }
-        if (methodDecl != null) {
-            val fnName = if (methodDecl.isPrivate) "PRIV_${name}" else name
-            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
-            val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
-            return "${pfx(currentObject!!)}_$fnName($expandedArgs2)"
-        }
-    }
-
-    // Inside an object method but method not found in object directly — use object prefix anyway
-    // for private/internal calls that were registered in funSigs
-    if (currentObject != null && funSigs.containsKey(name)) {
-        return "${pfx(currentObject!!)}_${name}($expandedArgs)"
     }
 
     return "${pfx(name)}($expandedArgs)"
@@ -1400,7 +1439,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         // If class defines the method, delegate to it
         val classHasMethod = classes[pointerBase]?.methods?.any { it.name == method } == true
         if (classHasMethod) {
-            val methodDecl = classes[pointerBase]?.methods?.find { it.name == method }
+            val methodDecl = classes[pointerBase]?.let { findOverload(method, args, it.methods) }
             val isExt = methodDecl?.receiver != null
             val recvArg = if (isExt) "(*$recv)" else recv
             val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
@@ -1462,7 +1501,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             preStmts += "${pfx(recvType)}* $t = &$recv;"
             return t
         }
-        val methodDecl = classes[recvType]?.methods?.find { it.name == method }
+        val methodDecl = classes[recvType]?.let { findOverload(method, args, it.methods) }
         val isExtFun = methodDecl?.receiver != null
         val nullableRecv = hasNullableReceiverExt(recvType, method)
         val selfArg = if (nullableRecv) {
@@ -1484,7 +1523,8 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             expandCallArgs(filled, methodDecl.params)
         } else argStr
         val allArgs = if (expandedArgs.isEmpty()) selfArg else "$selfArg, $expandedArgs"
-        val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_${method}" else method
+        val overloadedName = methodDecl?.let { methodName(it, classes[recvType]!!.methods) } ?: method
+        val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_$overloadedName" else overloadedName
         // @Size(N) return → out-parameter ABI
         if (methodDecl?.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
             val retType = resolveTypeName(methodDecl.returnType)
@@ -1505,7 +1545,8 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
     // Object method
     if (recvType != null && objects.containsKey(recvType)) {
-        val vObjMethod = objects[recvType]?.methods?.find { it.name == method }
+        val vObjMethod = objects[recvType]?.let { findOverload(method, args, it.methods) }
+        val overloadedMethod = vObjMethod?.let { methodName(it, objects[recvType]!!.methods) } ?: method
         val vObjArgs = if (vObjMethod != null) {
             val filled = fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default })
             expandCallArgs(filled, vObjMethod.params)
@@ -1518,17 +1559,18 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
             preStmts += "const int32_t ${t}\$len = $size;"
-            preStmts += "${pfx(recvType)}_${method}($vObjArgs, $t);"
+            preStmts += "${pfx(recvType)}_$overloadedMethod($vObjArgs, $t);"
             defineVar(t, retType)
             return t
         }
-        return "${pfx(recvType)}_${method}($vObjArgs)"
+        return "${pfx(recvType)}_$overloadedMethod($vObjArgs)"
     }
     // Companion object method: Foo.bar() where Foo has a companion object
     val vDotObjName = (dot.obj as? NameExpr)?.name
     if (vDotObjName != null && classCompanions.containsKey(vDotObjName)) {
         val vCompanionName = classCompanions[vDotObjName]!!
-        val vCompMethod = objects[vCompanionName]?.methods?.find { it.name == method }
+        val vCompMethod = objects[vCompanionName]?.let { findOverload(method, args, it.methods) }
+        val overloadedComp = vCompMethod?.let { methodName(it, objects[vCompanionName]!!.methods) } ?: method
         val vCompArgs = if (vCompMethod != null) {
             val filled = fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default })
             expandCallArgs(filled, vCompMethod.params)
@@ -1541,11 +1583,11 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
             preStmts += "const int32_t ${t}\$len = $size;"
-            preStmts += "${pfx(vCompanionName)}_${method}($vCompArgs, $t);"
+            preStmts += "${pfx(vCompanionName)}_$overloadedComp($vCompArgs, $t);"
             defineVar(t, retType)
             return t
         }
-        return "${pfx(vCompanionName)}_${method}($vCompArgs)"
+        return "${pfx(vCompanionName)}_$overloadedComp($vCompArgs)"
     }
     // Enum → static method/field access
     if (recvType != null && enums.containsKey(recvType)) {

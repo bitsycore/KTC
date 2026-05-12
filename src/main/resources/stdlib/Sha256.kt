@@ -71,10 +71,14 @@ object Sha256 {
 
     fun new(): Context = Context()
 
-    fun digest(buff: @Ptr ByteArray, offset: Int = 0, length: Int = buff.size): @Size(32) ByteArray {
+    fun digest(buff: @Ptr ByteArray, offset: Int, length: Int): @Size(32) ByteArray {
         val ctx = new()
         ctx.update(buff, offset, length)
         return ctx.finalizeHash()
+    }
+
+    fun digest(buff: @Ptr ByteArray): @Size(32) ByteArray {
+        return digest(buff, 0, buff.size)
     }
 
     class Context() {
@@ -95,7 +99,11 @@ object Sha256 {
         private var bufferSize = 0
         private var totalBytes = 0L
 
-        fun update(buff: @Ptr ByteArray, offset: Int = 0, length: Int = buff.size) {
+        fun update(buff: @Ptr ByteArray) {
+            return update(buff, 0, buff.size)
+        }
+
+        fun update(buff: @Ptr ByteArray, offset: Int, length: Int) {
             var off = offset
             var len = length
 

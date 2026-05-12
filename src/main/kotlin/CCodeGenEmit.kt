@@ -445,7 +445,9 @@ internal fun CCodeGen.emitDataClassToString(ktName: String, cName: String, ci: C
 
 internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boolean = false) {
     val cClass = pfx(className)
-    val methodName = if (f.isPrivate) "PRIV_${f.name}" else f.name
+    val siblings = classes[className]?.methods ?: emptyList()
+    val overloadedName = methodName(f, siblings)
+    val methodName = if (f.isPrivate) "PRIV_$overloadedName" else overloadedName
 
     val paramSig = f.params.joinToString(", ") { p -> "${p.name}: ${typeRefToStr(p.type)}" }
     val retSig = f.returnType?.let { ": ${typeRefToStr(it)}" } ?: ""
@@ -1070,7 +1072,8 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
                 else -> "void"
             }
             val fwdParams = expandParams(m.params)
-            impl.appendLine("$cRet ${cName}_PRIV_${m.name}($fwdParams);")
+            val overloadedName = methodName(m, methods)
+            impl.appendLine("$cRet ${cName}_PRIV_$overloadedName($fwdParams);")
         }
     }
 
@@ -1097,7 +1100,8 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
             retResolved.isNotEmpty() -> cTypeStr(retResolved)
             else -> "void"
         }
-        val fnName = if (m.isPrivate) "PRIV_${m.name}" else m.name
+        val overloadedName = methodName(m, methods)
+        val fnName = if (m.isPrivate) "PRIV_$overloadedName" else overloadedName
         val baseParams = expandParams(m.params)
         val extraParam = when {
             returnsSizedArray -> {
