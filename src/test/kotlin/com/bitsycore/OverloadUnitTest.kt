@@ -9,14 +9,17 @@ class OverloadUnitTest : TranspilerTestBase() {
 
     // ── Object overloads ───────────────────────────────────────────
 
-    @Test fun objectOverloadNoArgGetsNoArg() {
+    @Test fun objectOverloadNoArgKeepsPlainName() {
         val v = transpileMain("", """
             object O {
                 fun greet(): String = "hi"
                 fun greet(name: String): String = name
             }
         """)
-        v.headerContains("O_greetNoArg")
+        // No-arg overload keeps plain name, no suffix
+        v.headerContains("test_Main_O_greet();")
+        // Parameterized overload gets With suffix
+        v.headerContains("test_Main_O_greetWithString")
     }
 
     @Test fun objectOverloadWithTypeSuffix() {
@@ -48,9 +51,10 @@ class OverloadUnitTest : TranspilerTestBase() {
                 fun inc(by: Int, times: Int) {}
             }
         """)
-        v.headerContains("O_incNoArg")
-        v.headerContains("O_incWithInt")
-        v.headerContains("O_incWithInt_Int")
+        // No-arg keeps plain name
+        v.headerContains("test_Main_O_inc();")
+        v.headerContains("test_Main_O_incWithInt")
+        v.headerContains("test_Main_O_incWithInt_Int")
     }
 
     @Test fun objectSingleMethodNoSuffix() {
@@ -103,7 +107,7 @@ class OverloadUnitTest : TranspilerTestBase() {
                 private fun helper(x: Int) {}
             }
         """)
-        v.sourceContains("O_PRIV_helperNoArg")
+        v.sourceContains("O_PRIV_helper()")
         v.sourceContains("O_PRIV_helperWithInt")
     }
 
@@ -115,8 +119,8 @@ class OverloadUnitTest : TranspilerTestBase() {
             fun doIt() {}
             fun doIt(x: Int) {}
         """)
-        // Top-level overloads should also get suffixes
-        v.headerContains("test_doItNoArg")
+        // No-arg keeps plain name
+        v.headerContains("test_doIt()")
         v.headerContains("test_doItWithInt")
     }
 

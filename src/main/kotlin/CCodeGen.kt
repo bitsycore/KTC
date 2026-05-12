@@ -1174,7 +1174,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val overloads = siblings.filter { it.name == base }
         if (overloads.size <= 1) return base
         val types = f.params.map { resolveTypeName(it.type).removeSuffix("*") }
-        if (types.isEmpty()) return "${base}NoArg"
+        if (types.isEmpty()) return base   // no-arg keeps plain name
         return "${base}With${types.joinToString("_")}"
     }
 

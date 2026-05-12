@@ -9,7 +9,7 @@ fun testNextInt() {
 fun testNextIntBetween() {
     println("--- nextIntBetween ---")
     for (i in 0 until 5) {
-        val v = Random.nextIntBetween(10, 20)
+        val v = Random.nextInt(10, 20)
         println("nextIntBetween(10, 20) = $v")
         if (v < 10 || v >= 20) c.exit(1)
     }
@@ -23,7 +23,7 @@ fun testNextLong() {
 
 fun testNextLongBetween() {
     println("--- nextLongBetween ---")
-    println("nextLongBetween(0L, 100L) = ${Random.nextLongBetween(0L, 100L)}")
+    println("nextLongBetween(0L, 100L) = ${Random.nextLong(0L, 100L)}")
 }
 
 fun testNextFloat() {
@@ -43,7 +43,7 @@ fun testNextDouble() {
 fun testNextDoubleBetween() {
     println("--- nextDoubleBetween ---")
     for (i in 0 until 5) {
-        println("nextDoubleBetween(5.0, 10.0) = ${Random.nextDoubleBetween(5.0, 10.0)}")
+        println("nextDoubleBetween(5.0, 10.0) = ${Random.nextDouble(5.0, 10.0)}")
     }
 }
 

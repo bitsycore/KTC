@@ -41,7 +41,7 @@ object Random {
 	Returns a random Int in [from, until).
 	Matches Kotlin's Random.nextInt(from: Int, until: Int).
 	*/
-	fun nextIntBetween(from: Int, until: Int): Int {
+	fun nextInt(from: Int, until: Int): Int {
 		return from + c.ktc_rand(state.ptr(), inc.ptr()) % (until - from)
 	}
 
@@ -64,7 +64,7 @@ object Random {
 	Returns a random Long in [from, until).
 	Matches Kotlin's Random.nextLong(from: Long, until: Long).
 	*/
-	fun nextLongBetween(from: Long, until: Long): Long {
+	fun nextLong(from: Long, until: Long): Long {
 		val vA: Long = c.ktc_rand(state.ptr(), inc.ptr()).toLong()
 		val vB: Long = c.ktc_rand(state.ptr(), inc.ptr()).toLong()
 		val vRaw: Long = vA * (c.KTC_RAND_MAX.toLong() + 1L) + vB
@@ -91,7 +91,7 @@ object Random {
 	Returns a random Double in [from, until).
 	Matches Kotlin's Random.nextDouble(from: Double, until: Double).
 	*/
-	fun nextDoubleBetween(from: Double, until: Double): Double {
+	fun nextDouble(from: Double, until: Double): Double {
 		val vRaw: Double = c.ktc_rand(state.ptr(), inc.ptr()).toDouble() / (c.KTC_RAND_MAX.toDouble() + 1.0)
 		return from + vRaw * (until - from)
 	}
