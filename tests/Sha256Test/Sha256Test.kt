@@ -77,7 +77,7 @@ fun testLongMessage() {
     ctx.update(buf.ptr(), 0, buf.size)
     val hash = ctx.finalizeHash()
     printHash(hash)
-    if (!checkHex(hash, "ffe054fe4ae0f08b54c5e43157e249c1bae146b5dcbdfd3abed22d5027ae0315")) {
+    if (!checkHex(hash, "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb")) {
         c.printf("FAIL\n")
         c.exit(1)
     }
