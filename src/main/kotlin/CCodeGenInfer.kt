@@ -147,12 +147,6 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
             val c = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[2]) else inferExprType(e.args.getOrNull(2)?.expr) ?: "Int"
             return "Triple_${a}_${b}_${c}"
         }
-        // Tuple constructor (intrinsic, indefinite arity)
-        if (name == "Tuple" && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple")) {
-            val types = if (e.typeArgs.size == e.args.size) e.typeArgs.map { resolveTypeName(it) }
-                else e.args.map { inferExprType(it.expr) ?: "Int" }
-            return "Tuple_${types.joinToString("_")}"
-        }
         // Generic class constructor: MyList<Int>(8) → "MyList_Int"
         // Apply typeSubst so type params resolve inside generic function bodies
         if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
@@ -511,14 +505,6 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
                 else -> null
             }
         }
-    }
-    if (recvType.startsWith("Tuple_")) {
-        val components = tupleTypeComponents[recvType]
-        if (components != null && e.name.startsWith("component")) {
-            val idx = e.name.removePrefix("component").toIntOrNull()
-            if (idx != null && idx in components.indices) return components[idx]
-        }
-        return null
     }
     // StringBuffer field types
     if (recvType == "ktc_StrBuf" || recvType == "StringBuffer") {

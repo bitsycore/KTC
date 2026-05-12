@@ -798,17 +798,6 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         return "(ktc_Triple_${a}_${b}_${c}){${genExpr(args[0].expr)}, ${genExpr(args[1].expr)}, ${genExpr(args[2].expr)}}"
     }
 
-    // Tuple constructor (intrinsic, indefinite arity)
-    if (name == "Tuple" && args.isNotEmpty() && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple")) {
-        val types = if (e.typeArgs.size == args.size) e.typeArgs.map { resolveTypeName(it) }
-            else args.map { inferExprType(it.expr) ?: "Int" }
-        val key = "Tuple_${types.joinToString("_")}"
-        tupleTypeComponents[key] = types
-        ensureTupleType(types)
-        val fields = args.map { genExpr(it.expr) }.joinToString(", ")
-        return "(ktc_${key}){$fields}"
-    }
-
     // StringBuffer constructor (intrinsic — only when no user-defined class named StringBuffer)
     if (name == "StringBuffer" && args.size == 2
         && !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer")) {

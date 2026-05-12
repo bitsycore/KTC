@@ -72,10 +72,9 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 
     /** Convert internal type name to Kotlin display name: "Wrapper_String" → "Wrapper<String>" */
     internal fun ktDisplayName(internal: String): String {
-        // Pair/Triple/Tuple intrinsics
+        // Pair/Triple intrinsics
         pairTypeComponents[internal]?.let { return "Pair<${it.first}, ${it.second}>" }
         tripleTypeComponents[internal]?.let { return "Triple<${it.first}, ${it.second}, ${it.third}>" }
-        tupleTypeComponents[internal]?.let { types -> return "Tuple<${types.joinToString(", ")}>" }
         // Generic class instantiation: find base name and split by _
         for (baseName in genericClassDecls.keys) {
             if (internal.startsWith("${baseName}_")) {
@@ -158,10 +157,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     // Intrinsic Triple<A,B,C> types
     internal val tripleTypeComponents = mutableMapOf<String, Triple<String, String, String>>()
     internal val emittedTripleTypes = mutableSetOf<String>()
-
-    // Intrinsic Tuple<...> types (indefinite arity)
-    internal val tupleTypeComponents = mutableMapOf<String, List<String>>()
-    internal val emittedTupleTypes = mutableSetOf<String>()
 
 
     // ── Generics (monomorphization) ──────────────────────────────────
@@ -631,7 +626,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             sb.appendLine()
         }
 
-        // ── Pair / Triple / Tuple types ──
+        // ── Pair / Triple types ──
         if (pairTypeComponents.isNotEmpty()) {
             sb.appendLine("── Pair Types ──")
             for ((key, pair) in pairTypeComponents) {

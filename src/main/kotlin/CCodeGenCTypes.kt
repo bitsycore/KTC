@@ -34,7 +34,7 @@ package com.bitsycore
  *             [optCTypeName], [optNone], [optSome],
  *             [isValueNullableType], [isFuncType], [parseFuncType], [cFuncPtrDecl],
  *             [defaultVal], [hasSizeAnnotation], [getSizeAnnotation],
- *             [ensurePairType], [ensureTripleType], [ensureTupleType]
+ *             [ensurePairType], [ensureTripleType]
  *
  *   (printf) [printfFmt], [printfArg], [escapeC], [escapeStr]
  *
@@ -218,12 +218,10 @@ internal fun CCodeGen.cTypeStr(t: String): String = when {
             if (classArrayTypes.contains(elem) || enums.containsKey(elem)) return "${pfx(elem)}*"
             if (elem.startsWith("Pair_")) return "ktc_${elem}*"
             if (elem.startsWith("Triple_")) return "ktc_${elem}*"
-            if (elem.startsWith("Tuple_")) return "ktc_${elem}*"
         }
         // Pair types: "Pair_Int_String" → "ktc_Pair_Int_String"
         if (t.startsWith("Pair_")) return "ktc_$t"
         if (t.startsWith("Triple_")) return "ktc_$t"
-        if (t.startsWith("Tuple_")) return "ktc_$t"
         pfx(t)   // class/enum/object type
     }
 }
@@ -241,15 +239,6 @@ internal fun CCodeGen.ensureTripleType(a: String, b: String, c: String) {
     if (key !in emittedTripleTypes) {
         emittedTripleTypes.add(key)
         hdr.appendLine("typedef struct { ${cTypeStr(a)} first; ${cTypeStr(b)} second; ${cTypeStr(c)} third; } ktc_Triple_${a}_${b}_${c};")
-    }
-}
-
-internal fun CCodeGen.ensureTupleType(types: List<String>) {
-    val key = types.joinToString("_")
-    if (key !in emittedTupleTypes) {
-        emittedTupleTypes.add(key)
-        val fields = types.mapIndexed { i, t -> "${cTypeStr(t)} component$i;" }.joinToString(" ")
-        hdr.appendLine("typedef struct { $fields } ktc_Tuple_${key};")
     }
 }
 
@@ -336,15 +325,6 @@ internal fun CCodeGen.resolveTypeNameInner(t: TypeRef): String {
         tripleTypeComponents["Triple_${a}_${b}_${c}"] = Triple(a, b, c)
         ensureTripleType(a, b, c)
         return "Triple_${a}_${b}_${c}"
-    }
-    // Intrinsic Tuple<...> — indefinite arity
-    if (t.name == "Tuple" && t.typeArgs.isNotEmpty()
-        && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple") && !genericIfaceDecls.containsKey("Tuple")) {
-        val types = t.typeArgs.map { resolveTypeName(it) }
-        val key = "Tuple_${types.joinToString("_")}"
-        tupleTypeComponents[key] = types
-        ensureTupleType(types)
-        return key
     }
     // Intrinsic StringBuffer → ktc_StrBuf (only when no user-defined class named StringBuffer)
     if (t.name == "StringBuffer" && t.typeArgs.isEmpty()

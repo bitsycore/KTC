@@ -34,17 +34,5 @@ fun main() {
     val t2 = Triple<Boolean, Int, String>(false, 42, "world")
     println("Triple2: ${t2.first}, ${t2.second}, ${t2.third}")
 
-    // Tuple
-    val tu = Tuple(1, "two", 3.0f)
-    println("Tuple: ${tu.component0}, ${tu.component1}, ${tu.component2}")
-
-    // Tuple with type args
-    val tu2 = Tuple<Int, Boolean>(99, true)
-    println("Tuple2: ${tu2.component0}, ${tu2.component1}")
-
-    // Tuple with generic type args
-    val tu3 = Tuple(Wrapper("Hello"), Wrapper(true))
-    println("Tuple3: ${tu3.component0}, ${tu3.component1}")
-
     println("done")
 }

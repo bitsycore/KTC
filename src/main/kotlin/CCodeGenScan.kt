@@ -816,15 +816,4 @@ internal fun CCodeGen.matchTypeParam(paramType: TypeRef, argType: String, typePa
             if (names[2] in typeParams) subst[names[2]] = components.third
         }
     }
-    // Intrinsic Tuple<...> param decomposition
-    if (paramType.name == "Tuple" && paramType.typeArgs.isNotEmpty()
-        && !classes.containsKey("Tuple") && !genericClassDecls.containsKey("Tuple")) {
-        val baseType = argType.trimEnd('*', '?')
-        val components = tupleTypeComponents[baseType]
-        if (components != null) {
-            for ((i, name) in paramType.typeArgs.map { it.name }.withIndex()) {
-                if (name in typeParams && i < components.size) subst[name] = components[i]
-            }
-        }
-    }
 }
