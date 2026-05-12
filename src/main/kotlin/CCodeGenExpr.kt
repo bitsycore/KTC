@@ -1210,6 +1210,9 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "toUInt"   -> return "((ktc_UInt)($recv))"
         "toULong"  -> return "((ktc_ULong)($recv))"
         "toChar"   -> return "((ktc_Char)($recv))"
+        "inv" -> {
+            return "(~($recv))"
+        }
         // Nullable string-to-number: toIntOrNull, toLongOrNull, toFloatOrNull, toDoubleOrNull
         "toIntOrNull" -> if (recvType == "String") {
             val t = tmp()
