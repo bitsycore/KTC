@@ -1,8 +1,5 @@
 #include "ktc_intrinsic.h"
 
-static ktc_ULong state = 0x853c49e6748fea9bULL;
-static ktc_ULong inc   = 0xda3e39cb94b95bdbULL;
-
 void ktc_srand(
     ktc_ULong* state,
     ktc_ULong* inc,
