@@ -1505,6 +1505,14 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
     }
 
+    // .ptr() for value types (primitives, enums, etc.) — take address
+    if (method == "ptr" && recvType != null) {
+        val cType = cTypeStr(recvType)
+        val t = tmp()
+        preStmts += "$cType* $t = &$recv;"
+        return t
+    }
+
     return "$recv.$method($argStr)"   // fallback
 }
 

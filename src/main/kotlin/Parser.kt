@@ -648,7 +648,7 @@ class Parser(private val tokens: List<Token>) {
                 // Strip u/U and L in any order (42uL, 42UL, 42Lu are all valid)
                 raw = raw.replace("u", "").replace("U", "").replace("L", "")
                 val hex = raw.startsWith("0x") || raw.startsWith("0X")
-                val value = if (hex) raw.substring(2).toLong(16) else raw.toLong()
+                val value = if (hex) raw.substring(2).toULong(16) else raw.toULong()
                 ULongLit(value, hex)
             }
             at(TokenType.FLOAT_LIT)  -> FloatLit(advance().value.removeSuffix("f").removeSuffix("F").toDouble())

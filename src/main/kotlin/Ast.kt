@@ -142,7 +142,7 @@ sealed class Expr
 data class IntLit(val value: Long, val hex: Boolean = false) : Expr()
 data class LongLit(val value: Long, val hex: Boolean = false) : Expr()
 data class UIntLit(val value: Long, val hex: Boolean = false) : Expr()
-data class ULongLit(val value: Long, val hex: Boolean = false) : Expr()
+data class ULongLit(val value: ULong, val hex: Boolean = false) : Expr()
 data class DoubleLit(val value: Double) : Expr()
 data class FloatLit(val value: Double) : Expr()
 data class BoolLit(val value: Boolean) : Expr()

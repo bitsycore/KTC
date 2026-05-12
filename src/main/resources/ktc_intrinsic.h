@@ -45,9 +45,22 @@ void ktc_time_sleep_ms(ktc_UInt ms);
 /* ═══════════════════════════ random ═══════════════════════════ */
 #define KTC_RAND_MAX UINT32_MAX  // 4294967295
 
-void ktc_srand(ktc_ULong seed);
-ktc_UInt ktc_rand(void);
-ktc_UInt ktc_rand_range(ktc_UInt bound);
+void ktc_srand(
+    ktc_ULong* state,
+    ktc_ULong* inc,
+    ktc_ULong seed
+);
+
+ktc_UInt ktc_rand(
+    ktc_ULong* state,
+    ktc_ULong* inc
+);
+
+ktc_UInt ktc_rand_range(
+    ktc_ULong* state,
+    ktc_ULong* inc,
+    ktc_UInt bound
+);
 
 /* ═══════════════════════════ alloca compat ═══════════════════════════ */
 #if defined(_MSC_VER)

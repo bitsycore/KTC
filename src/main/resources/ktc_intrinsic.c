@@ -3,29 +3,48 @@
 static ktc_ULong state = 0x853c49e6748fea9bULL;
 static ktc_ULong inc   = 0xda3e39cb94b95bdbULL;
 
-void ktc_srand(ktc_ULong seed) {
-    state = 0;
-    inc = (seed << 1u) | 1u;
-    ktc_rand();
-    state += seed;
-    ktc_rand();
+void ktc_srand(
+    ktc_ULong* state,
+    ktc_ULong* inc,
+    ktc_ULong seed
+) {
+    *state = 0;
+    *inc = (seed << 1u) | 1u;
+
+    ktc_rand(state, inc);
+
+    *state += seed;
+
+    ktc_rand(state, inc);
 }
 
-ktc_UInt ktc_rand(void) {
-    ktc_ULong oldstate = state;
-    state = oldstate * 6364136223846793005ULL + inc;
+ktc_UInt ktc_rand(
+    ktc_ULong* state,
+    ktc_ULong* inc
+) {
+    ktc_ULong oldstate = *state;
 
-    ktc_UInt xorshifted = (ktc_UInt)(((oldstate >> 18u) ^ oldstate) >> 27u);
+    *state = oldstate * 6364136223846793005ULL + *inc;
+
+    ktc_UInt xorshifted =
+        (ktc_UInt)(((oldstate >> 18u) ^ oldstate) >> 27u);
+
     ktc_UInt rot = oldstate >> 59u;
 
-    return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
+    return (xorshifted >> rot) |
+           (xorshifted << ((-rot) & 31));
 }
 
-ktc_UInt ktc_rand_range(ktc_UInt bound) {
+ktc_UInt ktc_rand_range(
+    ktc_ULong* state,
+    ktc_ULong* inc,
+    ktc_UInt bound
+) {
     ktc_UInt threshold = -bound % bound;
 
     for (;;) {
-        ktc_UInt r = ktc_rand();
+        ktc_UInt r = ktc_rand(state, inc);
+
         if (r >= threshold)
             return r % bound;
     }
