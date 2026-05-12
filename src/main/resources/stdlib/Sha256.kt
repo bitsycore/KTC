@@ -71,6 +71,12 @@ object Sha256 {
 
     fun new(): Context = Context()
 
+    fun digest(buff: @Ptr ByteArray, offset: Int = 0, length: Int = buff.size): @Size(32) ByteArray {
+        val ctx = new()
+        ctx.update(buff, offset, length)
+        return ctx.finalizeHash()
+    }
+
     class Context() {
         private val state: @Size(8) UIntArray = uintArrayOf(
             0x6a09e667U,
