@@ -30,25 +30,20 @@ fun main() {
     println(deepAsQuestion("test"))
     println(deepAsQuestion(1.0f))
 
-    // ── Any? nullable ──
     checkNullable(42)
     checkNullable(null)
 
-    // inlined nullable check (no function return)
     val a: Any? = 42
     val b: Any? = null
-    if (a != null) { println("a: not null") }
-    if (b == null) { println("b is null") }
+    if (a != null) { println("a: not null") } else { error("FAIL a null") }
+    if (b == null) { println("b is null") } else { error("FAIL b not null") }
 
-    // ── check with String ──
     val c: Any? = "hello"
     checkNullable(c)
 
-    // ── nested is / !is ──
     val x: Any = "example"
-    if (x !is Int)     { println("not int") }
-    if (x !is Boolean) { println("not bool") }
-    if (x is String)   { println("is string: $x") }
+    if (x is String) { println("is string: $x") } else { error("FAIL is String") }
+    if (x !is Int) { println("not int") } else { error("FAIL not int") }
 
-    println("done")
+    println("ALL OK")
 }

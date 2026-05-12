@@ -16,28 +16,17 @@ class A {
 }
 
 fun main() {
-    var ok = true
-
-    // Simple nested
     val inner = Outer.Inner(42)
-    if (inner.x != 42) { c.printf("FAIL: simple nested\n"); ok = false }
+    if (inner.x != 42) error("FAIL simple nested x=${inner.x}")
 
-    // Nested with String
     val h = Outer.Helper("test")
-    if (h.name != "test") { c.printf("FAIL: nested string\n"); ok = false }
+    if (h.name != "test") error("FAIL nested string name=${h.name}")
 
-    // Nested in data class
     val np = Vec2.NestedPair(1, 2)
-    if (np.a != 1 || np.b != 2) { c.printf("FAIL: data class nested\n"); ok = false }
+    if (np.a != 1 || np.b != 2) error("FAIL data class nested a=${np.a} b=${np.b}")
 
-    // Deeply nested
     val deep = A.B.C(99)
-    if (deep.v != 99) { c.printf("FAIL: deeply nested\n"); ok = false }
+    if (deep.v != 99) error("FAIL deeply nested v=${deep.v}")
 
-    if (ok) {
-        c.printf("NestedClassTest: PASSED\n")
-    } else {
-        c.printf("NestedClassTest: FAILED\n")
-        c.exit(1)
-    }
+    println("ALL OK")
 }

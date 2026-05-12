@@ -33,5 +33,10 @@ fun main() {
     checkAny2("hello")
     checkAny2(true)
 
-    println("done")
+    // Value-type Any checks
+    val v: Any = 42
+    if (v is Int) { println("v is Int") } else { error("FAIL v is Int") }
+    if (v !is String) { println("v !is String") } else { error("FAIL v !is String") }
+
+    println("ALL OK")
 }
