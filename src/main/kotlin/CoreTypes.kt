@@ -47,21 +47,18 @@ sealed class KtcType {
         override fun toCType() = "void"
     }
 
-    // ── User-defined class / interface / enum ────────────────────────
+    // ── User-defined class / interface / enum / object ──────────────────
+
+    enum class UserKind { Class, DataClass, Object, Interface, Enum }
 
     data class User(
-        val name: String,        // flat internal name (e.g. "Vec2", "Pair_Int_String")
+        val baseName: String,     // e.g. "Vec2", "Pair_Int_String"
         val typeArgs: List<KtcType> = emptyList(),
-        val isData: Boolean = false,
-        val isEnum: Boolean = false
+        val kind: UserKind = UserKind.Class,
+        val pkg: String = ""      // e.g. "ktc_std_", "game_Main_" (prefix, no name)
     ) : KtcType() {
-        override fun toCType(): String {
-            val pfx = symbolPrefix?.invoke(name) ?: name
-            return if (name.startsWith("Pair_") || name.startsWith("Triple_")) "ktc_$pfx" else pfx
-        }
-        companion object {
-            var symbolPrefix: ((String) -> String)? = null
-        }
+        val flatName get() = "$pkg$baseName"
+        override fun toCType(): String = flatName
     }
 
     // ── Array types ──────────────────────────────────────────────────
@@ -122,7 +119,7 @@ sealed class KtcType {
         is Prim -> ktName
         is Str -> "String"
         is Void -> "void"
-        is User -> name
+        is User -> baseName
         is Func -> "Fun"
         else -> toCType()
     }
@@ -146,7 +143,7 @@ sealed class KtcType {
                 base == "String" -> Str
                 base == "void" || base == "Nothing" -> Void
                 base in primitiveNames -> Prim(PrimKind.valueOf(base))
-                base == "StringBuffer" -> User("ktc_StrBuf")
+                base == "StringBuffer" -> User(baseName = "ktc_StrBuf")
                 base == "RawArray" && typeRef.typeArgs.isNotEmpty() ->
                     Ptr(from(typeRef.typeArgs[0], resolveName))
                 base == "Array" && typeRef.typeArgs.isNotEmpty() -> {
@@ -164,10 +161,10 @@ sealed class KtcType {
                 base.startsWith("Pair_") || base.startsWith("Triple_") -> {
                     val typeArgNames = base.removePrefix("Pair_").removePrefix("Triple_").split("_")
                     val typeArgs = typeArgNames.map { from(TypeRef(it), resolveName) }
-                    User(base, typeArgs)
+                    User(baseName = base, typeArgs = typeArgs)
                 }
-                base == "Any" -> User("Any")
-                else -> User(resolved)
+                base == "Any" -> User(baseName = "Any")
+                else -> User(baseName = resolved)
             }
 
             return if (isPtr && inner !is Arr) Ptr(inner)

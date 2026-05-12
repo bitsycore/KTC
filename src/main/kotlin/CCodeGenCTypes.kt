@@ -584,6 +584,14 @@ internal fun CCodeGen.typeToKtc(t: TypeRef?): KtcType {
 }
 
 internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType {
+    // Helper: create User with package prefix auto-derived from pfx
+    fun user(name: String, kind: KtcType.UserKind = KtcType.UserKind.Class): KtcType.User {
+        val fullPfx = pfx(name)
+        val pkg = if (fullPfx.endsWith(name)) fullPfx.removeSuffix(name) else ""
+        // Strip trailing _ from pkg for clean prefixes
+        val cleanPkg = if (pkg.endsWith("_")) pkg.dropLast(1) + "_" else pkg
+        return KtcType.User(name, kind = kind, pkg = cleanPkg)
+    }
     // Pointer suffix — for array types that are already pointers, don't double-wrap
     if (resolved.endsWith("*?")) {
         val base = resolved.dropLast(2)
@@ -609,10 +617,10 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
     // String, void
     if (resolved == "String") return KtcType.Str
     if (resolved == "void" || resolved == "Nothing" || resolved == "Unit") return KtcType.Void
-    if (resolved == "Any") return KtcType.User("Any")
+    if (resolved == "Any") return user("Any")
 
     // StringBuffer
-    if (resolved == "ktc_StrBuf") return KtcType.User("ktc_StrBuf")
+    if (resolved == "ktc_StrBuf") return user("ktc_StrBuf")
 
     // Array types: IntArray, ByteArray, Vec2Array, etc.
     if (resolved.endsWith("Array") && resolved.length > 5) {
@@ -620,9 +628,9 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
         val elem = when {
             elemName in KtcType.PrimKind.entries.map { it.name } -> KtcType.Prim(KtcType.PrimKind.valueOf(elemName))
             elemName == "String" -> KtcType.Str
-            elemName.startsWith("Pair_") || elemName.startsWith("Triple_") -> KtcType.User(elemName)
-            classArrayTypes.contains(elemName) || enums.containsKey(elemName) -> KtcType.User(elemName)
-            else -> KtcType.User(elemName)
+            elemName.startsWith("Pair_") || elemName.startsWith("Triple_") -> user(elemName)
+            classArrayTypes.contains(elemName) || enums.containsKey(elemName) -> user(elemName)
+            else -> user(elemName)
         }
         val sized = t?.let { getSizeAnnotation(it) }
         val isTypedArray = elemName in KtcType.PrimKind.entries.map { it.name } || elemName == "String"
@@ -641,14 +649,22 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
 
     // Pair/Triple types
     if (resolved.startsWith("Pair_") || resolved.startsWith("Triple_"))
-        return KtcType.User(resolved)
+        return user(resolved)
 
     // User-defined classes, interfaces
-    if (classes.containsKey(resolved) || objects.containsKey(resolved) || interfaces.containsKey(resolved))
-        return KtcType.User(resolved, isData = classes[resolved]?.isData == true, isEnum = enums.containsKey(resolved))
+    if (classes.containsKey(resolved) || objects.containsKey(resolved) || interfaces.containsKey(resolved)) {
+        val kind = when {
+            classes[resolved]?.isData == true -> KtcType.UserKind.DataClass
+            objects.containsKey(resolved) -> KtcType.UserKind.Object
+            enums.containsKey(resolved) -> KtcType.UserKind.Enum
+            interfaces.containsKey(resolved) -> KtcType.UserKind.Interface
+            else -> KtcType.UserKind.Class
+        }
+        return user(resolved, kind)
+    }
 
     // Fallback: unknown type as User
-    return KtcType.User(resolved)
+    return user(resolved)
 }
 
 /** C type string from KtcType, uses pfx for user types. */
@@ -657,13 +673,13 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Str -> "ktc_String"
     is KtcType.Void -> "void"
     is KtcType.User -> {
-        val name = ktc.name
+        val bn = ktc.baseName
         when {
-            name == "Any" -> "ktc_Any"
-            name == "ktc_StrBuf" -> "ktc_StrBuf"
-            name.startsWith("Pair_") -> "ktc_$name"
-            name.startsWith("Triple_") -> "ktc_$name"
-            else -> pfx(name)
+            bn == "Any" -> "ktc_Any"
+            bn == "ktc_StrBuf" -> "ktc_StrBuf"
+            bn.startsWith("Pair_") -> "ktc_${bn}"
+            bn.startsWith("Triple_") -> "ktc_${bn}"
+            else -> ktc.flatName
         }
     }
     is KtcType.Ptr -> {
