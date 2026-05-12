@@ -1174,6 +1174,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val overloads = siblings.filter { it.name == base }
         if (overloads.size <= 1) return base
         val types = f.params.map { resolveTypeName(it.type).removeSuffix("*") }
+        if (types.isEmpty()) return "${base}NoArg"
         return "${base}With${types.joinToString("_")}"
     }
 
@@ -1184,12 +1185,21 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal fun findOverload(name: String, args: List<Arg>, siblings: List<FunDecl>): FunDecl? {
         val candidates = siblings.filter { it.name == name }
         if (candidates.size <= 1) return candidates.firstOrNull()
-        // Match by exact arg count (after accounting for vararg/ptr expansion)
-        for (c in candidates) {
-            val nonDefaultParams = c.params.count { it.default == null }
-            val totalParams = c.params.size
-            if (args.size in nonDefaultParams..totalParams) return c
+        // First: match by exact arg count
+        val byCount = candidates.filter { args.size in it.params.count { p -> p.default == null }..it.params.size }
+        if (byCount.size == 1) return byCount[0]
+        if (byCount.isEmpty()) return candidates.firstOrNull()
+        // Multiple same-count candidates: match by argument types
+        for (c in byCount) {
+            if (args.size == c.params.size) {
+                val allMatch = args.zip(c.params).all { (arg, param) ->
+                    val argType = inferExprType(arg.expr) ?: "Int"
+                    val paramType = resolveTypeName(param.type).removeSuffix("*").removeSuffix("?")
+                    argType == paramType || paramType == "Any"
+                }
+                if (allMatch) return c
+            }
         }
-        return candidates.firstOrNull()
+        return byCount.firstOrNull()
     }
 }
