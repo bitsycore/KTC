@@ -397,6 +397,14 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
         impl.appendLine("}")
         impl.appendLine()
     }
+    // Implicit equals for all classes
+    if (templateDecl.members.none { it is FunDecl && it.name == "equals" }) {
+        emitClassEquals(cName, ci)
+    }
+    // Implicit toString for data classes
+    if (templateDecl.isData && templateDecl.members.none { it is FunDecl && it.name == "toString" }) {
+        emitDataClassToString(templateDecl.name, cName, ci)
+    }
     popScope()
     currentClass = null
 
