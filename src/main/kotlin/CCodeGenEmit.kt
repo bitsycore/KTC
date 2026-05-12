@@ -1520,6 +1520,10 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     val isMainWithArgs = isMain && f.params.size == 1 &&
             f.params[0].type.name == "Array" &&
             f.params[0].type.typeArgs.singleOrNull()?.name == "String"
+    // Get siblings for overload detection
+    val siblings = file.decls.filterIsInstance<FunDecl>()
+    val overloadedName = methodName(f, siblings)
+    val baseName = if (f.isPrivate) "PRIV_$overloadedName" else overloadedName
 
     val returnsNullable = !isMain && f.returnType != null && f.returnType.nullable
     val returnsSizedArray = !isMain && !returnsNullable && f.returnType != null && isSizedArrayTypeRef(f.returnType)
@@ -1527,7 +1531,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else f.body?.let { inferBlockType(it) } ?: ""
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
     val cRet  = if (isMain) "int" else if (returnsSizedArray) "void" else if (returnsNullable && retResolved == "Any") "ktc_Any" else if (returnsNullable) optRetCType else if (retResolved.isNotEmpty()) cTypeStr(retResolved) else "void"
-    val cName = if (isMain) "main" else pfx(f.name)
+    val cName = if (isMain) "main" else pfx(baseName)
     val params = when {
         isMainWithArgs -> "int argc, char** argv"
         isMain         -> "void"

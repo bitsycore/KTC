@@ -107,7 +107,16 @@ class OverloadUnitTest : TranspilerTestBase() {
         v.sourceContains("O_PRIV_helperWithInt")
     }
 
-    // ── Top-level overloads (TODO: needs emitFun support) ────────
+    // ── Top-level overloads ────────────────────────────────────────
 
-    // @Test fun topLevelOverload() { ... }
+    @Test fun topLevelOverload() {
+        val v = transpile("""
+            package test
+            fun doIt() {}
+            fun doIt(x: Int) {}
+        """)
+        // Top-level overloads should also get suffixes
+        v.headerContains("test_doItNoArg")
+        v.headerContains("test_doItWithInt")
+    }
 }

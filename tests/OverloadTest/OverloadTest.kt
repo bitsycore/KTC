@@ -20,31 +20,37 @@ class Counter() {
     fun count(): Int = n
 }
 
+fun doIt(): String = "ok"
+fun doIt(x: Int): String = "ok $x"
+
 fun main() {
-    println("start")
     val a = Calc.add(2, 3)
-    println("a=$a")
     val b = Calc.add(2.5, 3.5)
-    println("b=$b")
     val single = Calc.add(42)
     val g1 = Calc.greet()
     val g2 = Calc.greet("World")
 
-    if (a != 5) { c.exit(1) }
-    if (b != 6.0) { c.exit(1) }
-    if (single != 42) { c.exit(1) }
-    if (g1 != "hello") { c.exit(1) }
-    if (g2 != "hello World") { c.exit(1) }
+    if (a != 5) error("FAIL add 2+3=$a")
+    if (b != 6.0) error("FAIL add 2.5+3.5=$b")
+    if (single != 42) error("FAIL add single=$single")
+    if (g1 != "hello") error("FAIL greet=$g1")
+    if (g2 != "hello World") error("FAIL greet=$g2")
     println("Object overloads OK")
 
     val ctr = Counter()
     ctr.inc()
-    if (ctr.count() != 1) { c.exit(1) }
+    if (ctr.count() != 1) error("FAIL inc=$ctr.count()")
     ctr.inc(5)
-    if (ctr.count() != 6) { c.exit(1) }
+    if (ctr.count() != 6) error("FAIL inc by=$ctr.count()")
     ctr.inc(2, 3)
-    if (ctr.count() != 12) { c.exit(1) }
+    if (ctr.count() != 12) error("FAIL inc by times=$ctr.count()")
     println("Class overloads OK")
+
+    val t1 = doIt()
+    val t2 = doIt(42)
+    if (t1 != "ok") error("FAIL doIt=$t1")
+    if (t2 != "ok 42") error("FAIL doIt 42=$t2")
+    println("Top-level overloads OK")
 
     println("ALL OK")
 }

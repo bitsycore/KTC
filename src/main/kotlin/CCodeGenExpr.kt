@@ -1068,6 +1068,30 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         return t
     }
 
+    // Top-level function overload resolution
+    val topFuns = file.decls.filterIsInstance<FunDecl>()
+    val topOvr = findOverload(name, args, topFuns)
+    if (topOvr != null && topFuns.count { it.name == name } > 1) {
+        val overloadedName = methodName(topOvr, topFuns)
+        val fnName = if (topOvr.isPrivate) "PRIV_$overloadedName" else overloadedName
+        val filledArgs = fillDefaults(args, topOvr.params, topOvr.params.associate { it.name to it.default })
+        val expandedArgs2 = expandCallArgs(filledArgs, topOvr.params)
+        // @Size(N) return → out-parameter ABI
+        if (topOvr.returnType != null && isSizedArrayTypeRef(topOvr.returnType)) {
+            val retType = resolveTypeName(topOvr.returnType)
+            val elemCType = arrayElementCType(retType)
+            val size = getSizeAnnotation(topOvr.returnType)!!
+            val t = tmp()
+            preStmts += "$elemCType ${t}[$size];"
+            preStmts += "const int32_t ${t}\$len = $size;"
+            val allArgs = if (expandedArgs2.isEmpty()) t else "$expandedArgs2, $t"
+            preStmts += "${pfx(fnName)}($allArgs);"
+            defineVar(t, retType)
+            return t
+        }
+        return "${pfx(fnName)}($expandedArgs2)"
+    }
+
     return "${pfx(name)}($expandedArgs)"
 }
 
