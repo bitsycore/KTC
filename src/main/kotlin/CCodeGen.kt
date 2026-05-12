@@ -125,7 +125,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     }
 
     internal fun getTypeId(name: String): Int = typeIds.getOrPut(name) { nextTypeId++ }
-    // Maps class name → synthetic companion object name (e.g. "Foo" → "Foo_Companion")
+    // Maps class name → synthetic companion object name (e.g. "Foo" → "Foo$Companion")
     internal val classCompanions = mutableMapOf<String, String>()
 
     // Generic functions: fun <T> name(...) — stored as templates
@@ -739,7 +739,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 // Emit companion objects declared inside this class
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
                     hdr.appendLine()
-                    emitObject(ObjectDecl("${d.name}_${vMember.name}", vMember.members))
+                    emitObject(ObjectDecl("${d.name}\$${vMember.name}", vMember.members))
                 }
                 // Emit nested classes recursively
                 fun emitNested(parentOriginal: ClassDecl, parentFlatName: String) {
@@ -946,7 +946,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                         symbolPrefix[d.name] = fpfx
                         // Register companion object prefix
                         for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                            symbolPrefix["${d.name}_${vMember.name}"] = fpfx
+                            symbolPrefix["${d.name}\$${vMember.name}"] = fpfx
                         }
                     }
                     is EnumDecl -> symbolPrefix[d.name] = fpfx
@@ -967,7 +967,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     symbolPrefix[d.name] = prefix
                     // Register companion object prefix
                     for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                        symbolPrefix["${d.name}_${vMember.name}"] = prefix
+                        symbolPrefix["${d.name}\$${vMember.name}"] = prefix
                     }
                 }
                 is EnumDecl -> symbolPrefix[d.name] = prefix
@@ -1052,7 +1052,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 }
                 // Collect companion objects declared inside this class
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                    val vCompanionSynthName = "${d.name}_${vMember.name}" // e.g. "Foo_Companion"
+                    val vCompanionSynthName = "${d.name}\$${vMember.name}" // e.g. "Foo$Companion"
                     classCompanions[d.name] = vCompanionSynthName
                     collectDecl(ObjectDecl(vCompanionSynthName, vMember.members))
                 }

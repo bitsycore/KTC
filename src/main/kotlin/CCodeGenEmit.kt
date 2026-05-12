@@ -980,17 +980,15 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     }
     hdr.appendLine("} ${cName}_t;")
     hdr.appendLine("extern ${cName}_t $cName;")
-    hdr.appendLine("extern bool ${cName}\$init;")
-    hdr.appendLine("void ${cName}_\$ensure_init(void);")
     hdr.appendLine()
 
-    // global instance zero-initialized + init flag
+    // global instance (zero-initialized), init flag + ensure_init are internal
     impl.appendLine("${cName}_t $cName = {0};")
-    impl.appendLine("bool ${cName}\$init = false;")
+    impl.appendLine("static bool ${cName}\$init = false;")
     impl.appendLine()
 
     // $ensure_init: lazy initialization function
-    impl.appendLine("void ${cName}_\$ensure_init(void) {")
+    impl.appendLine("static void ${cName}_\$ensure_init(void) {")
     impl.appendLine("    if (${cName}\$init) return;")
     impl.appendLine("    ${cName}\$init = true;")
     val prevObject = currentObject

@@ -19,8 +19,10 @@ object Config2 {
 
 }
 object Greeter {
+    var greeterEnabled = true
     fun greet(name: String) {
-        println("Hello, $name!")
+        if (greeterEnabled)
+            println("Hello, $name!")
     }
 }
 
@@ -42,7 +44,9 @@ fun main() {
     println("first: ${Config.next()}")
     println("second: ${Config.next()}")
 
+    Greeter.greeterEnabled = false
     Greeter.greet("World")
+    Greeter.greeterEnabled = true
     Greeter.greet("Kotlin")
 
     val test = TestCompanion()

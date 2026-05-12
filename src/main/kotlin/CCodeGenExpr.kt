@@ -1635,7 +1635,7 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
         preStmts += "${pfx(e.obj.name)}_\$ensure_init();"
         return "${pfx(e.obj.name)}.${e.name}"
     }
-    // Companion object field: Foo.bar → game_Foo_Companion.bar (with lazy init guard)
+    // Companion object field: Foo.bar → game_Foo$Companion.bar (with lazy init guard)
     if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
         val vCompanionName = classCompanions[e.obj.name]!!
         preStmts += "${pfx(vCompanionName)}_\$ensure_init();"
