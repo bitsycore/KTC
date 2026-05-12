@@ -355,9 +355,10 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             }
         }
     }
-    // data class == → ClassName_equals
-    if (e.op == "==" && lt != null && classes[lt]?.isData == true) {
-        return "${pfx(lt)}_equals(${genExpr(e.left)}, ${genExpr(e.right)})"
+    // Class == / != → ClassName_equals (all classes, not just data)
+    if ((e.op == "==" || e.op == "!=") && lt != null && classes.containsKey(lt)) {
+        val eq = "${pfx(lt)}_equals(${genExpr(e.left)}, ${genExpr(e.right)})"
+        return if (e.op == "==") eq else "!$eq"
     }
     // String == → ktc_string_eq
     if (e.op == "==" && lt == "String") {

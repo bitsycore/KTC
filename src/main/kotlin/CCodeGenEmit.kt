@@ -138,9 +138,9 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
     impl.appendLine("}")
     impl.appendLine()
 
-    // --- data class extras: equals, toString ---
+    // --- class extras: equals (all classes), toString (data only) ---
+    emitClassEquals(cName, ci)
     if (d.isData) {
-        emitDataClassEquals(cName, ci)
         emitDataClassToString(d.name, cName, ci)
     }
 
@@ -406,7 +406,7 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
     }
 }
 
-internal fun CCodeGen.emitDataClassEquals(cName: String, ci: ClassInfo) {
+internal fun CCodeGen.emitClassEquals(cName: String, ci: ClassInfo) {
     hdr.appendLine("bool ${cName}_equals($cName a, $cName b);")
     impl.appendLine("bool ${cName}_equals($cName a, $cName b) {")
     val eqs = ci.props.joinToString(" && ") { (name, type) ->
