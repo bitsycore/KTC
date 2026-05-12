@@ -983,11 +983,12 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         }
     }
     hdr.appendLine("} ${cName}_t;")
-    hdr.appendLine("extern ${cName}_t $cName;")
+    val tls = if (d.name in tlsObjects) "ktc_tls " else ""
+    hdr.appendLine("extern ${tls}${cName}_t $cName;")
     hdr.appendLine()
 
     // global instance (zero-initialized), init flag + ensure_init are internal
-    impl.appendLine("${cName}_t $cName = {0};")
+    impl.appendLine("${tls}${cName}_t $cName = {0};")
     impl.appendLine("static bool ${cName}\$init = false;")
     impl.appendLine()
 
@@ -1572,14 +1573,15 @@ internal fun CCodeGen.emitTopProp(d: PropDecl) {
     val t = if (d.type != null) resolveTypeName(d.type) else (inferExprType(d.init) ?: "Int")
     val ct = cTypeStr(t)
     val cName = pfx(d.name)
+    val tls = if (d.name in tlsProps) "ktc_tls " else ""
     val qual = if (!d.mutable) "const " else ""
     val mutComment = if (d.mutable) "/*VAR*/ " else "/*VAL*/ "
     if (d.init != null) {
-        hdr.appendLine("extern $qual$ct $cName;")
-        impl.appendLine("$qual$mutComment$ct $cName = ${genExpr(d.init)};")
+        hdr.appendLine("extern $tls$qual$ct $cName;")
+        impl.appendLine("$tls$qual$mutComment$ct $cName = ${genExpr(d.init)};")
     } else {
-        hdr.appendLine("extern $ct $cName;")
-        impl.appendLine("$mutComment$ct $cName = ${defaultVal(t)};")
+        hdr.appendLine("extern $tls$ct $cName;")
+        impl.appendLine("$tls$mutComment$ct $cName = ${defaultVal(t)};")
     }
     impl.appendLine()
 }

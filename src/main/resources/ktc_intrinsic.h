@@ -82,6 +82,33 @@ ktc_UInt ktc_rand_range(
     #define ktc_alloca(size) alloca(size)
 #endif
 
+/* ═══════════════════════════ Thread-local storage ════════════════════ */
+
+/* ktc_tls: portable thread-local storage specifier */
+#ifndef ktc_tls
+    /* C11 */
+    #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+        #define ktc_tls _Thread_local
+
+    /* C++11 */
+    #elif defined(__cplusplus) && (__cplusplus >= 201103L)
+        #define ktc_tls thread_local
+
+    /* MSVC */
+    #elif defined(_MSC_VER)
+        #define ktc_tls __declspec(thread)
+
+    /* GCC / Clang / ICC */
+    #elif defined(__GNUC__) || defined(__clang__) || defined(__INTEL_COMPILER)
+        #define ktc_tls __thread
+
+    /* Fallback: no TLS support */
+    #else
+        #define ktc_tls
+        #warning "Thread-local storage is not supported on this compiler."
+    #endif
+#endif
+
 /* ═══════════════════════════ Array Trampoline ════════════════════════ */
 /* Pass-by-value semantics for variable-size arrays.
  * Functions receive this struct, then copy data to a local stack buffer.

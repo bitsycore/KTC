@@ -14,6 +14,7 @@ variants with different arities use distinct names:
   nextDouble()           — Kotlin: Random.nextDouble()
   nextDoubleBetween(f,u) — Kotlin: Random.nextDouble(from, until)
 */
+@Tls
 object Random {
 
 	private var state: ULong = 0x853c49e6748fea9bUL;

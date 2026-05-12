@@ -224,6 +224,9 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal var selfIsPointer = true
     // Objects with dispose methods — called on main() exit
     internal val objectsWithDispose = mutableListOf<String>()  // cName of objects with dispose
+    // @Tls-annotated objects and top-level properties → emit ktc_tls specifier
+    internal val tlsObjects = mutableSetOf<String>()  // object names
+    internal val tlsProps = mutableSetOf<String>()    // top-level property names
 
     // ── Trampolined array params (pass-by-value copy on stack) ────────
     // Names of array parameters whose data has been copied via alloca+memcpy.
@@ -927,6 +930,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 
     internal fun collectDecls() {
         objectsWithDispose.clear()
+        tlsObjects.clear()
+        tlsProps.clear()
         // Collect from all files for cross-reference resolution
         for (f in allFiles) {
             val fpfx = f.pkg?.replace('.', '_')?.plus("_") ?: ""
@@ -1054,7 +1059,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
                     val vCompanionSynthName = "${d.name}\$${vMember.name}" // e.g. "Foo$Companion"
                     classCompanions[d.name] = vCompanionSynthName
-                    collectDecl(ObjectDecl(vCompanionSynthName, vMember.members))
+                    collectDecl(ObjectDecl(vCompanionSynthName, vMember.members, vMember.annotations))
                 }
                 // Collect nested classes/interfaces/enums (namespacing only — prefix with parent)
                 val nestedClasses = d.members.filterIsInstance<ClassDecl>()
@@ -1074,6 +1079,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 }
             }
             is ObjectDecl -> {
+                if (d.annotations.any { it.name == "Tls" }) tlsObjects.add(d.name)
                 for (p in d.members.filterIsInstance<PropDecl>()) {
                     val propType = p.type ?: inferInitType(p.init)
                     if (isRawArrayTypeRef(propType)) {
@@ -1142,7 +1148,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     if (d.isInline) inlineFunDecls[d.name] = d
                 }
             }
-            is PropDecl  -> { topProps.add(d.name); if (!d.mutable) valTopProps.add(d.name) }
+            is PropDecl  -> { topProps.add(d.name); if (!d.mutable) valTopProps.add(d.name); if (d.annotations.any { it.name == "Tls" }) tlsProps.add(d.name) }
         }
     }
 }

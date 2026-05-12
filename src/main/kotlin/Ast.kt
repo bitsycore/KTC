@@ -64,7 +64,8 @@ data class InterfaceDecl(
 
 data class ObjectDecl(
     val name: String,
-    val members: List<Decl>
+    val members: List<Decl>,
+    val annotations: List<Annotation> = emptyList()
 ) : Decl()
 
 data class PropDecl(
@@ -74,7 +75,8 @@ data class PropDecl(
     val mutable: Boolean,
     val line: Int = 0,
     val isPrivate: Boolean = false,
-    val isPrivateSet: Boolean = false
+    val isPrivateSet: Boolean = false,
+    val annotations: List<Annotation> = emptyList()
 ) : Decl()
 
 // ═══════════════════════════ Parameters ═══════════════════════════

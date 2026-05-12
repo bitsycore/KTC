@@ -48,7 +48,17 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.VAL)    -> parsePropDecl(mutable = false, isPrivate = isPrivate)
             at(TokenType.VAR)    -> parsePropDecl(mutable = true, isPrivate = isPrivate)
             at(TokenType.AT) -> {
-                error("Annotations like @Ptr must be placed on the type (: @Ptr Type), not before val/var")
+                val anns = parseAnnotations()
+                when {
+                    at(TokenType.VAL)    -> parsePropDecl(mutable = false, preAnnotations = anns, isPrivate = isPrivate)
+                    at(TokenType.VAR)    -> parsePropDecl(mutable = true, preAnnotations = anns, isPrivate = isPrivate)
+                    at(TokenType.OBJECT) -> parseObjectDecl(anns)
+                    at(TokenType.IDENT) && cur().value == "companion" && peek().type == TokenType.OBJECT -> {
+                        advance()
+                        parseCompanionObjectDecl(anns)
+                    }
+                    else -> error("Annotations @${anns.joinToString(" ") { it.name }} before '${cur().value}' are not supported")
+                }
             }
             at(TokenType.INIT)   -> { advance(); FunDecl("init", emptyList(), null, parseBlock()) }
             else -> error("Expected declaration at ${cur()}")
@@ -290,7 +300,7 @@ class Parser(private val tokens: List<Token>) {
 
     // ── object ───────────────────────────────────────────────────────
 
-    private fun parseObjectDecl(): ObjectDecl {
+    private fun parseObjectDecl(anns: List<Annotation> = emptyList()): ObjectDecl {
         expect(TokenType.OBJECT)
         val name = expectIdent()
         skipNL()
@@ -304,7 +314,7 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RBRACE); nesting--
         }
         skipTerminator()
-        return ObjectDecl(name, members)
+        return ObjectDecl(name, members, anns)
     }
 
     // ── companion object ─────────────────────────────────────────────
@@ -317,7 +327,7 @@ class Parser(private val tokens: List<Token>) {
     The companion is stored as ObjectDecl with name "Companion" when unnamed,
     or with its explicit name when provided.
     */
-    private fun parseCompanionObjectDecl(): ObjectDecl {
+    private fun parseCompanionObjectDecl(anns: List<Annotation> = emptyList()): ObjectDecl {
         expect(TokenType.OBJECT)
         skipNL()
         val vName = if (at(TokenType.IDENT)) expectIdent() else "Companion" // explicit or default name
@@ -332,20 +342,20 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RBRACE); nesting--
         }
         skipTerminator()
-        return ObjectDecl(vName, vMembers)
+        return ObjectDecl(vName, vMembers, anns)
     }
 
     // ── val / var (top-level or class-level property) ────────────────
 
     private fun parsePropDecl(mutable: Boolean, preAnnotations: List<Annotation> = emptyList(), isPrivate: Boolean = false): PropDecl {
         val line = cur().line
-        val annotations = if (preAnnotations.isNotEmpty()) preAnnotations else parseAnnotations()
+        val typeAnnotations = if (preAnnotations.isEmpty()) parseAnnotations() else emptyList()
         advance()   // skip val/var
         val name = expectIdent()
         val type = if (at(TokenType.COLON)) {
             advance(); skipNL()
             val t = parseTypeRef()
-            if (annotations.isEmpty()) t else t.copy(annotations = t.annotations + annotations)
+            if (typeAnnotations.isEmpty()) t else t.copy(annotations = t.annotations + typeAnnotations)
         } else null
         val init = if (at(TokenType.EQ)) { advance(); skipNL(); parseExpr() } else null
         var isPrivateSet = false
@@ -363,7 +373,7 @@ class Parser(private val tokens: List<Token>) {
             }
         }
         skipTerminator()
-        return PropDecl(name, type, init, mutable, line, isPrivate, isPrivateSet)
+        return PropDecl(name, type, init, mutable, line, isPrivate, isPrivateSet, annotations = preAnnotations)
     }
 
     // ═══════════════════════════ Statements ═══════════════════════════
