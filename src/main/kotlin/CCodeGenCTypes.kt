@@ -477,13 +477,13 @@ internal fun CCodeGen.arrayElementCType(arrType: String?): String = when (arrTyp
             // Class array: "Vec2Array" → element type "game_Vec2"
             if (arrType.endsWith("Array") && arrType.length > 5) {
                 val elem = arrType.removeSuffix("Array")
-                if (classArrayTypes.contains(elem) || classes.containsKey(elem) || enums.containsKey(elem)) return pfx(elem)
+                if (classArrayTypes.contains(elem) || classes.containsKey(elem) || enums.containsKey(elem)) return typeFlatName(elem)
                 if (elem.startsWith("Pair_")) return cTypeStr(elem)
             }
             // Nullable-element class array: "Vec2OptArray" → "pkg_Vec2_Optional"
             if (arrType.endsWith("OptArray") && arrType.length > 8) {
                 val elem = arrType.removeSuffix("OptArray")
-                if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return "${pfx(elem)}_Optional"
+                if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return "${typeFlatName(elem)}_Optional"
             }
         }
         "ktc_Int"
@@ -561,7 +561,7 @@ internal fun CCodeGen.printfArg(expr: String, t: String): String = when {
     t == "Boolean" -> "($expr) ? \"true\" : \"false\""
     t == "String"  -> "(int)($expr).len, ($expr).ptr"
     t in enums -> {
-        val cName = pfx(t)
+        val cName = typeFlatName(t)
         "(int)${cName}_names[($expr)].len, ${cName}_names[($expr)].ptr"
     }
     else -> expr
@@ -611,8 +611,8 @@ internal fun CCodeGen.userType(inName: String, inKind: KtcType.UserKind = KtcTyp
 		enums.containsKey(inName)      -> enums[inName]!!
 		else ->
 			{
-			// Builtin or unknown: derive pkg from pfx
-			val vFullPfx = pfx(inName)
+			// Builtin or unknown: derive pkg from typeFlatName
+			val vFullPfx = typeFlatName(inName)
 			val vPkg = if (vFullPfx.endsWith(inName)) vFullPfx.removeSuffix(inName) else ""
 			BuiltinTypeDef(baseName = inName, pkg = vPkg, kind = inKind)
 			}

@@ -224,8 +224,8 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                         val backing = tmp()
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
-                        impl.appendLine("$ind${pfx(initType)} $backing = $expr;")
-                        impl.appendLine("$ind$ct ${s.name} = ${pfx(initType)}_as_$t(&$backing);")
+                        impl.appendLine("$ind${typeFlatName(initType)} $backing = $expr;")
+                        impl.appendLine("$ind$ct ${s.name} = ${typeFlatName(initType)}_as_$t(&$backing);")
                         return
                     }
                 }
@@ -571,7 +571,7 @@ internal fun CCodeGen.emitBodyPropLenIfArray(inProp: PropertyDef) {
 internal fun CCodeGen.genExprWithNullableOut(e: Expr, outVar: String): String {
     if (e !is CallExpr) return genExpr(e)
     val name = (e.callee as? NameExpr)?.name ?: return genExpr(e)
-    val cName = if (currentObject != null) "${pfx(currentObject!!)}_$name" else pfx(name)
+    val cName = if (currentObject != null) "${typeFlatName(currentObject!!)}_$name" else funCName(name)
     val sig = funSigs[name]
     val args = expandCallArgs(e.args, sig?.params)
     val extraArg = "&$outVar"
@@ -596,10 +596,10 @@ internal fun CCodeGen.genExprWithArrayLenOut(e: Expr, varName: String): String {
         typeSubst = prevSubst
         val extraArg = "&${varName}\$len"
         val allArgs = if (expandedArgs.isEmpty()) extraArg else "$expandedArgs, $extraArg"
-        return "${pfx(mangledName)}($allArgs)"
+        return "${funCName(mangledName)}($allArgs)"
     }
     // Regular function
-    val cName = if (currentObject != null) "${pfx(currentObject!!)}_$name" else pfx(name)
+    val cName = if (currentObject != null) "${typeFlatName(currentObject!!)}_$name" else funCName(name)
     val sig = funSigs[name]
     val filledArgs = if (sig != null) fillDefaults(e.args, sig.params, sig.params.associate { it.name to it.default }) else e.args
     val args = expandCallArgs(filledArgs, sig?.params)
@@ -623,10 +623,10 @@ internal fun CCodeGen.genExprWithSizedArrayOut(e: Expr, varName: String) {
         val expandedArgs = expandCallArgs(filledArgs, genFun.params)
         typeSubst = prevSubst
         val allArgs = if (expandedArgs.isEmpty()) varName else "$expandedArgs, $varName"
-        preStmts += "${pfx(mangledName)}($allArgs);"
+        preStmts += "${funCName(mangledName)}($allArgs);"
         return
     }
-    val cName = if (currentObject != null) "${pfx(currentObject!!)}_$name" else pfx(name)
+    val cName = if (currentObject != null) "${typeFlatName(currentObject!!)}_$name" else funCName(name)
     val sig = funSigs[name]
     val filledArgs = if (sig != null) fillDefaults(e.args, sig.params, sig.params.associate { it.name to it.default }) else e.args
     val args = expandCallArgs(filledArgs, sig?.params)
@@ -686,7 +686,7 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
                 val idx = genExpr(s.target.index)
                 val value = genExpr(s.value)
                 flushPreStmts(ind)
-                impl.appendLine("$ind${pfx(baseClass)}_set($recv, $idx, $value);")
+                impl.appendLine("$ind${typeFlatName(baseClass)}_set($recv, $idx, $value);")
                 return
             }
         }
@@ -714,7 +714,7 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
         val vClassName = (s.target.obj as NameExpr).name
         val vCompanionName = classCompanions[vClassName]!!
         val vCompWriteObjInfo = objects[vCompanionName]                               // companion ObjInfo (null-safe fallback)
-        val vCompWriteCName = vCompWriteObjInfo?.flatName ?: pfx(vCompanionName)     // C name with package prefix
+        val vCompWriteCName = vCompWriteObjInfo?.flatName ?: typeFlatName(vCompanionName) // C name with package prefix
         impl.appendLine("$ind${vCompWriteCName}_\$ensure_init();")
     }
 
@@ -915,8 +915,8 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                 if (retIface.isNotEmpty() && interfaces.containsKey(retIface)
                     && exprType != null && classes.containsKey(exprType)
                     && classInterfaces[exprType]?.contains(retIface) == true) {
-                    val cExprType = pfx(exprType)
-                    val cIface = pfx(retIface)
+                    val cExprType = typeFlatName(exprType)
+                    val cIface = typeFlatName(retIface)
                     val impls = interfaceImplementors[retIface] ?: emptyList()
                     val dataName = ifaceDataName(exprType!!)
                     val fieldPath = when {
@@ -1207,15 +1207,15 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
             if (maxLen != null && maxLen <= 512) {
                 impl.appendLine("${ind}char ${buf}[$maxLen];")
                 impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
-                impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
+                impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
                 impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
                 impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
             } else {
                 impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
-                impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
+                impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
                 impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
                 impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
-                impl.appendLine("${ind}if ($hasExpr) { ${pfx(dataClass)}_toString($recv, &${buf}_sb); }")
+                impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
                 impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
                 impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
             }
@@ -1237,15 +1237,15 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
             impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
             impl.appendLine("${ind}char ${buf}[$maxLen];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
-            impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
         } else {
             impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
-            impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
             impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
-            impl.appendLine("${ind}${pfx(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
         }
         return
@@ -1259,14 +1259,14 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         if (maxLen != null && maxLen <= 512) {
             impl.appendLine("${ind}char ${buf}[$maxLen];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
-            impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
         } else {
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
-            impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
             impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
             impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
-            impl.appendLine("${ind}${pfx(indirectBase)}_toString($expr, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
         }
         return
@@ -1557,11 +1557,11 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
             val exprType = if (subject != null) inferExprType(subject) else null
             val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
             val check = if (classes.containsKey(target)) {
-                "$subj${memOp}__type_id == ${pfx(target)}_TYPE_ID"
+                "$subj${memOp}__type_id == ${typeFlatName(target)}_TYPE_ID"
             } else if (interfaces.containsKey(target)) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
-                else impls.joinToString(" || ") { "$subj${memOp}__type_id == ${pfx(it)}_TYPE_ID" }
+                else impls.joinToString(" || ") { "$subj${memOp}__type_id == ${typeFlatName(it)}_TYPE_ID" }
             } else if (isArrayType(target)) {
                 val exprBase = exprType?.removeSuffix("?")
                 if (exprBase != null && isArrayType(exprBase)) {
@@ -1644,7 +1644,7 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
                     impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator((void*)&$arrExpr);")
                 } else {
                     val baseClass = if (isPointer) anyIndirectClassName(arrType)!! else arrType!!
-                    impl.appendLine("$ind$iterCType $iterVar = ${pfx(baseClass)}_iterator($selfArg);")
+                    impl.appendLine("$ind$iterCType $iterVar = ${typeFlatName(baseClass)}_iterator($selfArg);")
                 }
                 val isIfaceIter = interfaces.containsKey(iterClass)
                 if (isIfaceIter) {
@@ -1652,9 +1652,9 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
                     val elemCType = cTypeStr(elemKtType)
                     impl.appendLine("$ind    $elemCType ${s.varName} = ${iterVar}.vt->next((void*)&${iterVar});")
                 } else {
-                    impl.appendLine("${ind}while (${pfx(iterClass)}_hasNext(&$iterVar)) {")
+                    impl.appendLine("${ind}while (${typeFlatName(iterClass)}_hasNext(&$iterVar)) {")
                     val elemCType = cTypeStr(elemKtType)
-                    impl.appendLine("$ind    $elemCType ${s.varName} = ${pfx(iterClass)}_next(&$iterVar);")
+                    impl.appendLine("$ind    $elemCType ${s.varName} = ${typeFlatName(iterClass)}_next(&$iterVar);")
                 }
                 pushScope(); defineVar(s.varName, elemKtType)
                 emitBlock(s.body, ind, method)

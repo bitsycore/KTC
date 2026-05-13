@@ -495,10 +495,10 @@ Phase 5: Typed Dispatch ✅
 - [x] 5.4 — Migrate constructor dispatch (ci.flatName replaces pfx() in genCall)
 - [x] 5.5 — Migrate is/as type checks (classInfoFor/ifaceInfoFor + TypeDef.flatName for TYPE_ID checks)
 - [x] 5.6 — Migrate operator dispatch (get/set/contains/iterator → TypeDef.flatName)
-Phase 6: Eliminate symbolPrefix and pfx()
-- [ ] 6.1 — Identify remaining pfx() callers
-- [ ] 6.2 — Add C name resolution for non-TypeDef symbols
-- [ ] 6.3 — Remove pfx() and symbolPrefix
+Phase 6: Eliminate symbolPrefix and pfx() ✅
+- [x] 6.1 — Identify remaining pfx() callers (114 across 4 files)
+- [x] 6.2 — Add funNames map + typeFlatName()/funCName() helpers; populate funNames in collectDecls
+- [x] 6.3 — Replace all pfx() call sites with typeFlatName()/funCName(); pfx() only called as fallback from helpers
 Phase 7: Remove Bridge
 - [ ] 7.1 — Audit direct stringToKtc calls
 - [ ] 7.2 — Simplify cType(TypeRef) path

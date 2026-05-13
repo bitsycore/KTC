@@ -65,6 +65,35 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         return "$prefix$name"
     }
 
+    /*
+    Phase 6: TypeDef-based C name resolution.
+    Replaces pfx(typeName) for class, object, enum, and interface identifiers.
+    Looks up the TypeDef and returns its flatName (pkg + baseName).
+    Falls back to pfx() for builtins and names not yet in TypeDef tables.
+    */
+    internal fun typeFlatName(inName: String): String {  // type or object name → C flat name
+        if (inName == "main") return inName
+        if (inName.startsWith("ktc_")) return inName
+        classes[inName]?.let { return it.flatName }
+        objects[inName]?.let { return it.flatName }
+        enums[inName]?.let { return it.flatName }
+        interfaces[inName]?.let { return it.flatName }
+        return pfx(inName)
+        }
+
+    /*
+    Phase 6: Top-level function C name resolution.
+    Replaces pfx(fnName) for standalone function identifiers.
+    Uses the funNames map populated in collectDecls.
+    Falls back to pfx() for generic function instantiations (mangled names).
+    */
+    internal fun funCName(inName: String): String {  // function name → C function name
+        if (inName == "main") return inName
+        if (inName.startsWith("ktc_")) return inName
+        funNames[inName]?.let { return it }
+        return pfx(inName)
+        }
+
     internal fun inferredTypeRef(typeName: String?): TypeRef? {
         if (typeName == null) return null
         return TypeRef(typeName)
@@ -94,6 +123,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal val enumValueOfCalled = mutableSetOf<String>()
     internal val objects  = mutableMapOf<String, ObjInfo>()
     internal val funSigs  = mutableMapOf<String, FunSig>()
+    internal val funNames = mutableMapOf<String, String>()  // top-level function name → C name
     internal val inlineFunDecls = mutableMapOf<String, FunDecl>()
     internal val inlineExtFunDecls = mutableMapOf<String, FunDecl>()  // inline generic extension funs, keyed by method name
     internal var activeLambdas: Map<String, ActiveLambda> = emptyMap()
@@ -358,11 +388,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             "ULong"   -> "ktc_ULong_Optional"
             "String"  -> "ktc_String_Optional"
             "Any"     -> "ktc_Any"   // Any uses data==NULL for null, not Optional
-            else -> {
-                val sp = symbolPrefix[base]
-                val cName = if (sp != null) "${sp}${base}" else "${prefix}${base}"
-                "${cName}_Optional"
-            }
+            else -> "${typeFlatName(base)}_Optional"
         }
     }
 
@@ -751,7 +777,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         var emittedAny = false
         for ((name, info) in interfaces) {
             if (info.typeParams.isNotEmpty()) continue
-            val cName = pfx(name)
+            val cName = typeFlatName(name)
             hdr.appendLine("typedef struct $cName $cName;")
             emittedAny = true
         }
@@ -804,7 +830,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             if (!genericClassDecls.containsKey(baseName)) continue
             for (typeArgs in instantiations) {
                 val mangledName = mangledGenericName(baseName, typeArgs)
-                val cName = pfx(mangledName)
+                val cName = typeFlatName(mangledName)
                 hdr.appendLine("typedef struct $cName $cName;")
             }
         }
@@ -820,7 +846,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         for ((name, info) in interfaces) {
             val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
             if (isMonomorphized) {
-                val cName = pfx(name)
+                val cName = typeFlatName(name)
                 hdr.appendLine("typedef struct ${cName}_vt ${cName}_vt;")
                 emittedMonoFwd = true
             }
@@ -990,8 +1016,11 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     is InterfaceDecl -> { symbolPrefix[d.name] = fpfx; interfaces[d.name]?.pkg = fpfx }
                     is ObjectDecl -> { symbolPrefix[d.name] = fpfx; objects[d.name]?.pkg = fpfx }
                     is FunDecl -> {
-                        if (d.receiver == null) symbolPrefix[d.name] = fpfx
-                    }
+                        if (d.receiver == null) {
+                            symbolPrefix[d.name] = fpfx
+                            funNames[d.name] = if (d.name == "main") "main" else "$fpfx${d.name}"  // cross-file C name
+                            }
+                        }
                     else -> {}
                 }
             }
@@ -1021,8 +1050,11 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 is InterfaceDecl -> { symbolPrefix[d.name] = prefix; interfaces[d.name]?.pkg = prefix }
                 is ObjectDecl -> { symbolPrefix[d.name] = prefix; objects[d.name]?.pkg = prefix }
                 is FunDecl -> {
-                    if (d.receiver == null) symbolPrefix[d.name] = prefix
-                }
+                    if (d.receiver == null) {
+                        symbolPrefix[d.name] = prefix
+                        funNames[d.name] = if (d.name == "main") "main" else "$prefix${d.name}"  // current-file C name (overrides allFiles)
+                        }
+                    }
                 else -> {}
             }
         }
@@ -1192,9 +1224,10 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     }
                 }
                 // Track objects with dispose for auto-call on main exit (current file only)
+                // Use prefix directly: pkg is set AFTER collectDecl returns, so typeFlatName would miss it
                 if (validate) {
                     for (m in d.members) if (m is FunDecl && m.name == "dispose") {
-                        val cName = pfx(d.name)
+                        val cName = "$prefix${d.name}"  // current-file prefix (validate=true only for current file)
                         if (cName !in objectsWithDispose) objectsWithDispose.add(cName)
                     }
                 }

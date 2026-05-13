@@ -462,7 +462,7 @@ internal fun CCodeGen.emitClassEquals(cName: String, ci: ClassInfo) {
         when {
             type.nullable -> "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == ktc_NONE || a.$fieldName.value == b.$fieldName.value))"
             t == "String" -> "ktc_string_eq(a.$fieldName, b.$fieldName)"
-            classes[t]?.isData == true -> "${pfx(t)}_equals(a.$fieldName, b.$fieldName)"
+            classes[t]?.isData == true -> "${typeFlatName(t)}_equals(a.$fieldName, b.$fieldName)"
             else -> "a.$fieldName == b.$fieldName"
         }
     }
@@ -491,7 +491,7 @@ internal fun CCodeGen.emitDataClassToString(ktName: String, cName: String, ci: C
 }
 
 internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boolean = false) {
-    val cClass = pfx(className)
+    val cClass = typeFlatName(className)
     val siblings = classes[className]?.methods ?: emptyList()
     val overloadedName = methodName(f, siblings)
     val methodName = if (f.isPrivate) "PRIV_$overloadedName" else overloadedName
@@ -627,7 +627,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     if (extraParams.isNotEmpty()) allParts += extraParams
     if (outParam != null) allParts += outParam
     val allParams = allParts.joinToString(", ")
-    val cFnName = "${pfx(recvTypeName)}_${f.name}"
+    val cFnName = "${typeFlatName(recvTypeName)}_${f.name}"
 
     hdr.appendLine("$cRet $cFnName($allParams);")
     impl.appendLine("$cRet $cFnName($allParams) {")
@@ -734,11 +734,11 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         val concreteRet = genericFunConcreteReturn[mangledName]
         val cRet = when {
             returnsSizedArray -> "void"
-            concreteRet != null -> pfx(concreteRet)
+            concreteRet != null -> typeFlatName(concreteRet)
             f.returnType != null -> cType(f.returnType)
             else -> "void"
         }
-        val cName = pfx(mangledName)
+        val cName = funCName(mangledName)
         val baseParams = expandParams(f.params)
         // Prepend receiver as $self parameter for generic extensions
         val hasReceiver = f.receiver != null
@@ -841,12 +841,12 @@ internal fun CCodeGen.emitStarExtFunInstantiations(f: FunDecl) {
         val recvIsNullable = concreteReceiver.nullable
         val cRet = if (f.returnType != null) cType(f.returnType) else "void"
         val isClassType = classes.containsKey(mangledRecvName)
-        val cRecvType = pfx(mangledRecvName)
+        val cRecvType = typeFlatName(mangledRecvName)
         val selfParam = if (isClassType) "$cRecvType* \$self" else "$cRecvType \$self"
         val nullableExtra = if (recvIsNullable) ", bool \$self\$has" else ""
         val extraParams = expandParams(f.params)
         val allParams = if (extraParams.isEmpty()) "$selfParam$nullableExtra" else "$selfParam$nullableExtra, $extraParams"
-        val cFnName = "${pfx(mangledRecvName)}_${f.name}"
+        val cFnName = "${typeFlatName(mangledRecvName)}_${f.name}"
 
         hdr.appendLine("$cRet $cFnName($allParams);")
         impl.appendLine("$cRet $cFnName($allParams) {")
@@ -926,7 +926,7 @@ internal fun CCodeGen.emitStarExtFunForGenericInterface(f: FunDecl, ifaceBaseNam
         typeSubst = genericTypeBindings[className] ?: emptyMap()
 
         val cRet = if (f.returnType != null) cType(f.returnType) else "void"
-        val cRecvType = pfx(className)
+        val cRecvType = typeFlatName(className)
         val selfParam = "$cRecvType* \$self"
         val extraParams = expandParams(f.params)
         val allParams = if (extraParams.isEmpty()) selfParam else "$selfParam, $extraParams"
@@ -1002,7 +1002,7 @@ internal fun CCodeGen.emitEnum(d: EnumDecl) {
 internal fun CCodeGen.emitEnumValuesData() {
     for (enumName in enumValuesCalled) {
         val info = enums[enumName] ?: continue
-        val cName = pfx(enumName)
+        val cName = typeFlatName(enumName)
         val entryNames = info.entries.joinToString(", ") { "${cName}_${it}" }
         val n = info.entries.size
         // extern declarations in header
@@ -1014,7 +1014,7 @@ internal fun CCodeGen.emitEnumValuesData() {
     }
     for (enumName in enumValueOfCalled) {
         val info = enums[enumName] ?: continue
-        val cName = pfx(enumName)
+        val cName = typeFlatName(enumName)
         // valueOf function forward declaration in header
         hdr.appendLine("$cName ${cName}_valueOf(ktc_String name);")
         // valueOf function body in source
@@ -1281,12 +1281,12 @@ internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
         hdr.appendLine("    void* obj;")
     } else if (impls.size == 1) {
         // Single implementor: no union needed, use plain field
-        hdr.appendLine("    ${pfx(impls[0])} ${ifaceDataName(impls[0])};")
+        hdr.appendLine("    ${typeFlatName(impls[0])} ${ifaceDataName(impls[0])};")
     } else {
         // Multiple implementors: tagged union
         hdr.appendLine("    union {")
         for (className in impls) {
-            hdr.appendLine("        ${pfx(className)} ${ifaceDataName(className)};")
+            hdr.appendLine("        ${typeFlatName(className)} ${ifaceDataName(className)};")
         }
         hdr.appendLine("    } data;")
     }
@@ -1338,7 +1338,7 @@ internal fun CCodeGen.collectAllIfaceProperties(info: IfaceInfo): List<PropDecl>
 }
 
 /** Data member name for a class inside a tagged union or single-field interface struct. */
-internal fun CCodeGen.ifaceDataName(className: String): String = "${pfx(className)}_data"
+internal fun CCodeGen.ifaceDataName(className: String): String = "${typeFlatName(className)}_data"
 
 /** Return the ktc_hash_* expression for a resolved field type and value expression. */
 internal fun CCodeGen.hashFieldExpr(resolvedType: String, valueExpr: String): String = when {
@@ -1401,11 +1401,11 @@ internal fun CCodeGen.emitClassInterfaceVtables(d: ClassDecl) {
  * @param implsOnly if true, only emit .c implementations (skip hdr lines).
  */
 internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIfaceRefs: List<TypeRef>, declsOnly: Boolean = false, implsOnly: Boolean = false) {
-    val cClass = pfx(className)
+    val cClass = typeFlatName(className)
     for (ifaceRef in superIfaceRefs) {
         val ifaceName = resolveIfaceName(ifaceRef)
         val iface = interfaces[ifaceName] ?: continue
-        val cIface = pfx(ifaceName)
+        val cIface = typeFlatName(ifaceName)
         val allMethods = collectAllIfaceMethods(iface)
         val allProps = collectAllIfaceProperties(iface)
 
@@ -1495,7 +1495,7 @@ internal fun CCodeGen.emitTransitiveInterfaceVtables(
     for (superRef in iface.superInterfaces) {
         val superName = resolveIfaceName(superRef)
         val superIface = interfaces[superName] ?: continue
-        val cSuper = pfx(superName)
+        val cSuper = typeFlatName(superName)
         val superMethods = collectAllIfaceMethods(superIface)
         val superProps = collectAllIfaceProperties(superIface)
 
@@ -1580,7 +1580,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else f.body?.let { inferBlockType(it) } ?: ""
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
     val cRet  = if (isMain) "int" else if (returnsSizedArray) "void" else if (returnsNullable && retResolved == "Any") "ktc_Any" else if (returnsNullable) optRetCType else if (retResolved.isNotEmpty()) cTypeStr(retResolved) else "void"
-    val cName = if (isMain) "main" else pfx(baseName)
+    val cName = if (isMain) "main" else funCName(baseName)
     val params = when {
         isMainWithArgs -> "int argc, char** argv"
         isMain         -> "void"
@@ -1695,7 +1695,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
 internal fun CCodeGen.emitTopProp(d: PropDecl) {
     val t = if (d.type != null) resolveTypeName(d.type) else (inferExprType(d.init) ?: "Int")
     val ct = cTypeStr(t)
-    val cName = pfx(d.name)
+    val cName = typeFlatName(d.name)  // top-level prop — typeFlatName falls back to prefix+name
     val tls = if (d.name in tlsProps) "ktc_tls " else ""
     val qual = if (!d.mutable) "const " else ""
     val mutComment = if (d.mutable) "/*VAR*/ " else "/*VAL*/ "
