@@ -298,9 +298,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         return if (classes.containsKey(base)) base else null
     }
 
-    /** True if the internal type is a class pointer (any variant). */
-    internal fun isPointerType(type: String?): Boolean = pointerClassName(type) != null
-
     /** Returns the class name for any indirect (pointer) type. */
     internal fun anyIndirectClassName(type: String?): String? = pointerClassName(type)
 
@@ -349,6 +346,14 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val cParams = if (params.isEmpty()) "void" else params.joinToString(", ") { cTypeStr(it) }
         return "$cRet (*$name)($cParams)"
     }
+
+	/* Emit a C function pointer declaration from a KtcType.Func. */
+	internal fun cFuncPtrDecl(inKtc: KtcType.Func, inName: String): String {
+		val vCRet = cTypeStr(inKtc.ret)                                                     // C return type string
+		val vCParams = if (inKtc.params.isEmpty()) "void"
+			else inKtc.params.joinToString(", ") { cTypeStr(it) }                          // C parameter type list
+		return "$vCRet (*$inName)($vCParams)"
+		}
 
     // ── Optional type helpers ────────────────────────────────────────
 
@@ -1271,7 +1276,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val base = f.name
         val overloads = siblings.filter { it.name == base }
         if (overloads.size <= 1) return base
-        val types = f.params.map { resolveTypeName(it.type).removeSuffix("*") }
+        val types = f.params.map { resolveTypeNameStr(it.type).removeSuffix("*") }
         if (types.isEmpty()) return base   // no-arg keeps plain name
         return "${base}With${types.joinToString("_")}"
     }
@@ -1296,7 +1301,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 {
                 val vAllMatch = inArgs.zip(vCandidate.params).all { (vArg, vParam) ->
                     val vArgKtc  = inferExprTypeKtc(vArg.expr) ?: KtcType.Prim(KtcType.PrimKind.Int)
-                    val vParamKtc = resolveTypeNameKtc(vParam.type)
+                    val vParamKtc = resolveTypeName(vParam.type)
                     /* Strip outer Nullable/Ptr for structural comparison. */
                     fun KtcType.core(): KtcType = when (this)
                         {

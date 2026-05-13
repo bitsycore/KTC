@@ -77,7 +77,8 @@ internal fun CCodeGen.emitBlock(b: Block, ind: String, insideMethod: Boolean = f
 // ── var / val ────────────────────────────────────────────────────
 
 internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) {
-    val tRaw = if (s.type != null) resolveTypeName(s.type) else (inferExprType(s.init) ?: "Int")
+    val tRaw = if (s.type != null) resolveTypeNameStr(s.type) else (inferExprType(s.init) ?: "Int") // string type (for structural checks)
+    val vKtc = if (s.type != null) resolveTypeName(s.type) else parseResolvedTypeName(tRaw)         // KtcType (for C type emission)
     val inferredNullable = s.type == null && tRaw.endsWith("?")
     val inferredPtr = s.type == null && (tRaw.endsWith("*") || tRaw.endsWith("*?"))
     val t = if (inferredNullable) tRaw.removeSuffix("?") else tRaw
@@ -127,7 +128,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
         return
     }
 
-    val ct = cTypeStr(t)
+    val ct = cTypeStr(vKtc)  // C type string derived from KtcType
     // Don't const class types, typed pointers, nullable, arrays, or interface types
     val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t)
         && !t.endsWith("*")
@@ -338,8 +339,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         "UByteArray", "UShortArray", "UIntArray", "ULongArray") ||
         (callee == "Array" && init.typeArgs.isNotEmpty())) {
         val elemC = if (callee == "Array") {
-            val elemName = resolveTypeName(init.typeArgs[0])
-            cTypeStr(elemName)
+            cTypeStr(resolveTypeName(init.typeArgs[0]))  // KtcType for element type emission
         } else when (callee) {
             "IntArray" -> "ktc_Int"; "LongArray" -> "ktc_Long"
             "FloatArray" -> "ktc_Float"; "DoubleArray" -> "ktc_Double"
@@ -375,9 +375,10 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
                     }
                     stmt is VarDeclStmt -> {
                         // Local val/var inside the loop body
-                        val vType = stmt.type?.let { resolveTypeName(it) } ?: (inferExprType(stmt.init) ?: "Int")
+                        val vType    = stmt.type?.let { resolveTypeNameStr(it) } ?: (inferExprType(stmt.init) ?: "Int") // string type
+                        val vTypeKtc = stmt.type?.let { resolveTypeName(it) } ?: parseResolvedTypeName(vType)           // KtcType for emission
                         defineVar(stmt.name, vType)
-                        val vCT = cTypeStr(vType)
+                        val vCT = cTypeStr(vTypeKtc)  // C type from KtcType
                         val mut = if (stmt.mutable) "" else "const "
                         val initExpr = stmt.init?.let { genExpr(it) } ?: "0"
                         sb.appendLine("${ind}    ${mut}$vCT ${stmt.name} = $initExpr;")
@@ -469,17 +470,17 @@ internal fun CCodeGen.isArrayReturningCall(e: Expr?): Boolean {
     // Check generic functions
     val genFun = genericFunDecls.find { it.name == name }
     if (genFun != null && genFun.returnType != null) {
-        val typeArgNames = if (e.typeArgs.isNotEmpty()) e.typeArgs.map { resolveTypeName(it) }
+        val typeArgNames = if (e.typeArgs.isNotEmpty()) e.typeArgs.map { resolveTypeNameStr(it) }
         else return false
         val subst = genFun.typeParams.zip(typeArgNames).toMap()
         val saved = typeSubst; typeSubst = subst
-        val retType = resolveTypeName(genFun.returnType)
+        val retType = resolveTypeNameStr(genFun.returnType)
         typeSubst = saved
         return isArrayType(retType)
     }
     // Check regular functions
     val sig = funSigs[name] ?: return false
-    return sig.returnType != null && !sig.returnType.nullable && isArrayType(resolveTypeName(sig.returnType))
+    return sig.returnType != null && !sig.returnType.nullable && isArrayType(resolveTypeNameStr(sig.returnType))
 }
 
 /** Check if an expression is a malloc/calloc/realloc call (returns nullable pointer). */
@@ -550,7 +551,7 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
 
 /* If a body prop is an array type, emit $self.name$len = allocSize after assignment. */
 internal fun CCodeGen.emitBodyPropLenIfArray(inProp: PropertyDef) {
-	val vResolved = resolveTypeName(inProp.typeRef)  // resolved C type string
+	val vResolved = resolveTypeNameStr(inProp.typeRef)  // resolved C type string
 	if (!isArrayType(vResolved)) return
 	if (hasSizeAnnotation(inProp.typeRef)) return
 	val vFieldName = if (inProp.isPrivate) "PRIV_${inProp.name}" else inProp.name  // C field name
@@ -587,7 +588,7 @@ internal fun CCodeGen.genExprWithArrayLenOut(e: Expr, varName: String): String {
     // For generic function calls, use the mangled name and fill defaults
     val genFun = genericFunDecls.find { it.name == name }
     if (genFun != null && e.typeArgs.isNotEmpty()) {
-        val typeArgNames = e.typeArgs.map { resolveTypeName(it) }
+        val typeArgNames = e.typeArgs.map { resolveTypeNameStr(it) }
         val mangledName = "${name}_${typeArgNames.joinToString("_")}"
         val prevSubst = typeSubst
         typeSubst = genFun.typeParams.zip(typeArgNames).toMap()
@@ -615,7 +616,7 @@ internal fun CCodeGen.genExprWithSizedArrayOut(e: Expr, varName: String) {
     val name = (e.callee as? NameExpr)?.name ?: return
     val genFun = genericFunDecls.find { it.name == name }
     if (genFun != null && e.typeArgs.isNotEmpty()) {
-        val typeArgNames = e.typeArgs.map { resolveTypeName(it) }
+        val typeArgNames = e.typeArgs.map { resolveTypeNameStr(it) }
         val mangledName = "${name}_${typeArgNames.joinToString("_")}"
         val prevSubst = typeSubst
         typeSubst = genFun.typeParams.zip(typeArgNames).toMap()
@@ -1066,7 +1067,7 @@ internal fun CCodeGen.emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: St
             val p = decl.params.getOrNull(idx)
             val pName = p?.name ?: "arg$idx"
             if (a.expr is LambdaExpr) {
-                val pType = p?.type?.let { resolveTypeName(it) } ?: "?"
+                val pType = p?.type?.let { resolveTypeNameStr(it) } ?: "?"
                 append("$pName = $pType")
             } else {
                 val exprStr = when (a.expr) {
@@ -1081,7 +1082,7 @@ internal fun CCodeGen.emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: St
             }
         }
         append(")")
-        decl.returnType?.let { append(": ${resolveTypeName(it)}") }
+        decl.returnType?.let { append(": ${resolveTypeNameStr(it)}") }
     }
     impl.appendLine("$ind/* inline $sig */")
     impl.appendLine("$ind{")
@@ -1105,13 +1106,13 @@ internal fun CCodeGen.emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: St
         val expr = arg.expr
         if (expr is LambdaExpr) {
             val funcParams = param.type.funcParams ?: emptyList()
-            val paramTypes = funcParams.map { resolveTypeName(it) }
+            val paramTypes = funcParams.map { resolveTypeNameStr(it) }
             newLambdas[param.name] = ActiveLambda(expr, paramTypes)
         } else {
             val cTypeName = cType(param.type)
             val cVal = genExpr(expr)
             impl.appendLine("$ind    $cTypeName ${param.name} = $cVal;")
-            defineVar(param.name, resolveTypeName(param.type))
+            defineVar(param.name, resolveTypeNameStr(param.type))
         }
     }
     activeLambdas = newLambdas
@@ -1410,10 +1411,10 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
             tryThisSmartCast()
         // x is Type
         cond is IsCheckExpr && !cond.negated && cond.expr is NameExpr ->
-            tryCastTo(cond.expr.name, resolveTypeName(cond.type))
+            tryCastTo(cond.expr.name, resolveTypeNameStr(cond.type))
         // this is Type
         cond is IsCheckExpr && !cond.negated && cond.expr is ThisExpr ->
-            tryThisCastTo(resolveTypeName(cond.type))
+            tryThisCastTo(resolveTypeNameStr(cond.type))
         // a && b → smart-cast both sides
         cond is BinExpr && cond.op == "&&" -> {
             casts.addAll(extractSmartCasts(cond.left))
@@ -1456,10 +1457,10 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
             trySmartCast(cond.right.name)
         // x !is Type → in else branch, x IS Type
         cond is IsCheckExpr && cond.negated && cond.expr is NameExpr ->
-            tryCastTo(cond.expr.name, resolveTypeName(cond.type))
+            tryCastTo(cond.expr.name, resolveTypeNameStr(cond.type))
         // this !is Type → in else branch, $self IS Type
         cond is IsCheckExpr && cond.negated && cond.expr is ThisExpr ->
-            tryThisCastTo(resolveTypeName(cond.type))
+            tryThisCastTo(resolveTypeNameStr(cond.type))
     }
     return casts
 }
@@ -1528,7 +1529,7 @@ internal fun CCodeGen.emitWhenStmt(e: WhenExpr, ind: String, method: Boolean) {
         // Smart cast: narrow subject type for `is` branches
         val narrowedType = if (br.conds != null && subjName != null && !isMutable(subjName)) {
             val isCond = br.conds.find { it is IsCond && !it.negated } as? IsCond
-            if (isCond != null) resolveTypeName(isCond.type) else null
+            if (isCond != null) resolveTypeNameStr(isCond.type) else null
         } else null
         if (narrowedType != null) {
             impl.appendLine("$ind    // smart-cast: '$subjName' narrowed to '$narrowedType'")
@@ -1553,7 +1554,7 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
             } else "${neg}(/* in ${genExpr(range)} */)"   // fallback
         }
         is IsCond   -> {
-            val target = resolveTypeName(c.type)
+            val target = resolveTypeNameStr(c.type)
             val exprType = if (subject != null) inferExprType(subject) else null
             val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
             val check = if (classes.containsKey(target)) {

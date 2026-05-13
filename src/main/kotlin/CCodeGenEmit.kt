@@ -52,28 +52,39 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
     hdr.appendLine("typedef struct {")
     hdr.appendLine("    ktc_Int __type_id;")
     for ((name, type) in ci.props) {
-        val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
+        val vFieldName = if (name in ci.privateProps) "PRIV_$name" else name  // C field name
         // RawArray<T> field → T* (raw pointer, no $len)
-        val isRawArray = type.name == "RawArray" && type.typeArgs.isNotEmpty()
-        val resolved = if (isRawArray) resolveTypeName(type.typeArgs[0]) + "*" else resolveTypeName(type)
-        val mutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
-        if (isFuncType(resolved)) {
-            hdr.appendLine("    $mutComment${cFuncPtrDecl(resolved, fieldName)};")
-        } else if (isArrayType(resolved)) {
-            val sizeAnn = getSizeAnnotation(type)
-            if (sizeAnn != null) {
-                val elemType = arrayElementCType(resolved)
-                hdr.appendLine("    $mutComment$elemType $fieldName[${sizeAnn}];")
-            } else {
-                hdr.appendLine("    $mutComment${cTypeStr(resolved)} $fieldName;")
-                hdr.appendLine("    int32_t ${fieldName}\$len;")
+        val vKtcField = if (type.name == "RawArray" && type.typeArgs.isNotEmpty())
+            KtcType.Ptr(resolveTypeName(type.typeArgs[0]))  // raw pointer
+        else resolveTypeName(type)                           // normal KtcType
+        val vMutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "  // mutability comment
+        if (vKtcField is KtcType.Func)
+            {
+            hdr.appendLine("    $vMutComment${cFuncPtrDecl(vKtcField, vFieldName)};")
             }
-        } else if (type.nullable) {
-            hdr.appendLine("    $mutComment${optCTypeName(resolved)} $fieldName;")
-        } else {
-            hdr.appendLine("    $mutComment${cType(type)} $fieldName;${ptrNullComment(resolved)}")
+        else if (vKtcField.isArrayLike)
+            {
+            val vSizeAnn = getSizeAnnotation(type)  // @Size annotation value if present
+            if (vSizeAnn != null)
+                {
+                val vElemCt = cTypeStr(vKtcField.asArr!!.elem)  // element C type
+                hdr.appendLine("    $vMutComment$vElemCt $vFieldName[${vSizeAnn}];")
+                }
+            else
+                {
+                hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
+                hdr.appendLine("    int32_t ${vFieldName}\$len;")
+                }
+            }
+        else if (type.nullable)
+            {
+            hdr.appendLine("    $vMutComment${optCTypeName(vKtcField.toInternalStr)} $vFieldName;")
+            }
+        else
+            {
+            hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;${ptrNullComment(vKtcField)}")
+            }
         }
-    }
     hdr.appendLine("} $cName;")
     hdr.appendLine("KTC_OPTIONAL($cName);")
     hdr.appendLine()
@@ -84,7 +95,7 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
 	val vParamDecl = vParamStr.ifEmpty { "void" }           // C parameter declaration
 	hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl);")
 	impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl) {")
-	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.typeRef)) || it.typeRef.nullable })
+	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { resolveTypeName(it.typeRef).isArrayLike || it.typeRef.nullable })
 		{
 		impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
 		}
@@ -94,17 +105,17 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
         impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
 		for (vProp in ci.ctorProps)
 			{
-			val vName = vProp.name                                          // prop name
-			val vType = vProp.typeRef                                       // prop type
-			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName  // C field name
-			val vResolved = resolveTypeName(vType)                          // resolved C type
-			val vSizeAnn = getSizeAnnotation(vType)                         // @Size annotation
+			val vName      = vProp.name                                              // prop name
+			val vType      = vProp.typeRef                                           // prop type
+			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName // C field name
+			val vKtcProp   = resolveTypeName(vType)                                  // KtcType for array checks
+			val vSizeAnn   = getSizeAnnotation(vType)                                // @Size annotation
 			if (vSizeAnn != null)
 				{
-                val elemType = arrayElementCType(vResolved)
-				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($elemType));")
+				val vElemType = cTypeStr(vKtcProp.asArr!!.elem)                      // element C type
+				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($vElemType));")
 				}
-			else if (isArrayType(vResolved))
+			else if (vKtcProp.isArrayLike)
 				{
 				impl.appendLine("    \$self.$vFieldName = $vName;")
 				impl.appendLine("    \$self.${vFieldName}\$len = ${vName}\$len;")
@@ -135,7 +146,7 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
 						val vExpr = genExpr(vBp.initExpr)
 						heapAllocTargetType = null
 						flushPreStmts("    ")
-						val vElemType = arrayElementCType(resolveTypeName(vBp.typeRef))  // element C type
+						val vElemType = cTypeStr(resolveTypeName(vBp.typeRef).asArr!!.elem) // element C type
 						impl.appendLine("    memcpy(\$self.$vBodyFieldName, $vExpr, $vSizeAnn * sizeof($vElemType));")
 						}
 					else
@@ -169,7 +180,7 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
     selfIsPointer = true
     pushScope()
     for ((name, type) in ci.props) {
-        defineVar(name, resolveTypeName(type))
+        defineVarKtc(name, resolveTypeName(type))
         if (!ci.isValProp(name)) markMutable(name)
     }
     // Build set of interface method names to suppress their hdr here (emitted under implements section)
@@ -195,13 +206,14 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
         if (d.isData && ci.props.isNotEmpty()) {
             impl.appendLine("    ktc_Int h = 0;")
             for ((name, type) in ci.props) {
-                val resolved = resolveTypeName(type)
+                val vKtcHash  = resolveTypeName(type)                                   // KtcType for hash dispatch
+                val vResolved = vKtcHash.toInternalStr                                  // string for hashFieldExpr
                 val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                val hashExpr = if (type.nullable && !resolved.endsWith("*")) {
+                val hashExpr = if (type.nullable && !vResolved.endsWith("*")) {
                     val valueExpr = "\$self->$fieldName"
-                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(resolved, "${valueExpr}.value")} : 0)"
+                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(vResolved, "${valueExpr}.value")} : 0)"
                 } else {
-                    hashFieldExpr(resolved, "\$self->$fieldName")
+                    hashFieldExpr(vResolved, "\$self->$fieldName")
                 }
                 impl.appendLine("    h = h * 31 + $hashExpr;")
             }
@@ -223,10 +235,10 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
 }
 
 /** Generate a secondary constructor function name: ClassName_constructorWithType1_Type2 */
-internal fun CCodeGen.secondaryCtorName(cClass: String, params: List<Param>): String {
-    if (params.isEmpty()) return "${cClass}_emptyConstructor"
-    val types = params.map { resolveTypeName(it.type).removeSuffix("*") }
-    return "${cClass}_constructorWith${types.joinToString("_")}"
+internal fun CCodeGen.secondaryCtorName(inCClass: String, inParams: List<Param>): String {
+    if (inParams.isEmpty()) return "${inCClass}_emptyConstructor"
+    val vTypes = inParams.map { resolveTypeName(it.type).toInternalStr.removeSuffix("*") }  // type name strings without pointer suffix
+    return "${inCClass}_constructorWith${vTypes.joinToString("_")}"
 }
 
 /** Emit a secondary constructor that delegates to the primary constructor. */
@@ -250,11 +262,10 @@ internal fun CCodeGen.emitSecondaryCtor(className: String, cClass: String, sctor
     currentClass = className
     selfIsPointer = true
     for (p in sctor.params) {
-        val resolved = resolveTypeName(p.type)
-        defineVar(p.name, resolved)
+        defineVarKtc(p.name, resolveTypeName(p.type))
     }
     val ci = classes[className]
-    if (ci != null) for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+    if (ci != null) for ((name, type) in ci.props) defineVarKtc(name, resolveTypeName(type))
 
     for (s in sctor.body.stmts) emitStmt(s, "    ", true)
     popScope()
@@ -284,29 +295,40 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
     hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[ci.name]!!}")
     hdr.appendLine("struct $cName {")
     hdr.appendLine("    ktc_Int __type_id;")
-    for ((name, type) in ci.props) {
-        val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-        // RawArray<T> field → T* (raw pointer, no $len)
-        val isRawArray = type.name == "RawArray" && type.typeArgs.isNotEmpty()
-        val resolved = if (isRawArray) resolveTypeName(type.typeArgs[0]) + "*" else resolveTypeName(type)
-        val mutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
-        if (isFuncType(resolved)) {
-            hdr.appendLine("    $mutComment${cFuncPtrDecl(resolved, fieldName)};")
-        } else if (isArrayType(resolved)) {
-            val sizeAnn = getSizeAnnotation(type)
-            if (sizeAnn != null) {
-                val elemType = arrayElementCType(resolved)
-                hdr.appendLine("    $mutComment$elemType $fieldName[${sizeAnn}];")
-            } else {
-                hdr.appendLine("    $mutComment${cTypeStr(resolved)} $fieldName;")
-                hdr.appendLine("    int32_t ${fieldName}\$len;")
+    for ((name, type) in ci.props)
+        {
+        val vFieldName = if (name in ci.privateProps) "PRIV_$name" else name  // C field name
+        val vKtcField = if (type.name == "RawArray" && type.typeArgs.isNotEmpty())
+            KtcType.Ptr(resolveTypeName(type.typeArgs[0]))
+        else resolveTypeName(type)
+        val vMutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
+        if (vKtcField is KtcType.Func)
+            {
+            hdr.appendLine("    $vMutComment${cFuncPtrDecl(vKtcField, vFieldName)};")
             }
-        } else if (type.nullable) {
-            hdr.appendLine("    $mutComment${optCTypeName(resolved)} $fieldName;")
-        } else {
-            hdr.appendLine("    $mutComment${cType(type)} $fieldName;${ptrNullComment(resolved)}")
+        else if (vKtcField.isArrayLike)
+            {
+            val vSizeAnn = getSizeAnnotation(type)
+            if (vSizeAnn != null)
+                {
+                val vElemCt = cTypeStr(vKtcField.asArr!!.elem)
+                hdr.appendLine("    $vMutComment$vElemCt $vFieldName[${vSizeAnn}];")
+                }
+            else
+                {
+                hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
+                hdr.appendLine("    int32_t ${vFieldName}\$len;")
+                }
+            }
+        else if (type.nullable)
+            {
+            hdr.appendLine("    $vMutComment${optCTypeName(vKtcField.toInternalStr)} $vFieldName;")
+            }
+        else
+            {
+            hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;${ptrNullComment(vKtcField)}")
+            }
         }
-    }
     hdr.appendLine("};")
     hdr.appendLine("KTC_OPTIONAL($cName);")
     hdr.appendLine()
@@ -317,7 +339,7 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
 	val vParamDecl2 = vParamStr2.ifEmpty { "void" }          // C parameter declaration
 	hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl2);")
 	impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl2) {")
-	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.typeRef)) || it.typeRef.nullable })
+	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { resolveTypeName(it.typeRef).isArrayLike || it.typeRef.nullable })
 		{
 		impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
 		}
@@ -327,17 +349,17 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
         impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
 		for (vProp in ci.ctorProps)
 			{
-			val vName = vProp.name                                          // prop name
-			val vType = vProp.typeRef                                       // prop type
-			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName  // C field name
-			val vResolved = resolveTypeName(vType)                          // resolved C type
-			val vSizeAnn = getSizeAnnotation(vType)                         // @Size annotation
+			val vName      = vProp.name                                              // prop name
+			val vType      = vProp.typeRef                                           // prop type
+			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName // C field name
+			val vKtcProp2  = resolveTypeName(vType)                                  // KtcType for array checks
+			val vSizeAnn   = getSizeAnnotation(vType)                                // @Size annotation
 			if (vSizeAnn != null)
 				{
-                val elemType = arrayElementCType(vResolved)
-				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($elemType));")
+				val vElemType = cTypeStr(vKtcProp2.asArr!!.elem)                     // element C type
+				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($vElemType));")
 				}
-			else if (isArrayType(vResolved))
+			else if (vKtcProp2.isArrayLike)
 				{
 				impl.appendLine("    \$self.$vFieldName = $vName;")
 				impl.appendLine("    \$self.${vFieldName}\$len = ${vName}\$len;")
@@ -368,7 +390,7 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
 						val vExpr = genExpr(vBp.initExpr)
 						heapAllocTargetType = null
 						flushPreStmts("    ")
-						val vElemType = arrayElementCType(resolveTypeName(vBp.typeRef))  // element C type
+						val vElemType = cTypeStr(resolveTypeName(vBp.typeRef).asArr!!.elem) // element C type
 						impl.appendLine("    memcpy(\$self.$vBodyFieldName, $vExpr, $vSizeAnn * sizeof($vElemType));")
 						}
 					else
@@ -396,7 +418,7 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
     selfIsPointer = true
     pushScope()
     for ((name, type) in ci.props) {
-        defineVar(name, resolveTypeName(type))
+        defineVarKtc(name, resolveTypeName(type))
         if (!ci.isValProp(name)) markMutable(name)
     }
     for (m in templateDecl.members) {
@@ -413,13 +435,14 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
         if (templateDecl.isData && ci.props.isNotEmpty()) {
             impl.appendLine("    ktc_Int h = 0;")
             for ((name, type) in ci.props) {
-                val resolved = resolveTypeName(type)
+                val vKtcHash2  = resolveTypeName(type)          // KtcType for hash dispatch
+                val vResolved2 = vKtcHash2.toInternalStr        // string for hashFieldExpr
                 val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                val hashExpr = if (type.nullable && !resolved.endsWith("*")) {
+                val hashExpr = if (type.nullable && !vResolved2.endsWith("*")) {
                     val valueExpr = "\$self->$fieldName"
-                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(resolved, "${valueExpr}.value")} : 0)"
+                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(vResolved2, "${valueExpr}.value")} : 0)"
                 } else {
-                    hashFieldExpr(resolved, "\$self->$fieldName")
+                    hashFieldExpr(vResolved2, "\$self->$fieldName")
                 }
                 impl.appendLine("    h = h * 31 + $hashExpr;")
             }
@@ -458,11 +481,12 @@ internal fun CCodeGen.emitClassEquals(cName: String, ci: ClassInfo) {
     impl.appendLine("bool ${cName}_equals($cName a, $cName b) {")
     val eqs = ci.props.joinToString(" && ") { (name, type) ->
         val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-        val t = resolveTypeName(type)
+        val vKtcEq = resolveTypeName(type)          // KtcType for equals dispatch
+        val vTStr  = vKtcEq.toInternalStr            // string for class lookup
         when {
             type.nullable -> "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == ktc_NONE || a.$fieldName.value == b.$fieldName.value))"
-            t == "String" -> "ktc_string_eq(a.$fieldName, b.$fieldName)"
-            classes[t]?.isData == true -> "${typeFlatName(t)}_equals(a.$fieldName, b.$fieldName)"
+            vTStr == "String" -> "ktc_string_eq(a.$fieldName, b.$fieldName)"
+            classes[vTStr]?.isData == true -> "${typeFlatName(vTStr)}_equals(a.$fieldName, b.$fieldName)"
             else -> "a.$fieldName == b.$fieldName"
         }
     }
@@ -479,8 +503,9 @@ internal fun CCodeGen.emitDataClassToString(ktName: String, cName: String, ci: C
     for ((i, prop) in ci.props.withIndex()) {
         val (name, type) = prop
         val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-        val tBase = resolveTypeName(type)
-        val tFull = if (type.nullable) "${tBase}?" else tBase
+        val vKtcTs = resolveTypeName(type)                            // KtcType for toString dispatch
+        val tBase  = vKtcTs.toInternalStr                             // string for genSbAppend
+        val tFull  = if (type.nullable) "${tBase}?" else tBase
         val prefix = if (i == 0) "$ktName($name=" else ", $name="
         impl.appendLine("    ktc_sb_append_str(sb, ktc_str(\"$prefix\"));")
         impl.appendLine("    ${genSbAppend("sb", "\$self->$fieldName", tFull)}")
@@ -504,7 +529,8 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
 
     val returnsNullable = f.returnType != null && f.returnType.nullable
     val returnsSizedArray = !returnsNullable && f.returnType != null && isSizedArrayTypeRef(f.returnType)
-    val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else f.body?.let { inferBlockType(it) } ?: ""
+    val vRetKtc     = if (f.returnType != null) resolveTypeName(f.returnType) else null  // KtcType of return, or null
+    val retResolved = vRetKtc?.toInternalStr ?: f.body?.let { inferBlockType(it) } ?: "" // string for legacy helpers
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
     val cRet = when {
         returnsSizedArray -> "void"
@@ -516,7 +542,7 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     val selfParam = "$cClass* \$self"
     val extraParams = expandParams(f.params)
     val outParam: String? = if (returnsSizedArray) {
-        val elemCType = arrayElementCType(resolveTypeName(f.returnType))
+        val elemCType = cTypeStr(vRetKtc!!.asArr!!.elem)
         "$elemCType* \$out"
     } else null
     val allParts = mutableListOf(selfParam)
@@ -547,22 +573,23 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     currentFnOptReturnCTypeName = optRetCType
     if (returnsSizedArray) {
         currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
-        currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
+        currentFnSizedArrayElemType = cTypeStr(vRetKtc!!.asArr!!.elem)
     }
     currentFnReturnType = retResolved
 
     pushScope()
     for (p in f.params) {
-        val resolved = resolveTypeName(p.type)
+        val vKtcParam = resolveTypeName(p.type)                     // KtcType of this parameter
+        val vPStr     = vKtcParam.toInternalStr                     // string for nullable/isValueNullable checks
         defineVar(p.name, when {
-            p.type.nullable -> "${resolved}?"
-            else -> resolved
+            p.type.nullable -> "${vPStr}?"
+            else -> vPStr
         })
-        if (p.type.nullable && isValueNullableType("${resolved}?")) markOptional(p.name)
+        if (p.type.nullable && isValueNullableType("${vPStr}?")) markOptional(p.name)
     }
     // class props accessible via self->
     val ci = classes[className]
-    if (ci != null) for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+    if (ci != null) for ((name, type) in ci.props) defineVarKtc(name, resolveTypeName(type))
     val savedTrampolined1 = trampolinedParams.toHashSet(); trampolinedParams.clear()
     emitArrayParamCopies(f.params, "    ")
 
@@ -602,7 +629,8 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     impl.appendLine()
     val returnsSizedArray = f.returnType != null && isSizedArrayTypeRef(f.returnType)
     val returnsNullable = f.returnType != null && f.returnType.nullable
-    val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else ""
+    val vRetKtcExt  = if (f.returnType != null) resolveTypeName(f.returnType) else null  // KtcType of return, or null
+    val retResolved = vRetKtcExt?.toInternalStr ?: ""                                    // string for legacy helpers
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
     val cRet = when {
         returnsSizedArray -> "void"
@@ -620,7 +648,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     } else "$cRecvType \$self"
     val extraParams = expandParams(f.params)
     val outParam = if (returnsSizedArray) {
-        val elemCType = arrayElementCType(resolveTypeName(f.returnType))
+        val elemCType = cTypeStr(vRetKtcExt!!.asArr!!.elem)
         "$elemCType* \$out"
     } else null
     val allParts = mutableListOf(selfParam)
@@ -645,7 +673,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     currentFnOptReturnCTypeName = optRetCType
     if (returnsSizedArray) {
         currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
-        currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
+        currentFnSizedArrayElemType = cTypeStr(vRetKtcExt!!.asArr!!.elem)
     }
     currentExtRecvType = if (recvIsNullable) "$recvTypeName?" else recvTypeName
     if (isClassType) {
@@ -662,18 +690,19 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
         markOptional("\$self")
     }
     for (p in f.params) {
-        val resolved = resolveTypeName(p.type)
+        val vKtcExtParam = resolveTypeName(p.type)              // KtcType of this parameter
+        val vExtPStr     = vKtcExtParam.toInternalStr           // string for vararg/nullable/isValueNullable checks
         defineVar(p.name, when {
-            p.isVararg -> "${resolved}Array"
-            p.type.nullable -> "${resolved}?"
-            else -> resolved
+            p.isVararg -> "${vExtPStr}Array"
+            p.type.nullable -> "${vExtPStr}?"
+            else -> vExtPStr
         })
-        if (p.type.nullable && isValueNullableType("${resolved}?")) markOptional(p.name)
+        if (p.type.nullable && isValueNullableType("${vExtPStr}?")) markOptional(p.name)
     }
     if (isClassType) {
         val ci = classes[recvTypeName]!!
         for ((name, type) in ci.props) {
-            defineVar(name, resolveTypeName(type))
+            defineVarKtc(name, resolveTypeName(type))
             if (!ci.isValProp(name)) markMutable(name)
         }
     }
@@ -729,8 +758,9 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         impl.appendLine()
 
         // Resolve return type and params under substitution
-        val returnsArray = f.returnType != null && isArrayType(resolveTypeName(f.returnType))
         val returnsSizedArray = f.returnType != null && isSizedArrayTypeRef(f.returnType)
+        val vRetKtcGen   = if (f.returnType != null) resolveTypeName(f.returnType) else null   // KtcType of return, or null
+        val returnsArray = !returnsSizedArray && (vRetKtcGen?.isArrayLike ?: false)             // true if return is non-sized array
         val concreteRet = genericFunConcreteReturn[mangledName]
         val cRet = when {
             returnsSizedArray -> "void"
@@ -745,7 +775,7 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         val selfParam = if (hasReceiver) "${cType(f.receiver!!)} \$self" else null
         val params = when {
             returnsSizedArray -> {
-                val elemCType = arrayElementCType(resolveTypeName(f.returnType))
+                val elemCType = cTypeStr(vRetKtcGen!!.asArr!!.elem)
                 val extra = "$elemCType* \$out"
                 val p = if (selfParam != null && baseParams.isNotEmpty()) "$selfParam, $baseParams" else selfParam ?: baseParams
                 if (p.isNotEmpty()) "$p, $extra" else extra
@@ -770,22 +800,23 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         currentFnReturnsSizedArray = returnsSizedArray
         if (returnsSizedArray) {
             currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
-            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
+            currentFnSizedArrayElemType = cTypeStr(vRetKtcGen!!.asArr!!.elem)
         }
         currentFnReturnType = concreteRet
             ?: if (f.returnType != null) {
-                val base = resolveTypeName(f.returnType)
-                if (f.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+                val vBase = vRetKtcGen!!.toInternalStr             // string form of resolved return type
+                if (f.returnType.nullable && !vBase.endsWith("?")) "${vBase}?" else vBase
             } else ""
 
         pushScope()
         for (p in f.params) {
-            val resolved = resolveTypeName(p.type)
+            val vKtcGenParam = resolveTypeName(p.type)             // KtcType of this parameter
+            val vGenPStr     = vKtcGenParam.toInternalStr          // string for vararg/nullable/class checks
             defineVar(p.name, when {
-                p.isVararg -> "${resolved}Array"  // vararg params are arrays (ptr + $len)
-                p.type.nullable -> "${resolved}?"
-                classes.containsKey(resolved) -> "${resolved}*"
-                else -> resolved
+                p.isVararg -> "${vGenPStr}Array"  // vararg params are arrays (ptr + $len)
+                p.type.nullable -> "${vGenPStr}?"
+                classes.containsKey(vGenPStr) -> "${vGenPStr}*"
+                else -> vGenPStr
             })
         }
         val savedTrampolined3 = trampolinedParams.toHashSet(); trampolinedParams.clear()
@@ -865,16 +896,17 @@ internal fun CCodeGen.emitStarExtFunInstantiations(f: FunDecl) {
 
         pushScope()
         for (p in f.params) {
-            val resolved = resolveTypeName(p.type)
+            val vKtcStarParam = resolveTypeName(p.type)             // KtcType of this parameter
+            val vStarPStr     = vKtcStarParam.toInternalStr         // string for nullable/class checks
             defineVar(p.name, when {
-                p.type.nullable -> "${resolved}?"
-                classes.containsKey(resolved) -> "${resolved}*"
-                else -> resolved
+                p.type.nullable -> "${vStarPStr}?"
+                classes.containsKey(vStarPStr) -> "${vStarPStr}*"
+                else -> vStarPStr
             })
         }
         if (isClassType) {
             val ci = classes[mangledRecvName]!!
-            for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+            for ((name, type) in ci.props) defineVarKtc(name, resolveTypeName(type))
         }
         val savedTrampolined4 = trampolinedParams.toHashSet(); trampolinedParams.clear()
         emitArrayParamCopies(f.params, "    ")
@@ -944,14 +976,15 @@ internal fun CCodeGen.emitStarExtFunForGenericInterface(f: FunDecl, ifaceBaseNam
 
         pushScope()
         for (p in f.params) {
-            val resolved = resolveTypeName(p.type)
+            val vKtcIfaceParam = resolveTypeName(p.type)            // KtcType of this parameter
+            val vIfacePStr     = vKtcIfaceParam.toInternalStr       // string for nullable/class checks
             defineVar(p.name, when {
-                p.type.nullable -> "${resolved}?"
-                classes.containsKey(resolved) -> "${resolved}*"
-                else -> resolved
+                p.type.nullable -> "${vIfacePStr}?"
+                classes.containsKey(vIfacePStr) -> "${vIfacePStr}*"
+                else -> vIfacePStr
             })
         }
-        for ((name, type) in ci.props) defineVar(name, resolveTypeName(type))
+        for ((name, type) in ci.props) defineVarKtc(name, resolveTypeName(type))
         val savedTrampolined5 = trampolinedParams.toHashSet(); trampolinedParams.clear()
         emitArrayParamCopies(f.params, "    ")
         val savedDefers = deferStack.toList(); deferStack.clear()
@@ -1049,21 +1082,21 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     hdr.appendLine("typedef struct {")
     if (props.isEmpty()) hdr.appendLine("    char _dummy;")
     for (p in props) {
-        val pType = p.type ?: inferInitType(p.init)
-        val resolved = resolveTypeName(pType)
-        val sizeAnn = getSizeAnnotation(pType)
-        if (isArrayType(resolved) && sizeAnn != null) {
-            val elemType = arrayElementCType(resolved)
+        val pType     = p.type ?: inferInitType(p.init)
+        val vKtcObj   = resolveTypeName(pType)                          // KtcType for struct field
+        val sizeAnn   = getSizeAnnotation(pType)
+        if (vKtcObj.isArrayLike && sizeAnn != null) {
+            val vElemType = cTypeStr(vKtcObj.asArr!!.elem)              // element C type for sized array
             val fn = privPrefix(p) + p.name
-            hdr.appendLine("    $elemType ${fn}[${sizeAnn}];")
+            hdr.appendLine("    $vElemType ${fn}[${sizeAnn}];")
             hdr.appendLine("    int32_t ${fn}\$len;")
-        } else if (isArrayType(resolved)) {
+        } else if (vKtcObj.isArrayLike) {
             val fn = privPrefix(p) + p.name
-            hdr.appendLine("    ${cTypeStr(resolved)} ${fn};")
+            hdr.appendLine("    ${cTypeStr(vKtcObj)} ${fn};")
             hdr.appendLine("    int32_t ${fn}\$len;")
         } else {
             val fn = privPrefix(p) + p.name
-            hdr.appendLine("    ${cType(pType)} ${fn};${ptrNullComment(resolved)}")
+            hdr.appendLine("    ${cTypeStr(vKtcObj)} ${fn};${ptrNullComment(vKtcObj)}")
         }
     }
     hdr.appendLine("} ${cName}_t;")
@@ -1083,18 +1116,18 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     val prevObject = currentObject
     currentObject = d.name
     pushScope()
-    for (p in props) defineVar(p.name, resolveTypeName(p.type ?: inferInitType(p.init)))
+    for (p in props) defineVarKtc(p.name, resolveTypeName(p.type ?: inferInitType(p.init)))
     for (p in props) {
         if (p.init != null) {
-            val pType = p.type ?: inferInitType(p.init)
-            val resolved = resolveTypeName(pType)
-            val sizeAnn = getSizeAnnotation(pType)
-            val expr = genExpr(p.init)
+            val pType       = p.type ?: inferInitType(p.init)
+            val vKtcObjInit = resolveTypeName(pType)                   // KtcType for array checks
+            val sizeAnn     = getSizeAnnotation(pType)
+            val expr        = genExpr(p.init)
             flushPreStmts("    ")
-            if (isArrayType(resolved) && sizeAnn != null) {
-                val elemType = arrayElementCType(resolved)
+            if (vKtcObjInit.isArrayLike && sizeAnn != null) {
+                val vElemType = cTypeStr(vKtcObjInit.asArr!!.elem)     // element C type for sized array
                 val fn = privPrefix(p) + p.name
-                impl.appendLine("    memcpy($cName.$fn, $expr, $sizeAnn * sizeof($elemType));")
+                impl.appendLine("    memcpy($cName.$fn, $expr, $sizeAnn * sizeof($vElemType));")
                 impl.appendLine("    $cName.${fn}\$len = ${sizeAnn};")
             } else {
                 val fn = privPrefix(p) + p.name
@@ -1114,10 +1147,11 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     // Forward-declare private methods so nested classes can call them
     for (m in methods) {
         if (m.isPrivate) {
-            val retResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+            val vRetKtcFwd  = if (m.returnType != null) resolveTypeName(m.returnType) else null  // KtcType for fwd decl
+            val vFwdRetStr  = vRetKtcFwd?.toInternalStr ?: ""                                    // string for cTypeStr
             val cRet = when {
                 m.returnType != null && isSizedArrayTypeRef(m.returnType) -> "void"
-                retResolved.isNotEmpty() -> cTypeStr(retResolved)
+                vFwdRetStr.isNotEmpty() -> cTypeStr(vFwdRetStr)
                 else -> "void"
             }
             val fwdParams = expandParams(m.params)
@@ -1141,9 +1175,10 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     val prevObjectForMethods = currentObject
     currentObject = d.name
     for (m in methods) {
-        val returnsSizedArray = m.returnType != null && isSizedArrayTypeRef(m.returnType)
-        val returnsArray = m.returnType != null && !returnsSizedArray && isArrayType(resolveTypeName(m.returnType))
-        val retResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+        val returnsSizedArray  = m.returnType != null && isSizedArrayTypeRef(m.returnType)
+        val vRetKtcM           = if (m.returnType != null) resolveTypeName(m.returnType) else null  // KtcType of return
+        val returnsArray       = !returnsSizedArray && (vRetKtcM?.isArrayLike ?: false)             // true if return is non-sized array
+        val retResolved        = vRetKtcM?.toInternalStr ?: ""                                      // string for cTypeStr
         val cRet = when {
             returnsSizedArray -> "void"
             retResolved.isNotEmpty() -> cTypeStr(retResolved)
@@ -1154,7 +1189,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         val baseParams = expandParams(m.params)
         val extraParam = when {
             returnsSizedArray -> {
-                val elemCType = arrayElementCType(resolveTypeName(m.returnType))
+                val elemCType = cTypeStr(vRetKtcM!!.asArr!!.elem)
                 "$elemCType* \$out"
             }
             returnsArray -> "int32_t* \$len_out"
@@ -1181,11 +1216,14 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         currentFnReturnType = retResolved
         if (returnsSizedArray) {
             currentFnSizedArraySize = getSizeAnnotation(m.returnType)!!
-            currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(m.returnType))
+            currentFnSizedArrayElemType = cTypeStr(vRetKtcM!!.asArr!!.elem)
         }
         pushScope()
-        for (p in props) defineVar(p.name, resolveTypeName(p.type ?: inferInitType(p.init)))
-        for (p in m.params) defineVar(p.name, if (p.isVararg) "${resolveTypeName(p.type)}Array" else resolveTypeName(p.type))
+        for (p in props) defineVarKtc(p.name, resolveTypeName(p.type ?: inferInitType(p.init)))
+        for (p in m.params) {
+            val vKtcObjParam = resolveTypeName(p.type)             // KtcType of this method parameter
+            defineVar(p.name, if (p.isVararg) "${vKtcObjParam.toInternalStr}Array" else vKtcObjParam.toInternalStr)
+        }
         val savedTrampolined6 = trampolinedParams.toHashSet(); trampolinedParams.clear()
         emitArrayParamCopies(m.params, "    ")
         val savedDefers3 = deferStack.toList(); deferStack.clear()
@@ -1250,11 +1288,13 @@ internal fun CCodeGen.emitInterfaceVtable(info: IfaceInfo) {
     }
     for (m in allMethods) {
         val mReturnsNullable = m.returnType != null && m.returnType.nullable
-        val mRetResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+        val vMRetKtc   = if (m.returnType != null) resolveTypeName(m.returnType) else null  // KtcType of method return
+        val mRetResolved = vMRetKtc?.toInternalStr ?: ""                                    // string for optCTypeName
         val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
         val extraParams = m.params.joinToString("") { p ->
-            val pResolved = resolveTypeName(p.type)
-            if (p.type.nullable) ", ${optCTypeName(pResolved)} ${p.name}"
+            val vKtcVtParam  = resolveTypeName(p.type)                  // KtcType of vtable param
+            val vVtParamStr  = vKtcVtParam.toInternalStr                // string for optCTypeName
+            if (p.type.nullable) ", ${optCTypeName(vVtParamStr)} ${p.name}"
             else ", ${cType(p.type)} ${p.name}"
         }
         hdr.appendLine("    $cRet (*${m.name})(void* \$self$extraParams);")
@@ -1434,11 +1474,13 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
             }
             for (m in allMethods) {
                 val mReturnsNullable = m.returnType != null && m.returnType.nullable
-                val mRetResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+                val vMRetKtcCast   = if (m.returnType != null) resolveTypeName(m.returnType) else null  // KtcType of return
+                val mRetResolved   = vMRetKtcCast?.toInternalStr ?: ""                                  // string for optCTypeName
                 val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
                 val extraCast = m.params.joinToString("") { p ->
-                    val pResolved = resolveTypeName(p.type)
-                    if (p.type.nullable) ", ${optCTypeName(pResolved)}" else ", ${cType(p.type)}"
+                    val vKtcCastParam = resolveTypeName(p.type)          // KtcType of cast param
+                    val vCastPStr     = vKtcCastParam.toInternalStr      // string for optCTypeName
+                    if (p.type.nullable) ", ${optCTypeName(vCastPStr)}" else ", ${cType(p.type)}"
                 }
                 val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
                     "ktc_noop_dispose"
@@ -1520,11 +1562,13 @@ internal fun CCodeGen.emitTransitiveInterfaceVtables(
         }
         for (m in superMethods) {
             val mReturnsNullable = m.returnType != null && m.returnType.nullable
-            val mRetResolved = if (m.returnType != null) resolveTypeName(m.returnType) else ""
+            val vMRetKtcTrans   = if (m.returnType != null) resolveTypeName(m.returnType) else null  // KtcType of return
+            val mRetResolved    = vMRetKtcTrans?.toInternalStr ?: ""                                 // string for optCTypeName
             val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
             val extraCast = m.params.joinToString("") { p ->
-                val pResolved = resolveTypeName(p.type)
-                if (p.type.nullable) ", ${optCTypeName(pResolved)}" else ", ${cType(p.type)}"
+                val vKtcTransParam = resolveTypeName(p.type)             // KtcType of cast param
+                val vTransPStr     = vKtcTransParam.toInternalStr        // string for optCTypeName
+                if (p.type.nullable) ", ${optCTypeName(vTransPStr)}" else ", ${cType(p.type)}"
             }
             val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
                 "ktc_noop_dispose"
@@ -1576,8 +1620,9 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
 
     val returnsNullable = !isMain && f.returnType != null && f.returnType.nullable
     val returnsSizedArray = !isMain && !returnsNullable && f.returnType != null && isSizedArrayTypeRef(f.returnType)
-    val returnsArray = !isMain && !returnsNullable && !returnsSizedArray && f.returnType != null && isArrayType(resolveTypeName(f.returnType))
-    val retResolved = if (f.returnType != null) resolveTypeName(f.returnType) else f.body?.let { inferBlockType(it) } ?: ""
+    val vRetKtcFun   = if (!isMain && f.returnType != null) resolveTypeName(f.returnType) else null  // KtcType of return
+    val returnsArray = !isMain && !returnsNullable && !returnsSizedArray && (vRetKtcFun?.isArrayLike ?: false)
+    val retResolved  = vRetKtcFun?.toInternalStr ?: f.body?.let { inferBlockType(it) } ?: ""         // string for legacy helpers
     val optRetCType = if (returnsNullable) optCTypeName(retResolved) else ""
     val cRet  = if (isMain) "int" else if (returnsSizedArray) "void" else if (returnsNullable && retResolved == "Any") "ktc_Any" else if (returnsNullable) optRetCType else if (retResolved.isNotEmpty()) cTypeStr(retResolved) else "void"
     val cName = if (isMain) "main" else funCName(baseName)
@@ -1588,7 +1633,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
             val base = expandParams(f.params)
             val extra = when {
                 returnsSizedArray -> {
-                    val elemCType = arrayElementCType(resolveTypeName(f.returnType))
+                    val elemCType = cTypeStr(vRetKtcFun!!.asArr!!.elem)
                     "$elemCType* \$out"
                 }
                 returnsArray -> "int32_t* \$len_out"
@@ -1621,7 +1666,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     currentFnOptReturnCTypeName = optRetCType
     if (returnsSizedArray) {
         currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
-        currentFnSizedArrayElemType = arrayElementCType(resolveTypeName(f.returnType))
+        currentFnSizedArrayElemType = cTypeStr(vRetKtcFun!!.asArr!!.elem)
     }
     currentFnReturnType = retResolved
     currentFnIsMain = isMain
@@ -1641,13 +1686,14 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
         defineVar(argName, "StringArray")
     } else {
         for (p in f.params) {
-            val resolved = resolveTypeName(p.type)
+            val vKtcFunParam = resolveTypeName(p.type)                  // KtcType of this parameter
+            val vFunPStr     = vKtcFunParam.toInternalStr               // string for vararg/nullable/isValueNullable
             defineVar(p.name, when {
-                p.isVararg -> "${resolved}Array"  // vararg params are arrays (ptr + $len)
-                p.type.nullable -> "${resolved}?"
-                else -> resolved
+                p.isVararg -> "${vFunPStr}Array"  // vararg params are arrays (ptr + $len)
+                p.type.nullable -> "${vFunPStr}?"
+                else -> vFunPStr
             })
-            if (p.type.nullable && isValueNullableType("${resolved}?")) markOptional(p.name)
+            if (p.type.nullable && isValueNullableType("${vFunPStr}?")) markOptional(p.name)
         }
     }
     val savedTrampolined7 = trampolinedParams.toHashSet(); trampolinedParams.clear()
@@ -1693,8 +1739,9 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
 // ── top-level property ───────────────────────────────────────────
 
 internal fun CCodeGen.emitTopProp(d: PropDecl) {
-    val t = if (d.type != null) resolveTypeName(d.type) else (inferExprType(d.init) ?: "Int")
-    val ct = cTypeStr(t)
+    val vKtcTop = if (d.type != null) resolveTypeName(d.type) else null  // KtcType of prop type, or null
+    val t       = vKtcTop?.toInternalStr ?: (inferExprType(d.init) ?: "Int")  // string for cTypeStr/defaultVal
+    val ct      = cTypeStr(t)
     val cName = typeFlatName(d.name)  // top-level prop — typeFlatName falls back to prefix+name
     val tls = if (d.name in tlsProps) "ktc_tls " else ""
     val qual = if (!d.mutable) "const " else ""

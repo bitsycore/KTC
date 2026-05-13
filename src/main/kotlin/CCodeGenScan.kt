@@ -290,7 +290,7 @@ internal fun CCodeGen.materializeGenericInstantiations() {
 /** Resolve an interface TypeRef to its concrete name (e.g. MutableList<Int> → "MutableList_Int"). */
 internal fun CCodeGen.resolveIfaceName(t: TypeRef): String {
     if (t.typeArgs.isEmpty()) return t.name
-    return mangledGenericName(t.name, t.typeArgs.map { resolveTypeName(it) })
+    return mangledGenericName(t.name, t.typeArgs.map { resolveTypeNameStr(it) })
 }
 
 /**
@@ -302,7 +302,7 @@ internal fun CCodeGen.materializeGenericInterface(t: TypeRef) {
     val baseName = t.name
     val template = interfaces[baseName] ?: return
     if (template.typeParams.isEmpty()) return  // non-generic template
-    val typeArgs = t.typeArgs.map { resolveTypeName(it) }
+    val typeArgs = t.typeArgs.map { resolveTypeNameStr(it) }
     val mangledName = mangledGenericName(baseName, typeArgs)
     if (interfaces.containsKey(mangledName)) return  // already materialized
     val subst = template.typeParams.zip(typeArgs).toMap()
@@ -414,7 +414,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                                 genericFunInstantiations.getOrPut(dotName) { mutableSetOf() }.add(typeArgs)
                                 // Also register in extensionFuns for method dispatch
                                 val mangledRecvName = substituteTypeRef(f.receiver!!, f.typeParams.zip(typeArgs).toMap()).let {
-                                    resolveTypeName(it)
+                                    resolveTypeNameStr(it)
                                 }
                                 extensionFuns.getOrPut(mangledRecvName) { mutableListOf() }.add(f)
                             }
@@ -442,8 +442,9 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                 is VarDeclStmt -> {
                     scanExpr(s.init)
                     /* Track variable type as KtcType for subsequent inference in this function. */
-                    val vVarTypeStr = if (s.type != null) resolveTypeName(s.type) else inferExprType(s.init)
-                    if (vVarTypeStr != null) preScanVarTypes?.set(s.name, parseResolvedTypeName(vVarTypeStr))
+                    val vVarKtc: KtcType? = if (s.type != null) resolveTypeName(s.type)  // typed: resolve directly
+                        else inferExprType(s.init)?.let { parseResolvedTypeName(it) }     // inferred: parse inferred string
+                    if (vVarKtc != null) preScanVarTypes?.set(s.name, vVarKtc)
                 }
                 is AssignStmt -> { scanExpr(s.target); scanExpr(s.value) }
                 is ExprStmt -> scanExpr(s.expr)
@@ -465,7 +466,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                 preScanVarTypes!!.clear()  // fresh var scope per function
                 // Register function params so they're available for inference
                 for (p in d.params) {
-                    preScanVarTypes!![p.name] = resolveTypeNameKtc(p.type)  // store as KtcType
+                    preScanVarTypes!![p.name] = resolveTypeName(p.type)  // store as KtcType
                 }
                 scanner.scanBlock(d.body)
             }
@@ -473,7 +474,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                 for (m in d.members) if (m is FunDecl) {
                     preScanVarTypes!!.clear()
                     for (p in m.params) {
-                        preScanVarTypes!![p.name] = resolveTypeNameKtc(p.type)  // store as KtcType
+                        preScanVarTypes!![p.name] = resolveTypeName(p.type)  // store as KtcType
                     }
                     scanner.scanBlock(m.body)
                 }
@@ -704,7 +705,7 @@ internal fun CCodeGen.computeGenericFunConcreteReturns() {
             val subst = funDecl.typeParams.zip(typeArgs).toMap()
             val prevSubst = typeSubst
             typeSubst = subst
-            val resolvedReturn = resolveTypeName(funDecl.returnType)
+            val resolvedReturn = resolveTypeNameStr(funDecl.returnType)
             if (interfaces.containsKey(resolvedReturn)) {
                 val concrete = inferConcreteReturnClass(funDecl.body, subst)
                 if (concrete != null) {

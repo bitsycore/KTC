@@ -64,7 +64,7 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
             if (parentObj != null && currentObject == null) {
                 val oi = objects[parentObj]
                 if (oi?.props?.any { it.first == e.name } == true)
-                    resolveTypeName(oi.props.find { it.first == e.name }!!.second)
+                    resolveTypeNameStr(oi.props.find { it.first == e.name }!!.second)
                 else null
             } else null
         }
@@ -98,8 +98,8 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
         // Look up the function signature and build a Fun(...)->R type string
         val sig = funSigs[e.name]
         if (sig != null) {
-            val params = sig.params.joinToString(",") { resolveTypeName(it.type) }
-            val ret = if (sig.returnType != null) resolveTypeName(sig.returnType) else "Unit"
+            val params = sig.params.joinToString(",") { resolveTypeNameStr(it.type) }
+            val ret = if (sig.returnType != null) resolveTypeNameStr(sig.returnType) else "Unit"
             "Fun($params)->$ret"
         } else null
     }
@@ -136,15 +136,15 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         }
         // Pair constructor (intrinsic — only when no user-defined class named Pair)
         if (name == "Pair" && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
-            val a = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[0]) else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
-            val b = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[1]) else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
+            val a = if (e.typeArgs.size == 2) resolveTypeNameStr(e.typeArgs[0]) else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
+            val b = if (e.typeArgs.size == 2) resolveTypeNameStr(e.typeArgs[1]) else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
             return "Pair_${a}_${b}"
         }
         // Triple constructor (intrinsic)
         if (name == "Triple" && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
-            val a = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[0]) else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
-            val b = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[1]) else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
-            val c = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[2]) else inferExprType(e.args.getOrNull(2)?.expr) ?: "Int"
+            val a = if (e.typeArgs.size == 3) resolveTypeNameStr(e.typeArgs[0]) else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
+            val b = if (e.typeArgs.size == 3) resolveTypeNameStr(e.typeArgs[1]) else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
+            val c = if (e.typeArgs.size == 3) resolveTypeNameStr(e.typeArgs[2]) else inferExprType(e.args.getOrNull(2)?.expr) ?: "Int"
             return "Triple_${a}_${b}_${c}"
         }
         // Generic class constructor: MyList<Int>(8) → "MyList_Int"
@@ -285,7 +285,7 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         }
         // Generic Array<T>(size) constructor
         if (name == "Array" && e.typeArgs.isNotEmpty()) {
-            val elemName = resolveTypeName(e.typeArgs[0])
+            val elemName = resolveTypeNameStr(e.typeArgs[0])
             return "${elemName}Array"
         }
         // Generic function call: newArray<Int>(5) → resolve return type with type substitution
@@ -293,7 +293,7 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         val genFun = genericFunDecls.find { it.name == name }
         if (genFun != null && genFun.returnType != null) {
             val typeArgNames = if (e.typeArgs.isNotEmpty()) {
-                e.typeArgs.map { resolveTypeName(it) }
+                e.typeArgs.map { resolveTypeNameStr(it) }
             } else {
                 // Infer type args from argument types
                 val inferredSubst = mutableMapOf<String, String>()
@@ -312,13 +312,13 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
                 val subst = genFun.typeParams.zip(typeArgNames).toMap()
                 val saved = typeSubst
                 typeSubst = subst
-                val result = resolveTypeName(genFun.returnType)
+                val result = resolveTypeNameStr(genFun.returnType)
                 typeSubst = saved
                 return if (genFun.returnType.nullable && !result.endsWith("?")) "${result}?" else result
             }
         }
         funSigs[name]?.returnType?.let {
-            val base = resolveTypeName(it)
+            val base = resolveTypeNameStr(it)
             return if (it.nullable && !base.endsWith("?")) "${base}?" else base
         }
     }
@@ -338,11 +338,11 @@ internal fun CCodeGen.resolveMethodReturnType(className: String, returnType: Typ
     val base = if (bindings != null) {
         val saved = typeSubst
         typeSubst = bindings
-        val result = resolveTypeName(returnType)
+        val result = resolveTypeNameStr(returnType)
         typeSubst = saved
         result
     } else {
-        resolveTypeName(returnType)
+        resolveTypeNameStr(returnType)
     }
     return if (returnType.nullable && !base.endsWith("?")) "${base}?" else base
 }
@@ -356,7 +356,7 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     if (vCompanionName != null) {
         val vMethod = objects[vCompanionName]?.methods?.find { it.name == dot.name }
         if (vMethod != null && vMethod.returnType != null) {
-            val base = resolveTypeName(vMethod.returnType)
+            val base = resolveTypeNameStr(vMethod.returnType)
             return if (vMethod.returnType.nullable && !base.endsWith("?")) "${base}?" else base
         }
         return null
@@ -422,7 +422,7 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
             return resolveMethodReturnType(pointerBase, classMethod.returnType)
         }
         val extFun = extensionFuns[pointerBase]?.find { it.name == method }
-        if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
+        if (extFun != null) return if (extFun.returnType != null) resolveTypeNameStr(extFun.returnType) else "Unit"
         return when (method) {
             "value" -> pointerBase
             "deref" -> pointerBase
@@ -459,7 +459,7 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     }
     // Extension function on non-class type
     val extFun = extensionFuns[recvType]?.find { it.name == method }
-    if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType) else "Unit"
+    if (extFun != null) return if (extFun.returnType != null) resolveTypeNameStr(extFun.returnType) else "Unit"
     // Enum static methods
     if (recvType in enums) {
         when (method) {
@@ -476,13 +476,13 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
     if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return e.obj.name
     if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
         val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
-        return if (prop != null) resolveTypeName(prop.second) else null
+        return if (prop != null) resolveTypeNameStr(prop.second) else null
     }
     // Companion object property: Foo.bar → look up in companion's ObjInfo
     if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
         val vCompanionName = classCompanions[e.obj.name]!!
         val vProp = objects[vCompanionName]?.props?.find { it.first == e.name }
-        return if (vProp != null) resolveTypeName(vProp.second) else null
+        return if (vProp != null) resolveTypeNameStr(vProp.second) else null
     }
     val recvType = inferExprType(e.obj) ?: return null
     if (recvType.startsWith("Pair_")) {
@@ -540,11 +540,11 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
     if (indirectBase != null) {
         val ci = classes[indirectBase] ?: return null
         val prop = ci.props.find { it.first == e.name }
-        return if (prop != null) resolveTypeName(prop.second) else null
+        return if (prop != null) resolveTypeNameStr(prop.second) else null
     }
     val ci = classes[recvType] ?: return null
     val prop = ci.props.find { it.first == e.name }
-    return if (prop != null) resolveTypeName(prop.second) else null
+    return if (prop != null) resolveTypeNameStr(prop.second) else null
 }
 
 internal fun CCodeGen.inferDotTypeSafe(e: SafeDotExpr): String? {

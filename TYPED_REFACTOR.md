@@ -487,7 +487,7 @@ Phase 4: Typed Type Resolution ✅
 - [x] 4.4 — inferExprTypeKtc added (NameExpr uses lookupVarKtc; others delegate+convert)
 - [x] 4.5 — inferDotTypeKtc / inferMethodReturnTypeKtc added (delegate+convert)
 - [x] 4.6 — findOverload uses KtcType comparison via inferExprTypeKtc + resolveTypeNameKtc
-- [ ] 4.7 — Remove old resolveTypeName(String) alias, rename (deferred: 100+ inferExprType callers not yet migrated)
+- [x] 4.7 — Renamed: resolveTypeNameKtc → resolveTypeName (returns KtcType); old resolveTypeName → resolveTypeNameStr (returns String); resolveTypeNameInner → resolveTypeNameInnerStr; updated all callers across CCodeGenCTypes, CCodeGenEmit, CCodeGenExpr, CCodeGenInfer, CCodeGenScan, CCodeGen; 32/32 tests pass
 Phase 5: Typed Dispatch ✅
 - [x] 5.1 — Add KtcType-based lookup helpers (classInfoFor/ifaceInfoFor/objInfoFor/enumInfoFor)
 - [x] 5.2 — Migrate genMethodCall (interface/class/object/companion/enum dispatch → TypeDef.flatName)
@@ -503,8 +503,8 @@ Phase 7: Remove Bridge ✅
 - [x] 7.1 — Audit direct stringToKtc calls (all are legitimate bridges at AST input edge: defineVar, scan, inference, cTypeStr(String))
 - [x] 7.2 — Simplify cType(TypeRef) path: cTypeStr(resolveTypeNameKtc(t)); removed typeToKtc alias
 - [x] 7.3 — Rename stringToKtc → parseResolvedTypeName throughout codebase (CCodeGenCTypes, CCodeGenInfer, CCodeGenScan, CCodeGen)
-Phase 8: Cleanup ✅
-- [ ] 8.1 — Remove dead string-based type utilities (isArrayType, isValueNullableType etc. still live — deferred until Phase 4/5 callers fully migrated)
+Phase 8: Cleanup (partial)
+- [ ] 8.1 — Remove dead string-based type utilities: partial migration done — cFuncPtrDecl(KtcType.Func, String) overload added; KtcType-based emission used in expandParams/expandCtorParams (CCodeGenCTypes), findOverload (CCodeGen), emitVarDecl/tryArrayOfInit/tryArrayOfInit (CCodeGenStmts), Array<T>() constructor/expandCallArgs (CCodeGenExpr), preScanVarTypes (CCodeGenScan); remaining callers mostly build type-name strings for mangling, optCTypeName/isValueNullableType/arrayElementCType/anyIndirectClassName/isFuncType still live; full removal blocked until: (a) KtcType.Func carries param/return types, (b) KtcType gains isValueNullable/optCType helpers, (c) inferExprType returns KtcType (Phase 4.4 full migration), (d) string key maps (classes, interfaces, enums) re-keyed by TypeDef reference
 - [x] 8.2 — Remove internalName from KtcType (zero callers; deleted from CoreTypes.kt)
 - [x] 8.2b — Remove symbolPrefix map entirely: replaced all reads with TypeDef.pkg lookups, removed all writes; pfx() simplified to $prefix+name fallback
-- [x] 8.3 — Final verification: 32/32 integration tests pass; zero symbolPrefix[ in source; pfx() only called from typeFlatName/funCName fallbacks (no longer consults any map); resolveTypeName still has 159 callers (Phase 4.7 deferred)
+- [x] 8.3 — Final verification: 32/32 integration tests pass; zero symbolPrefix[ in source; pfx() only called from typeFlatName/funCName fallbacks (no longer consults any map)

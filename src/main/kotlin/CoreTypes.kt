@@ -140,6 +140,16 @@ internal sealed class KtcType {
     val isString: Boolean get() = this is Str
     val isVoid: Boolean get() = this is Void
 
+    /* True for both Arr and Ptr(Arr): replaces isArrayType(String) check. */
+    val isArrayLike: Boolean get() = this is Arr || (this is Ptr && inner is Arr)
+
+    /* Extract the Arr node from Arr or Ptr(Arr), null otherwise. */
+    val asArr: Arr? get() = when (this) {
+        is Arr -> this
+        is Ptr -> inner as? Arr
+        else -> null
+    }
+
     val elementType: KtcType? get() = when (this) {
         is Arr -> elem
         is Ptr -> inner
