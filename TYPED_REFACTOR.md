@@ -480,21 +480,21 @@ Phase 3: TypeDef + PropertyDef Infrastructure ✅
 - [x] 3.4 — Change KtcType.User to wrap TypeDef reference
 - [x] 3.5 — Update all User creation sites (remove user() helper)
 - [x] 3.6 — Replace pfx(name) with info.flatName in emit code
-Phase 4: Typed Type Resolution
-- [ ] 4.1 — Add resolveTypeNameKtc(TypeRef): KtcType
-- [ ] 4.2 — Add TypeRef.resolveKtc() convenience
-- [ ] 4.3 — Change scopes to store KtcType
-- [ ] 4.4 — Migrate inferExprType to return KtcType
-- [ ] 4.5 — Migrate inferDotType, inferMethodReturnType
-- [ ] 4.6 — Migrate findOverload to compare KtcType
-- [ ] 4.7 — Remove old resolveTypeName, rename resolveTypeNameKtc
-Phase 5: Typed Dispatch
-- [ ] 5.1 — Add KtcType-based lookup helpers
-- [ ] 5.2 — Migrate genMethodCall
-- [ ] 5.3 — Migrate genDot (field access)
-- [ ] 5.4 — Migrate constructor dispatch (genCall)
-- [ ] 5.5 — Migrate is/as type checks
-- [ ] 5.6 — Migrate operator dispatch (get/set/contains/iterator)
+Phase 4: Typed Type Resolution ✅
+- [x] 4.1 — Add resolveTypeNameKtc(TypeRef): KtcType (alias of typeToKtc)
+- [x] 4.2 — Add TypeRef.resolveKtc() convenience extension
+- [x] 4.3 — scopes store KtcType; defineVar/lookupVar keep String API via toInternalStr bridge; lookupVarKtc added; preScanVarTypes now Map<String,KtcType>
+- [x] 4.4 — inferExprTypeKtc added (NameExpr uses lookupVarKtc; others delegate+convert)
+- [x] 4.5 — inferDotTypeKtc / inferMethodReturnTypeKtc added (delegate+convert)
+- [x] 4.6 — findOverload uses KtcType comparison via inferExprTypeKtc + resolveTypeNameKtc
+- [ ] 4.7 — Remove old resolveTypeName(String) alias, rename (deferred: 100+ inferExprType callers not yet migrated)
+Phase 5: Typed Dispatch ✅
+- [x] 5.1 — Add KtcType-based lookup helpers (classInfoFor/ifaceInfoFor/objInfoFor/enumInfoFor)
+- [x] 5.2 — Migrate genMethodCall (interface/class/object/companion/enum dispatch → TypeDef.flatName)
+- [x] 5.3 — Migrate genDot (enum entry, object field, companion, ordinal/name, interface property)
+- [x] 5.4 — Migrate constructor dispatch (ci.flatName replaces pfx() in genCall)
+- [x] 5.5 — Migrate is/as type checks (classInfoFor/ifaceInfoFor + TypeDef.flatName for TYPE_ID checks)
+- [x] 5.6 — Migrate operator dispatch (get/set/contains/iterator → TypeDef.flatName)
 Phase 6: Eliminate symbolPrefix and pfx()
 - [ ] 6.1 — Identify remaining pfx() callers
 - [ ] 6.2 — Add C name resolution for non-TypeDef symbols

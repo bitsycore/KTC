@@ -588,3 +588,41 @@ internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
     }
     return arrayElementKtType(t)
 }
+
+// ══ Phase 4.4 — KtcType inference entry points ══════════════════════
+
+/*
+Infer the KtcType of an expression.
+For NameExpr uses lookupVarKtc directly to avoid string round-trip.
+All other branches delegate to inferExprType and convert via stringToKtc.
+Callers should migrate to this function progressively (Phase 5 dispatch).
+*/
+internal fun CCodeGen.inferExprTypeKtc(inExpr: Expr?): KtcType?
+	{
+	if (inExpr == null) return null
+	if (inExpr is NameExpr)
+		{
+		/* Use KtcType scope directly — avoids toInternalStr → stringToKtc round-trip. */
+		val vKtc = lookupVarKtc(inExpr.name)
+		if (vKtc != null) return vKtc
+		/* Fall through to string-based for objects/enums/parent-object lookup. */
+		}
+	val vStr = inferExprType(inExpr) ?: return null  // string-based fallback
+	return stringToKtc(vStr)
+	}
+
+// ── Phase 4.5 — KtcType dot / method-return inference ───────────────
+
+/* Infer the KtcType of a dot expression (field access). */
+internal fun CCodeGen.inferDotTypeKtc(inExpr: DotExpr): KtcType?
+	{
+	val vStr = inferDotType(inExpr) ?: return null  // delegate to string version
+	return stringToKtc(vStr)
+	}
+
+/* Infer the KtcType of a method call return. */
+internal fun CCodeGen.inferMethodReturnTypeKtc(inDot: DotExpr, inArgs: List<Arg>): KtcType?
+	{
+	val vStr = inferMethodReturnType(inDot, inArgs) ?: return null
+	return stringToKtc(vStr)
+	}

@@ -586,15 +586,21 @@ internal fun CCodeGen.escapeStr(s: String): String = s
 
 // ── Typed bridge (KtcType) ──────────────────────────────────────────
 
-/**
- * Build a KtcType from a TypeRef using the existing string-based resolveTypeName.
- * This is the migration bridge — eventually resolveTypeName will return KtcType directly.
- */
-internal fun CCodeGen.typeToKtc(t: TypeRef?): KtcType {
-    if (t == null) return KtcType.Prim(KtcType.PrimKind.Int)
-    val resolved = resolveTypeName(t)
-    return stringToKtc(resolved, t)
-}
+/*
+Build a KtcType from a TypeRef using the existing string-based resolveTypeName.
+Phase 4.1: canonical entry point for TypeRef → KtcType resolution.
+*/
+internal fun CCodeGen.resolveTypeNameKtc(inT: TypeRef?): KtcType {
+	if (inT == null) return KtcType.Prim(KtcType.PrimKind.Int) // default to Int for null TypeRef
+	val vResolved = resolveTypeName(inT)                        // string-based resolution (bridge)
+	return stringToKtc(vResolved, inT)
+	}
+
+/* Backward-compat alias — callers migrated to resolveTypeNameKtc incrementally. */
+internal fun CCodeGen.typeToKtc(inT: TypeRef?): KtcType = resolveTypeNameKtc(inT)
+
+/* Phase 4.2 — convenience extension so TypeRef can self-resolve. */
+internal fun TypeRef.resolveKtc(inGen: CCodeGen): KtcType = inGen.resolveTypeNameKtc(this)
 
 /* Create KtcType.User by looking up the TypeDef from symbol tables, or creating a BuiltinTypeDef. */
 internal fun CCodeGen.userType(inName: String, inKind: KtcType.UserKind = KtcType.UserKind.Class): KtcType.User {

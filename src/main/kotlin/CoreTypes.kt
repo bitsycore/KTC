@@ -157,6 +157,34 @@ internal sealed class KtcType {
         else -> toCType()
     }
 
+    /*
+    Convert to the internal scope string format used by string-based type tracking.
+    This is the inverse of stringToKtc — produces the same strings that resolveTypeName
+    would return. Used as a compat bridge during Phase 4 migration.
+    Examples: Prim(Int) → "Int", Nullable(User(Vec2)) → "Vec2?", Ptr(Arr(Prim(Int))) → "IntArray"
+    */
+    val toInternalStr: String get() = when (this) {
+        is Prim     -> kind.name                             // "Int", "Boolean", etc.
+        is Str      -> "String"
+        is Void     -> "Unit"
+        is User     -> baseName                              // bare class name, no pkg
+        is Func     -> {
+            val vParams = params.joinToString(",") { it.toInternalStr }  // param strings
+            "Fun($vParams)->${ret.toInternalStr}"
+            }
+        is Arr      -> "${elem.toInternalStr}Array"          // "IntArray", "Vec2Array"
+        is Ptr      -> when (val vInner = inner)
+            {
+            is Arr  -> when (val vElem = vInner.elem)
+                {
+                is Nullable -> "${vElem.inner.toInternalStr}OptArray"  // "IntOptArray"
+                else        -> "${vElem.toInternalStr}Array"           // "IntArray" (typed ptr)
+                }
+            else    -> "${vInner.toInternalStr}*"                      // "Vec2*"
+            }
+        is Nullable -> "${inner.toInternalStr}?"             // "Int?", "Vec2?", "Vec2*?"
+        }
+
     val nullable: KtcType get() = Nullable(this)
 
     // ── Static builder from TypeRef ──────────────────────────────────

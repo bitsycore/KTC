@@ -189,15 +189,47 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal val genericTypeBindings = mutableMapOf<String, Map<String, String>>()
 
     // ── Per-scope variable → type mapping ────────────────────────────
-    internal val scopes = ArrayDeque<MutableMap<String, String>>()
+    /* Phase 4.3: scopes store KtcType; string interface kept via toInternalStr bridge. */
+    internal val scopes = ArrayDeque<MutableMap<String, KtcType>>()  // variable name → KtcType
     internal fun pushScope() { scopes.addLast(mutableMapOf()); optValVarNames.addLast(mutableSetOf()); mutableVarScopes.addLast(mutableSetOf()) }
     internal fun popScope()  { scopes.removeLast(); optValVarNames.removeLast(); mutableVarScopes.removeLast() }
-    internal fun defineVar(name: String, type: String) { scopes.last()[name] = type }
-    internal fun lookupVar(name: String): String? { for (i in scopes.indices.reversed()) { scopes[i][name]?.let { return it } }; return preScanVarTypes?.get(name) }
 
-    // Temporary variable type map used during scanForGenericFunCalls pre-pass
-    // (allows inferExprType to resolve variable types before codegen defineVar runs)
-    internal var preScanVarTypes: MutableMap<String, String>? = null
+    /* Store a variable type using a KtcType (Phase 4.3+ primary API). */
+    internal fun defineVarKtc(inName: String, inType: KtcType) { scopes.last()[inName] = inType }
+
+    /* Store a variable type using a string (backward-compat bridge, converts via stringToKtc). */
+    internal fun defineVar(inName: String, inType: String) { scopes.last()[inName] = stringToKtc(inType) }
+
+    /* Look up a variable's KtcType (Phase 4.3+ primary API). */
+    internal fun lookupVarKtc(inName: String): KtcType?
+        {
+        for (i in scopes.indices.reversed()) { scopes[i][inName]?.let { return it } }
+        return preScanVarTypes?.get(inName)
+        }
+
+    /* Look up a variable's type as a string (backward-compat bridge, converts via toInternalStr). */
+    internal fun lookupVar(inName: String): String? = lookupVarKtc(inName)?.toInternalStr
+
+    /* Phase 4.3: preScanVarTypes stores KtcType for pre-scan inference pass. */
+    internal var preScanVarTypes: MutableMap<String, KtcType>? = null  // pre-scan variable type map
+
+    /*
+    Phase 5.1: KtcType-based TypeDef lookup helpers.
+    Replace the classes[str] / interfaces[str] / objects[str] / enums[str] dispatch pattern
+    with typed lookups directly from the KtcType.User.decl reference.
+    Returns null for non-User types or when the underlying decl is a different TypeDef kind.
+    */
+    internal fun classInfoFor(inType: KtcType?): ClassInfo? =    // ClassInfo if type is a user-defined class
+        (inType as? KtcType.User)?.decl as? ClassInfo
+
+    internal fun ifaceInfoFor(inType: KtcType?): IfaceInfo? =    // IfaceInfo if type is a user-defined interface
+        (inType as? KtcType.User)?.decl as? IfaceInfo
+
+    internal fun objInfoFor(inType: KtcType?): ObjInfo? =        // ObjInfo if type is a singleton object
+        (inType as? KtcType.User)?.decl as? ObjInfo
+
+    internal fun enumInfoFor(inType: KtcType?): EnumInfo? =      // EnumInfo if type is an enum class
+        (inType as? KtcType.User)?.decl as? EnumInfo
 
     // Track mutable (var) variables — smart casts are only valid on val, val reassignment is an error.
     // Scoped: each pushScope() adds a new set, popScope() removes it.
@@ -256,18 +288,19 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         "UByte", "UShort", "UInt", "ULong", "String", "Any"
     )
 
-    /** True if the variable was originally declared as Any trampoline (or Any?) and later smart-cast narrowed. */
-    internal fun isAnySmartCastVar(name: String): Boolean {
-        val cur = lookupVar(name) ?: return false
-        if (cur == "Any") return false
-        // Search outer scopes for original Any/Any? declaration
-        for (i in scopes.size - 2 downTo 0) {
-            val outer = scopes[i][name]
-            if (outer == "Any" || outer == "Any?") return true
-            if (outer != null) return false
-        }
+    /* True if the variable was originally declared as Any trampoline (or Any?) and later smart-cast narrowed. */
+    internal fun isAnySmartCastVar(inName: String): Boolean
+        {
+        val vCur = lookupVar(inName) ?: return false    // current (narrowed) type string
+        if (vCur == "Any") return false                  // not narrowed if still Any
+        for (i in scopes.size - 2 downTo 0)
+            {
+            val vOuter = scopes[i][inName]?.toInternalStr  // outer scope type as string
+            if (vOuter == "Any" || vOuter == "Any?") return true
+            if (vOuter != null) return false
+            }
         return false
-    }
+        }
 
     /** True if type is a function pointer type: "Fun(P1,P2)->R" */
     internal fun isFuncType(t: String): Boolean = t.startsWith("Fun(")
@@ -1222,28 +1255,42 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         return "${base}With${types.joinToString("_")}"
     }
 
-    /**
-     * Find the matching overloaded method from the given siblings that best matches the call args.
-     * Returns the matched FunDecl, or null.
-     */
-    internal fun findOverload(name: String, args: List<Arg>, siblings: List<FunDecl>): FunDecl? {
-        val candidates = siblings.filter { it.name == name }
-        if (candidates.size <= 1) return candidates.firstOrNull()
-        // First: match by exact arg count
-        val byCount = candidates.filter { args.size in it.params.count { p -> p.default == null }..it.params.size }
-        if (byCount.size == 1) return byCount[0]
-        if (byCount.isEmpty()) return candidates.firstOrNull()
-        // Multiple same-count candidates: match by argument types
-        for (c in byCount) {
-            if (args.size == c.params.size) {
-                val allMatch = args.zip(c.params).all { (arg, param) ->
-                    val argType = inferExprType(arg.expr) ?: "Int"
-                    val paramType = resolveTypeName(param.type).removeSuffix("*").removeSuffix("?")
-                    argType == paramType || paramType == "Any"
+    /*
+    Find the matching overloaded method from the given siblings that best matches the call args.
+    Phase 4.6: uses KtcType comparison instead of string equality for type matching.
+    Returns the matched FunDecl, or null.
+    */
+    internal fun findOverload(inName: String, inArgs: List<Arg>, inSiblings: List<FunDecl>): FunDecl?
+        {
+        val vCandidates = inSiblings.filter { it.name == inName }  // methods with matching name
+        if (vCandidates.size <= 1) return vCandidates.firstOrNull()
+        /* First: narrow by argument count (required params..total params). */
+        val vByCount = vCandidates.filter { inArgs.size in it.params.count { vP -> vP.default == null }..it.params.size }
+        if (vByCount.size == 1) return vByCount[0]
+        if (vByCount.isEmpty()) return vCandidates.firstOrNull()
+        /* Multiple same-count candidates: match by argument KtcType. */
+        for (vCandidate in vByCount)
+            {
+            if (inArgs.size == vCandidate.params.size)
+                {
+                val vAllMatch = inArgs.zip(vCandidate.params).all { (vArg, vParam) ->
+                    val vArgKtc  = inferExprTypeKtc(vArg.expr) ?: KtcType.Prim(KtcType.PrimKind.Int)
+                    val vParamKtc = resolveTypeNameKtc(vParam.type)
+                    /* Strip outer Nullable/Ptr for structural comparison. */
+                    fun KtcType.core(): KtcType = when (this)
+                        {
+                        is KtcType.Nullable -> inner.core()
+                        is KtcType.Ptr      -> inner.core()
+                        else                -> this
+                        }
+                    val vArgCore   = vArgKtc.core()
+                    val vParamCore = vParamKtc.core()
+                    vArgCore == vParamCore ||
+                        (vParamCore is KtcType.User && vParamCore.baseName == "Any")
+                    }
+                if (vAllMatch) return vCandidate
                 }
-                if (allMatch) return c
             }
+        return vByCount.firstOrNull()
         }
-        return byCount.firstOrNull()
     }
-}

@@ -662,15 +662,19 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
 
     // operator set: a[i] = v → ClassName_set(&a, i, v)
     if (s.target is IndexExpr && s.op == "=") {
-        val objType = inferExprType(s.target.obj)
-        if (objType != null && classes.containsKey(objType)) {
-            val setMethod = classes[objType]?.methods?.find { it.name == "set" && it.isOperator }
+        val objType = inferExprType(s.target.obj)                                     // String? object type
+        val objTypeKtc = inferExprTypeKtc(s.target.obj)                              // KtcType? object type
+        val objTypeCoreKtc = (objTypeKtc as? KtcType.Nullable)?.inner ?: objTypeKtc  // KtcType? stripped Nullable
+        val vSetClassInfo = classInfoFor(objTypeCoreKtc)                              // non-null if object is a class
+        val vSetIfaceInfo = ifaceInfoFor(objTypeCoreKtc)                              // non-null if object is an interface
+        if (vSetClassInfo != null) {
+            val setMethod = vSetClassInfo.methods.find { it.name == "set" && it.isOperator }
             if (setMethod != null) {
                 val recv = genExpr(s.target.obj)
                 val idx = genExpr(s.target.index)
                 val value = genExpr(s.value)
                 flushPreStmts(ind)
-                impl.appendLine("$ind${pfx(objType)}_set(&$recv, $idx, $value);")
+                impl.appendLine("$ind${vSetClassInfo.flatName}_set(&$recv, $idx, $value);")
                 return
             }
         }
@@ -686,10 +690,9 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
                 return
             }
         }
-        if (objType != null && interfaces.containsKey(objType)) {
-            val ifaceInfo = interfaces[objType]
-            val setMethod = ifaceInfo?.methods?.find { it.name == "set" && it.isOperator }
-                ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "set" && it.isOperator }
+        if (vSetIfaceInfo != null) {
+            val setMethod = vSetIfaceInfo.methods.find { it.name == "set" && it.isOperator }
+                ?: collectAllIfaceMethods(vSetIfaceInfo).find { it.name == "set" && it.isOperator }
             if (setMethod != null) {
                 val recv = genExpr(s.target.obj)
                 val idx = genExpr(s.target.index)
@@ -703,14 +706,16 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
 
     // Object property write: ensure lazy init before assignment
     if (s.target is DotExpr && s.target.obj is NameExpr && objects.containsKey((s.target.obj as NameExpr).name)) {
-        val objName = (s.target.obj as NameExpr).name
-        impl.appendLine("$ind${pfx(objName)}_\$ensure_init();")
+        val vObjWriteInfo = objects[(s.target.obj as NameExpr).name]!!               // ObjInfo for C name
+        impl.appendLine("$ind${vObjWriteInfo.flatName}_\$ensure_init();")
     }
     // Companion object property write: ensure lazy init before assignment
     if (s.target is DotExpr && s.target.obj is NameExpr && classCompanions.containsKey((s.target.obj as NameExpr).name)) {
         val vClassName = (s.target.obj as NameExpr).name
         val vCompanionName = classCompanions[vClassName]!!
-        impl.appendLine("$ind${pfx(vCompanionName)}_\$ensure_init();")
+        val vCompWriteObjInfo = objects[vCompanionName]                               // companion ObjInfo (null-safe fallback)
+        val vCompWriteCName = vCompWriteObjInfo?.flatName ?: pfx(vCompanionName)     // C name with package prefix
+        impl.appendLine("$ind${vCompWriteCName}_\$ensure_init();")
     }
 
     val target = genLValue(s.target, method)
@@ -1682,23 +1687,25 @@ internal fun CCodeGen.findOperatorIterator(type: String?): IteratorInfo? {
     if (type == null) return null
     // Direct class
     if (classes.containsKey(type)) {
-        val iterMethod = classes[type]?.methods?.find { it.name == "iterator" && it.isOperator }
+        val vIterCI = classes[type]!!                                                  // ClassInfo for the iterable type
+        val iterMethod = vIterCI.methods.find { it.name == "iterator" && it.isOperator }
         if (iterMethod?.returnType != null) {
             val iterType = resolveMethodReturnType(type, iterMethod.returnType)
             if (classes.containsKey(iterType)) {
-                val nextMethod = classes[iterType]?.methods?.find { it.name == "next" }
+                val vIterTypeCI = classes[iterType]!!                                  // ClassInfo for the iterator type
+                val nextMethod = vIterTypeCI.methods.find { it.name == "next" }
                 if (nextMethod?.returnType != null) {
                     val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
-                    return IteratorInfo(iterType, pfx(iterType), elemType, false)
+                    return IteratorInfo(iterType, vIterTypeCI.flatName, elemType, false)
                 }
             } else if (interfaces.containsKey(iterType)) {
                 // Iterator returns an interface — use interface type with vtable dispatch
-                val iface = interfaces[iterType]!!
-                val allMethods = collectAllIfaceMethods(iface)
+                val vIterTypeII = interfaces[iterType]!!                               // IfaceInfo for the iterator interface
+                val allMethods = collectAllIfaceMethods(vIterTypeII)
                 val nextMethod = allMethods.find { it.name == "next" && it.isOperator }
                 if (nextMethod?.returnType != null) {
                     val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
-                    return IteratorInfo(iterType, pfx(iterType), elemType, false)
+                    return IteratorInfo(iterType, vIterTypeII.flatName, elemType, false)
                 }
             }
         }
@@ -1706,30 +1713,33 @@ internal fun CCodeGen.findOperatorIterator(type: String?): IteratorInfo? {
     // Heap/Ptr/Value class
     val indirectBase = anyIndirectClassName(type)
     if (indirectBase != null && classes.containsKey(indirectBase)) {
-        val iterMethod = classes[indirectBase]?.methods?.find { it.name == "iterator" && it.isOperator }
+        val vIndirectCI = classes[indirectBase]!!                                      // ClassInfo for the heap class
+        val iterMethod = vIndirectCI.methods.find { it.name == "iterator" && it.isOperator }
         if (iterMethod?.returnType != null) {
             val iterType = resolveMethodReturnType(indirectBase, iterMethod.returnType)
             if (classes.containsKey(iterType)) {
-                val nextMethod = classes[iterType]?.methods?.find { it.name == "next" }
+                val vIndirectIterCI = classes[iterType]!!                              // ClassInfo for the iterator type
+                val nextMethod = vIndirectIterCI.methods.find { it.name == "next" }
                 if (nextMethod?.returnType != null) {
                     val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
-                    return IteratorInfo(iterType, pfx(iterType), elemType, true)
+                    return IteratorInfo(iterType, vIndirectIterCI.flatName, elemType, true)
                 }
             }
         }
     }
     // Interface
     if (interfaces.containsKey(type)) {
-        val ifaceInfo = interfaces[type]!!
-        val allMethods = collectAllIfaceMethods(ifaceInfo)
+        val vIfaceII = interfaces[type]!!                                               // IfaceInfo for the iterable interface
+        val allMethods = collectAllIfaceMethods(vIfaceII)
         val iterMethod = allMethods.find { it.name == "iterator" && it.isOperator }
         if (iterMethod?.returnType != null) {
             val iterType = resolveMethodReturnType(type, iterMethod.returnType)
             if (classes.containsKey(iterType)) {
-                val nextMethod = classes[iterType]?.methods?.find { it.name == "next" }
+                val vIfaceIterCI = classes[iterType]!!                                 // ClassInfo for the iterator type
+                val nextMethod = vIfaceIterCI.methods.find { it.name == "next" }
                 if (nextMethod?.returnType != null) {
                     val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
-                    return IteratorInfo(iterType, pfx(iterType), elemType, false)
+                    return IteratorInfo(iterType, vIfaceIterCI.flatName, elemType, false)
                 }
             }
         }

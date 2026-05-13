@@ -81,20 +81,24 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     is DotExpr     -> genDot(e)
     is SafeDotExpr -> genSafeDot(e)
     is IndexExpr   -> {
-        val objType = inferExprType(e.obj)
+        val objType = inferExprType(e.obj)                                            // String? object type
+        val objTypeKtc = inferExprTypeKtc(e.obj)                                     // KtcType? object type
+        val objTypeCoreKtc = (objTypeKtc as? KtcType.Nullable)?.inner ?: objTypeKtc  // KtcType? stripped Nullable
+        val vIdxClassInfo = classInfoFor(objTypeCoreKtc)                              // non-null if object is a class
+        val vIdxIfaceInfo = ifaceInfoFor(objTypeCoreKtc)                              // non-null if object is an interface
         if (objType == "String") {
             // String indexing: str[i] → str.ptr[i] (returns char)
             "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
-        } else if (objType != null && classes.containsKey(objType)) {
+        } else if (vIdxClassInfo != null) {
             // Class with operator get() method → operator[] dispatch
-            val methodDecl = classes[objType]?.methods?.find { it.name == "get" && it.isOperator }
+            val methodDecl = vIdxClassInfo.methods.find { it.name == "get" && it.isOperator }
             if (methodDecl != null) {
                 val recv = genExpr(e.obj)
                 val idx = genExpr(e.index)
                 if (methodDecl.returnType?.nullable == true) {
-                    genNullableMethodCall(objType, "${pfx(objType)}_get", "&$recv, $idx", methodDecl)
+                    genNullableMethodCall(vIdxClassInfo.baseName, "${vIdxClassInfo.flatName}_get", "&$recv, $idx", methodDecl)
                 } else {
-                    "${pfx(objType)}_get(&$recv, $idx)"
+                    "${vIdxClassInfo.flatName}_get(&$recv, $idx)"
                 }
             } else {
                 "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
@@ -114,16 +118,15 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             } else {
                 "${genExpr(e.obj)}[${genExpr(e.index)}]"
             }
-        } else if (objType != null && interfaces.containsKey(objType)) {
+        } else if (vIdxIfaceInfo != null) {
             // Interface with operator get() in vtable → operator[] dispatch
-            val ifaceInfo = interfaces[objType]
-            val ifaceMethod = ifaceInfo?.methods?.find { it.name == "get" && it.isOperator }
-                ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == "get" && it.isOperator }
+            val ifaceMethod = vIdxIfaceInfo.methods.find { it.name == "get" && it.isOperator }
+                ?: collectAllIfaceMethods(vIdxIfaceInfo).find { it.name == "get" && it.isOperator }
             if (ifaceMethod != null) {
                 val recv = genExpr(e.obj)
                 val idx = genExpr(e.index)
                 if (ifaceMethod.returnType?.nullable == true) {
-                    val retBase = resolveMethodReturnType(objType, ifaceMethod.returnType).removeSuffix("?")
+                    val retBase = resolveMethodReturnType(vIdxIfaceInfo.baseName, ifaceMethod.returnType).removeSuffix("?")
                     val optType = optCTypeName("${retBase}?")
                     val t = tmp()
                     preStmts += "$optType $t = $recv.vt->get((void*)&$recv, $idx);"
@@ -171,13 +174,16 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     }
     is StrTemplateExpr -> genStrTemplate(e)
     is IsCheckExpr -> {
-        val target = resolveTypeName(e.type)
+        val targetKtc = resolveTypeNameKtc(e.type)                                   // KtcType for is-check target
+        val target = resolveTypeName(e.type)                                          // String for fallback/array checks
         val inner = genExpr(e.expr)
         val exprType = inferExprType(e.expr)
         val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
-        val check = if (classes.containsKey(target)) {
-            "${inner}${memOp}__type_id == ${pfx(target)}_TYPE_ID"
-        } else if (interfaces.containsKey(target)) {
+        val vIsClassInfo = classInfoFor(targetKtc)                                    // non-null if target is a user class
+        val vIsIfaceInfo = ifaceInfoFor(targetKtc)                                    // non-null if target is an interface
+        val check = if (vIsClassInfo != null) {
+            "${inner}${memOp}__type_id == ${vIsClassInfo.flatName}_TYPE_ID"
+        } else if (vIsIfaceInfo != null) {
             val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
             if (impls.isEmpty()) "false"
             else impls.joinToString(" || ") { "${inner}${memOp}__type_id == ${pfx(it)}_TYPE_ID" }
@@ -203,16 +209,19 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
         if (e.negated) "!($check)" else "($check)"
     }
     is CastExpr    -> {
-        val target = resolveTypeName(e.type)
+        val targetKtc = resolveTypeNameKtc(e.type)                                   // KtcType for cast target
+        val target = resolveTypeName(e.type)                                          // String for fallback/cTypeStr calls
         val inner = genExpr(e.expr)
         val srcType = inferExprType(e.expr)?.removeSuffix("?")
         val isPtr = srcType?.endsWith("*") == true
+        val vCastClassInfo = classInfoFor(targetKtc)                                  // non-null if target is a user class
+        val vCastIfaceInfo = ifaceInfoFor(targetKtc)                                  // non-null if target is an interface
         if (e.safe) {
             val optCType = optCTypeName("$target?")
             val memOp = if (isPtr) "->" else "."
-            val check = if (classes.containsKey(target)) {
-                "${inner}${memOp}__type_id == ${pfx(target)}_TYPE_ID"
-            } else if (interfaces.containsKey(target)) {
+            val check = if (vCastClassInfo != null) {
+                "${inner}${memOp}__type_id == ${vCastClassInfo.flatName}_TYPE_ID"
+            } else if (vCastIfaceInfo != null) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
                 else impls.joinToString(" || ") { "${inner}${memOp}__type_id == ${pfx(it)}_TYPE_ID" }
@@ -222,16 +231,16 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             } else {
                 "true"
             }
-            val castVal = if (interfaces.containsKey(target)) {
-                "${pfx(target)}_as_$target(&($inner))"
+            val castVal = if (vCastIfaceInfo != null) {
+                "${vCastIfaceInfo.flatName}_as_${vCastIfaceInfo.baseName}(&($inner))"
             } else if (srcType == "Any" || srcType == "Any*") {
                 "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
             } else {
                 "(${cTypeStr(target)})($inner)"
             }
             "($check) ? ${optSome(optCType, castVal)} : ${optNone(optCType)}"
-        } else if (interfaces.containsKey(target)) {
-            "${pfx(target)}_as_$target(&($inner))"
+        } else if (vCastIfaceInfo != null) {
+            "${vCastIfaceInfo.flatName}_as_${vCastIfaceInfo.baseName}(&($inner))"
         } else if (srcType == "Any" || srcType == "Any*") {
             val memOp = if (isPtr) "->" else "."
             "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
@@ -377,14 +386,18 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     }
     // in / !in → operator contains() dispatch on class or interface
     if (e.op == "in" || e.op == "!in") {
-        val rt = inferExprType(e.right)
+        val rt = inferExprType(e.right)                                               // String? right-side type
+        val rtKtc = inferExprTypeKtc(e.right)                                         // KtcType? right-side type
+        val rtCoreKtc = (rtKtc as? KtcType.Nullable)?.inner ?: rtKtc                 // KtcType? stripped Nullable
         val negated = e.op == "!in"
-        if (rt != null && classes.containsKey(rt)) {
-            val containsMethod = classes[rt]?.methods?.find { (it.name == "contains" || it.name == "containsKey") && it.isOperator }
+        val vContClassInfo = classInfoFor(rtCoreKtc)                                  // non-null if right side is a class
+        val vContIfaceInfo = ifaceInfoFor(rtCoreKtc)                                  // non-null if right side is an interface
+        if (vContClassInfo != null) {
+            val containsMethod = vContClassInfo.methods.find { (it.name == "contains" || it.name == "containsKey") && it.isOperator }
             if (containsMethod != null) {
                 val recv = genExpr(e.right)
                 val elem = genExpr(e.left)
-                val call = "${pfx(rt)}_${containsMethod.name}(&$recv, $elem)"
+                val call = "${vContClassInfo.flatName}_${containsMethod.name}(&$recv, $elem)"
                 return if (negated) "!$call" else call
             }
         }
@@ -398,9 +411,8 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
                 return if (negated) "!$call" else call
             }
         }
-        if (rt != null && interfaces.containsKey(rt)) {
-            val ifaceInfo = interfaces[rt]
-            val allMethods = collectAllIfaceMethods(ifaceInfo!!)
+        if (vContIfaceInfo != null) {
+            val allMethods = collectAllIfaceMethods(vContIfaceInfo)
             val containsMethod = allMethods.find { (it.name == "contains" || it.name == "containsKey") && it.isOperator }
             if (containsMethod != null) {
                 val recv = genExpr(e.right)
@@ -860,7 +872,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 			it.name to vCp?.default
 			})
 		val expandedArgs = expandCallArgs(vFilledArgs, vCtorParamList, isCtorCall = true)
-		return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
+		return "${ci.flatName}_primaryConstructor($expandedArgs)"                   // ci.flatName replaces pfx(mangledName)
     }
     // Generic class constructor without explicit type args: infer from arguments
     if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && e.args.isNotEmpty()) {
@@ -875,7 +887,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 				it.name to null
 				})
 			val expandedArgs = expandCallArgs(vFilledArgs2, vCtorParamList2, isCtorCall = true)
-			return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
+			return "${ci.flatName}_primaryConstructor($expandedArgs)"               // ci.flatName replaces pfx(mangledName)
         }
     }
     if (classes.containsKey(resolvedName)) {
@@ -888,7 +900,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val types = sctor.params.map { resolveTypeName(it.type).removeSuffix("*") }
             val suffix = if (types.isEmpty()) "emptyConstructor" else "constructorWith${types.joinToString("_")}"
             val argStr = args.joinToString(", ") { genExpr(it.expr) }
-            return "${pfx(resolvedName)}_$suffix($argStr)"
+            return "${ci.flatName}_$suffix($argStr)"                               // ci.flatName replaces pfx(resolvedName)
         }
 		val vAllParams3 = ci.ctorProps + ci.ctorPlainParams                        // all ctor parameters
 		val vCtorParamList3 = vAllParams3.map { Param(it.name, it.typeRef) }        // as Param list
@@ -899,7 +911,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 			it.name to vCp?.default
 			})
 		val expandedArgs = expandCallArgs(vFilledArgs3, vCtorParamList3, isCtorCall = true)
-		return "${pfx(resolvedName)}_primaryConstructor($expandedArgs)"
+		return "${ci.flatName}_primaryConstructor($expandedArgs)"                   // ci.flatName replaces pfx(resolvedName)
     }
 
     // Enum access (should be handled as DotExpr, but just in case)
@@ -1246,8 +1258,10 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
 
 
 internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
-    val rawRecvType = inferExprType(dot.obj)
-    val recvType = rawRecvType?.removeSuffix("?")
+    val rawRecvType = inferExprType(dot.obj)                                          // String? receiver type (string-based)
+    val recvType = rawRecvType?.removeSuffix("?")                                     // String? non-nullable receiver
+    val rawRecvTypeKtc = inferExprTypeKtc(dot.obj)                                   // KtcType? receiver (may have Nullable wrapper)
+    val recvTypeKtc = (rawRecvTypeKtc as? KtcType.Nullable)?.inner ?: rawRecvTypeKtc // KtcType? stripped of Nullable wrapper
     val rawRecv = genExpr(dot.obj)
     val method = dot.name
     val hasNullRecv = hasNullableReceiverExt(recvType ?: "", method)
@@ -1477,12 +1491,12 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
 
     // Interface method dispatch → d.vt->method((void*)&d, args)
-    if (recvType != null && interfaces.containsKey(recvType)) {
+    val vIfaceInfo = ifaceInfoFor(recvTypeKtc)                                        // non-null if receiver is a known interface
+    if (vIfaceInfo != null) {
         val allArgs = if (argStr.isEmpty()) "(void*)&$recv" else "(void*)&$recv, $argStr"
         // Check if this interface method returns nullable
-        val ifaceInfo = interfaces[recvType]
-        val ifaceMethod = ifaceInfo?.methods?.find { it.name == method }
-            ?: collectAllIfaceMethods(ifaceInfo!!).find { it.name == method }
+        val ifaceMethod = vIfaceInfo.methods.find { it.name == method }
+            ?: collectAllIfaceMethods(vIfaceInfo).find { it.name == method }
         if (ifaceMethod?.returnType?.nullable == true) {
             val retType = resolveTypeName(ifaceMethod.returnType)
             val optType = optCTypeName("${retType}?")
@@ -1496,14 +1510,15 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
 
     // Class method or extension function on class type (stack value)
-    if (recvType != null && classes.containsKey(recvType)) {
+    val vClassInfo = classInfoFor(recvTypeKtc)                                        // non-null if receiver is a known user-defined class
+    if (vClassInfo != null) {
         // .copy() on data class
-        if (method == "copy" && classes[recvType]?.isData == true) {
-            return genDataClassCopy(recv, recvType, args, heap = false)
+        if (method == "copy" && vClassInfo.isData) {
+            return genDataClassCopy(recv, vClassInfo.baseName, args, heap = false)
         }
         // .toHeap() → inline malloc + struct copy
         if (method == "toHeap") {
-            val cName = pfx(recvType)
+            val cName = vClassInfo.flatName                                            // C struct name with package prefix
             val t = tmp()
             preStmts += "$cName* $t = ($cName*)${tMalloc("sizeof($cName)")};"
             preStmts += "if ($t) *$t = $recv;"
@@ -1512,12 +1527,12 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         // .ptr() → &value
         if (method == "ptr") {
             val t = tmp()
-            preStmts += "${pfx(recvType)}* $t = &$recv;"
+            preStmts += "${vClassInfo.flatName}* $t = &$recv;"
             return t
         }
-        val methodDecl = classes[recvType]?.let { findOverload(method, args, it.methods) }
+        val methodDecl = findOverload(method, args, vClassInfo.methods)
         val isExtFun = methodDecl?.receiver != null
-        val nullableRecv = hasNullableReceiverExt(recvType, method)
+        val nullableRecv = hasNullableReceiverExt(recvType ?: "", method)
         val selfArg = if (nullableRecv) {
             val recvName = (dot.obj as? NameExpr)?.name
             val recvVarType2 = if (recvName != null) lookupVar(recvName) else null
@@ -1537,7 +1552,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             expandCallArgs(filled, methodDecl.params)
         } else argStr
         val allArgs = if (expandedArgs.isEmpty()) selfArg else "$selfArg, $expandedArgs"
-        val overloadedName = methodDecl?.let { methodName(it, classes[recvType]!!.methods) } ?: method
+        val overloadedName = methodDecl?.let { methodName(it, vClassInfo.methods) } ?: method
         val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_$overloadedName" else overloadedName
         // @Size(N) return → out-parameter ABI
         if (methodDecl?.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
@@ -1547,20 +1562,21 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
             preStmts += "const int32_t ${t}\$len = $size;"
-            preStmts += "${pfx(recvType)}_$fnPrefix($allArgs, $t);"
+            preStmts += "${vClassInfo.flatName}_$fnPrefix($allArgs, $t);"
             defineVar(t, retType)
             return t
         }
         // Nullable return: use out-pointer pattern
         if (methodDecl?.returnType?.nullable == true) {
-            return genNullableMethodCall(recvType, "${pfx(recvType)}_$fnPrefix", allArgs, methodDecl)
+            return genNullableMethodCall(vClassInfo.baseName, "${vClassInfo.flatName}_$fnPrefix", allArgs, methodDecl)
         }
-        return "${pfx(recvType)}_$fnPrefix($allArgs)"
+        return "${vClassInfo.flatName}_$fnPrefix($allArgs)"
     }
     // Object method
-    if (recvType != null && objects.containsKey(recvType)) {
-        val vObjMethod = objects[recvType]?.let { findOverload(method, args, it.methods) }
-        val overloadedMethod = vObjMethod?.let { methodName(it, objects[recvType]!!.methods) } ?: method
+    val vObjInfo = objInfoFor(recvTypeKtc)                                            // non-null if receiver is a singleton object
+    if (vObjInfo != null) {
+        val vObjMethod = findOverload(method, args, vObjInfo.methods)
+        val overloadedMethod = vObjMethod?.let { methodName(it, vObjInfo.methods) } ?: method
         val vObjArgs = if (vObjMethod != null) {
             val filled = fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default })
             expandCallArgs(filled, vObjMethod.params)
@@ -1573,22 +1589,24 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
             preStmts += "const int32_t ${t}\$len = $size;"
-            preStmts += "${pfx(recvType)}_$overloadedMethod($vObjArgs, $t);"
+            preStmts += "${vObjInfo.flatName}_$overloadedMethod($vObjArgs, $t);"
             defineVar(t, retType)
             return t
         }
-        return "${pfx(recvType)}_$overloadedMethod($vObjArgs)"
+        return "${vObjInfo.flatName}_$overloadedMethod($vObjArgs)"
     }
     // Companion object method: Foo.bar() where Foo has a companion object
     val vDotObjName = (dot.obj as? NameExpr)?.name
     if (vDotObjName != null && classCompanions.containsKey(vDotObjName)) {
         val vCompanionName = classCompanions[vDotObjName]!!
-        val vCompMethod = objects[vCompanionName]?.let { findOverload(method, args, it.methods) }
-        val overloadedComp = vCompMethod?.let { methodName(it, objects[vCompanionName]!!.methods) } ?: method
+        val vCompObjInfo = objects[vCompanionName]                                    // ObjInfo for the companion (may differ from recvTypeKtc path)
+        val vCompMethod = vCompObjInfo?.let { findOverload(method, args, it.methods) }
+        val overloadedComp = vCompMethod?.let { methodName(it, vCompObjInfo!!.methods) } ?: method
         val vCompArgs = if (vCompMethod != null) {
             val filled = fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default })
             expandCallArgs(filled, vCompMethod.params)
         } else argStr
+        val vCompCName = vCompObjInfo?.flatName ?: pfx(vCompanionName)               // C name with package prefix
         // @Size(N) return → out-parameter ABI
         if (vCompMethod?.returnType != null && isSizedArrayTypeRef(vCompMethod.returnType)) {
             val retType = resolveTypeName(vCompMethod.returnType)
@@ -1597,26 +1615,27 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
             preStmts += "const int32_t ${t}\$len = $size;"
-            preStmts += "${pfx(vCompanionName)}_$overloadedComp($vCompArgs, $t);"
+            preStmts += "${vCompCName}_$overloadedComp($vCompArgs, $t);"
             defineVar(t, retType)
             return t
         }
-        return "${pfx(vCompanionName)}_$overloadedComp($vCompArgs)"
+        return "${vCompCName}_$overloadedComp($vCompArgs)"
     }
     // Enum → static method/field access
-    if (recvType != null && enums.containsKey(recvType)) {
+    val vEnumInfo = enumInfoFor(recvTypeKtc)                                          // non-null if receiver is a known enum
+    if (vEnumInfo != null) {
         when (method) {
             "values" -> {
-                enumValuesCalled.add(recvType)
-                return "${pfx(recvType)}_values"
+                enumValuesCalled.add(vEnumInfo.baseName)
+                return "${vEnumInfo.flatName}_values"
             }
             "valueOf" -> {
-                val argStr = args.joinToString(", ") { genExpr(it.expr) }
-                enumValuesCalled.add(recvType)
-                enumValueOfCalled.add(recvType)
-                return "${pfx(recvType)}_valueOf($argStr)"
+                val vValOfArgStr = args.joinToString(", ") { genExpr(it.expr) }
+                enumValuesCalled.add(vEnumInfo.baseName)
+                enumValueOfCalled.add(vEnumInfo.baseName)
+                return "${vEnumInfo.flatName}_valueOf($vValOfArgStr)"
             }
-            else -> return "${pfx(recvType)}_$method"
+            else -> return "${vEnumInfo.flatName}_$method"
         }
     }
 
@@ -1777,7 +1796,9 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
         return e.name
     }
 
-    val recvType = inferExprType(e.obj)
+    val recvType = inferExprType(e.obj)                                               // String? receiver type (string-based)
+    val recvTypeKtc = inferExprTypeKtc(e.obj)                                         // KtcType? receiver type
+    val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc   // KtcType? stripped of Nullable wrapper
     val recv = genExpr(e.obj)
 
     // Reject non-safe access on nullable receiver (enum/object/companion are never nullable)
@@ -1794,18 +1815,22 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
 
     // Enum entry: Color.RED → game_Color_RED
     if (e.obj is NameExpr && enums.containsKey(e.obj.name)) {
-        return "${pfx(e.obj.name)}_${e.name}"
+        val vDotEnumInfo = enums[e.obj.name]!!                                        // EnumInfo for C name
+        return "${vDotEnumInfo.flatName}_${e.name}"
     }
     // Object field: Config.debug → game_Config.debug (with lazy init guard)
     if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
-        preStmts += "${pfx(e.obj.name)}_\$ensure_init();"
-        return "${pfx(e.obj.name)}.${e.name}"
+        val vDotObjInfo = objects[e.obj.name]!!                                       // ObjInfo for C name
+        preStmts += "${vDotObjInfo.flatName}_\$ensure_init();"
+        return "${vDotObjInfo.flatName}.${e.name}"
     }
     // Companion object field: Foo.bar → game_Foo$Companion.bar (with lazy init guard)
     if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
         val vCompanionName = classCompanions[e.obj.name]!!
-        preStmts += "${pfx(vCompanionName)}_\$ensure_init();"
-        return "${pfx(vCompanionName)}.${e.name}"
+        val vDotCompObjInfo = objects[vCompanionName]                                 // companion ObjInfo (null-safe fallback to pfx)
+        val vDotCompCName = vDotCompObjInfo?.flatName ?: pfx(vCompanionName)         // C name with package prefix
+        preStmts += "${vDotCompCName}_\$ensure_init();"
+        return "${vDotCompCName}.${e.name}"
     }
     // Array .size → trampolined param uses trampoline struct field; others use $len
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
@@ -1813,9 +1838,10 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     if (e.name == "length" && recvType == "String") return "$recv.len"
     if (e.name == "runeLen" && recvType == "String") return "ktc_str_runeLen($recv)"
     // Enum .ordinal → the int value itself
-    if (e.name == "ordinal" && recvType != null && recvType in enums) return recv
+    val vOrdinalEnumInfo = enumInfoFor(recvTypeCoreKtc)                               // non-null if receiver is an enum (for ordinal/name)
+    if (e.name == "ordinal" && vOrdinalEnumInfo != null) return recv
     // Enum .name → lookup in names array
-    if (e.name == "name" && recvType != null && recvType in enums) return "${pfx(recvType)}_names[($recv)]"
+    if (e.name == "name" && vOrdinalEnumInfo != null) return "${vOrdinalEnumInfo.flatName}_names[($recv)]"
 
     // Heap<T> / Ptr<T> / Value<T>: p->field (auto-deref through pointer)
     if (pointerClassName(recvType) != null) {
@@ -1827,9 +1853,9 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     }
 
     // Interface property access via vtable: list.size → list.vt->size(list.obj)
-    if (recvType != null && interfaces.containsKey(recvType)) {
-        val iface = interfaces[recvType]!!
-        val allProps = collectAllIfaceProperties(iface)
+    val vIfaceDotInfo = ifaceInfoFor(recvTypeCoreKtc)                                 // non-null if receiver is a known interface
+    if (vIfaceDotInfo != null) {
+        val allProps = collectAllIfaceProperties(vIfaceDotInfo)
         if (allProps.any { it.name == e.name }) {
             return "$recv.vt->${e.name}((void*)&$recv)"
         }

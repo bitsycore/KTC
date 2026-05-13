@@ -442,9 +442,9 @@ internal fun CCodeGen.scanForGenericFunCalls() {
             when (s) {
                 is VarDeclStmt -> {
                     scanExpr(s.init)
-                    // Track variable type for subsequent type inference in this function
-                    val varType = if (s.type != null) resolveTypeName(s.type) else inferExprType(s.init)
-                    if (varType != null) preScanVarTypes?.set(s.name, varType)
+                    /* Track variable type as KtcType for subsequent inference in this function. */
+                    val vVarTypeStr = if (s.type != null) resolveTypeName(s.type) else inferExprType(s.init)
+                    if (vVarTypeStr != null) preScanVarTypes?.set(s.name, stringToKtc(vVarTypeStr))
                 }
                 is AssignStmt -> { scanExpr(s.target); scanExpr(s.value) }
                 is ExprStmt -> scanExpr(s.expr)
@@ -466,7 +466,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                 preScanVarTypes!!.clear()  // fresh var scope per function
                 // Register function params so they're available for inference
                 for (p in d.params) {
-                    preScanVarTypes!![p.name] = resolveTypeName(p.type)
+                    preScanVarTypes!![p.name] = resolveTypeNameKtc(p.type)  // store as KtcType
                 }
                 scanner.scanBlock(d.body)
             }
@@ -474,7 +474,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                 for (m in d.members) if (m is FunDecl) {
                     preScanVarTypes!!.clear()
                     for (p in m.params) {
-                        preScanVarTypes!![p.name] = resolveTypeName(p.type)
+                        preScanVarTypes!![p.name] = resolveTypeNameKtc(p.type)  // store as KtcType
                     }
                     scanner.scanBlock(m.body)
                 }
