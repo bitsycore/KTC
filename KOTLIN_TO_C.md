@@ -1,4 +1,8 @@
-# KotlinToC Language Reference
+# KTC — Kotlin Subset Reference
+
+This document describes the **supported Kotlin subset**, its C mapping, and known
+limitations. For transpiler internals see [TRANSPILER.md](TRANSPILER.md). For how to
+write tests see [AGENTS.md](AGENTS.md).
 
 Source-to-source transpiler: Kotlin → C11. Zero runtime, stack-first, no GC.
 
@@ -301,7 +305,28 @@ Terminates with message.
 
 ---
 
+## Known Limitations
+
+These Kotlin features are **not supported** and have no planned equivalent:
+
+| Feature | Status |
+|---|---|
+| Coroutines / `suspend` | Not supported |
+| Reflection | Not supported |
+| Closures (capturing lambdas stored in variables) | Not supported — lambdas are inline-only |
+| `try`/`catch`/`throw` exceptions | Not supported — use `error()` |
+| Inheritance between classes (`open class`) | Not supported — use interfaces |
+| `sealed class` | Not supported — use `when` + interfaces |
+| String `split`, `replace`, complex operations | Limited — use C interop for complex string work |
+| Checked arithmetic, overflow detection | No — wraps like C |
+| Dynamic dispatch on value types | Not supported — use `@Ptr` for polymorphism |
+| `Array<T>` as a class field | Not supported — use `@Size(N) Array<T>` or `@Ptr Array<T>` |
+| Raw `Array<T>` returned from functions | Not supported — use `@Size(N)` or heap arrays |
+
+---
+
 ## Target C Output
+
 - Standard C11 (`gcc -std=c11`, clang, MSVC)
 - Section comments: `// ══ class Vec2 (file.kt) ══`
 - All generated symbols use `package_` prefix (e.g. `game_Vec2`)

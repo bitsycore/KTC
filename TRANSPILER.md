@@ -1,5 +1,9 @@
 # KTC Transpiler Architecture
 
+This document covers **transpiler internals**: architecture, type system, how to add
+features, and evolution rules. For the supported Kotlin subset see [KOTLIN_TO_C.md](KOTLIN_TO_C.md).
+For writing tests see [AGENTS.md](AGENTS.md).
+
 KTC translates a subset of Kotlin source to C11. The pipeline is:
 
 ```
@@ -10,12 +14,32 @@ Kotlin source → Lexer → Parser → AST → CCodeGen → .h + .c files
 
 ## File Map
 
+Source files live in `src/main/kotlin/` organized by sub-package:
+
+**`com.bitsycore.ast`** — `ast/`
+
+| File | Role |
+|---|---|
+| `Ast.kt` | All AST node types (`TypeRef`, `Decl`, `Expr`, `Stmt`, …) |
+| `Token.kt` | Token enum and type definitions |
+
+**`com.bitsycore.parser`** — `parser/`
+
 | File | Role |
 |---|---|
 | `Lexer.kt` | Tokenizes source text into `Token` list |
 | `Parser.kt` | Tokens → `KtFile` AST |
-| `Ast.kt` | All AST node types (`TypeRef`, `Decl`, `Expr`, `Stmt`, …) |
+
+**`com.bitsycore.types`** — `types/`
+
+| File | Role |
+|---|---|
 | `CoreTypes.kt` | Type system: `KtcType` sealed hierarchy + `TypeDef` interface |
+
+**`com.bitsycore.codegen`** — `codegen/`
+
+| File | Role |
+|---|---|
 | `CCodeGenStructures.kt` | Symbol table data classes (`ClassInfo`, `ObjInfo`, `IfaceInfo`, …) |
 | `CCodeGen.kt` | Orchestrator: all shared state, `collectDecls()`, `generate()` |
 | `CCodeGenCTypes.kt` | Type resolution: `resolveTypeName`, `cTypeStr`, `expandParams` |
@@ -25,8 +49,11 @@ Kotlin source → Lexer → Parser → AST → CCodeGen → .h + .c files
 | `CCodeGenExpr.kt` | Expression codegen: calls, dot access, casts, operators |
 | `CCodeGenInfer.kt` | Type inference: `inferExprType`, `inferCallType`, `inferDotType` |
 
+**`com.bitsycore`** — `Main.kt` (CLI entry point)
+
 All `CCodeGen*.kt` files are **extension functions on `CCodeGen`** — they share all state
 through the single class instance without passing it as a parameter.
+`internal` is module-scoped in Kotlin, so all sub-packages see each other's `internal` members.
 
 ---
 
