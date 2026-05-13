@@ -49,28 +49,41 @@ package com.bitsycore
 
 // ═══════════════════════════ C type mapping ═══════════════════════
 
-/** Expand ctor params: array → (T* name, int32_t name$len), nullable → OptT name. */
-internal fun CCodeGen.expandCtorParams(props: List<Pair<String, TypeRef>>): String {
-    val parts = mutableListOf<String>()
-    for ((name, type) in props) {
-        val resolved = resolveTypeName(type)
-        if (isFuncType(resolved)) {
-            parts += cFuncPtrDecl(resolved, name)
-        } else if (isArrayType(resolved)) {
-            if (hasSizeAnnotation(type)) {
-                parts += "${cTypeStr(resolved)} $name"
-            } else {
-                parts += "${cTypeStr(resolved)} $name"
-                parts += "int32_t ${name}\$len"
-            }
-        } else if (type.nullable) {
-            parts += "${optCTypeName(resolved)} $name"
-        } else {
-            parts += "${cType(type)} $name"
-        }
-    }
-    return parts.joinToString(", ")
-}
+/* Expand ctor props: array → (T* name, int32_t name$len), nullable → OptT name. */
+internal fun CCodeGen.expandCtorParams(inProps: List<PropertyDef>): String {
+	val vParts = mutableListOf<String>() // accumulated C parameter declarations
+	for (vProp in inProps)
+		{
+		val vName = vProp.name    // parameter name
+		val vType = vProp.typeRef // parameter type
+		val vResolved = resolveTypeName(vType) // resolved C type string
+		if (isFuncType(vResolved))
+			{
+			vParts += cFuncPtrDecl(vResolved, vName)
+			}
+		else if (isArrayType(vResolved))
+			{
+			if (hasSizeAnnotation(vType))
+				{
+				vParts += "${cTypeStr(vResolved)} $vName"
+				}
+			else
+				{
+				vParts += "${cTypeStr(vResolved)} $vName"
+				vParts += "int32_t ${vName}\$len"
+				}
+			}
+		else if (vType.nullable)
+			{
+			vParts += "${optCTypeName(vResolved)} $vName"
+			}
+		else
+			{
+			vParts += "${cType(vType)} $vName"
+			}
+		}
+	return vParts.joinToString(", ")
+	}
 
 internal fun CCodeGen.cType(t: TypeRef): String {
     val ktc = typeToKtc(t)
@@ -583,15 +596,25 @@ internal fun CCodeGen.typeToKtc(t: TypeRef?): KtcType {
     return stringToKtc(resolved, t)
 }
 
+/* Create KtcType.User by looking up the TypeDef from symbol tables, or creating a BuiltinTypeDef. */
+internal fun CCodeGen.userType(inName: String, inKind: KtcType.UserKind = KtcType.UserKind.Class): KtcType.User {
+	val vTypeDef: TypeDef = when {
+		classes.containsKey(inName)    -> classes[inName]!!
+		objects.containsKey(inName)    -> objects[inName]!!
+		interfaces.containsKey(inName) -> interfaces[inName]!!
+		enums.containsKey(inName)      -> enums[inName]!!
+		else ->
+			{
+			// Builtin or unknown: derive pkg from pfx
+			val vFullPfx = pfx(inName)
+			val vPkg = if (vFullPfx.endsWith(inName)) vFullPfx.removeSuffix(inName) else ""
+			BuiltinTypeDef(baseName = inName, pkg = vPkg, kind = inKind)
+			}
+		}
+	return KtcType.User(vTypeDef)
+	}
+
 internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType {
-    // Helper: create User with package prefix auto-derived from pfx
-    fun user(name: String, kind: KtcType.UserKind = KtcType.UserKind.Class): KtcType.User {
-        val fullPfx = pfx(name)
-        val pkg = if (fullPfx.endsWith(name)) fullPfx.removeSuffix(name) else ""
-        // Strip trailing _ from pkg for clean prefixes
-        val cleanPkg = if (pkg.endsWith("_")) pkg.dropLast(1) + "_" else pkg
-        return KtcType.User(name, kind = kind, pkg = cleanPkg)
-    }
     // Pointer suffix — for array types that are already pointers, don't double-wrap
     if (resolved.endsWith("*?")) {
         val base = resolved.dropLast(2)
@@ -617,10 +640,10 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
     // String, void
     if (resolved == "String") return KtcType.Str
     if (resolved == "void" || resolved == "Nothing" || resolved == "Unit") return KtcType.Void
-    if (resolved == "Any") return user("Any")
+    if (resolved == "Any") return userType("Any")
 
     // StringBuffer
-    if (resolved == "ktc_StrBuf") return user("ktc_StrBuf")
+    if (resolved == "ktc_StrBuf") return userType("ktc_StrBuf")
 
     // Array types: IntArray, ByteArray, Vec2Array, etc.
     if (resolved.endsWith("Array") && resolved.length > 5) {
@@ -628,9 +651,9 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
         val elem = when {
             elemName in KtcType.PrimKind.entries.map { it.name } -> KtcType.Prim(KtcType.PrimKind.valueOf(elemName))
             elemName == "String" -> KtcType.Str
-            elemName.startsWith("Pair_") || elemName.startsWith("Triple_") -> user(elemName)
-            classArrayTypes.contains(elemName) || enums.containsKey(elemName) -> user(elemName)
-            else -> user(elemName)
+            elemName.startsWith("Pair_") || elemName.startsWith("Triple_") -> userType(elemName)
+            classArrayTypes.contains(elemName) || enums.containsKey(elemName) -> userType(elemName)
+            else -> userType(elemName)
         }
         val sized = t?.let { getSizeAnnotation(it) }
         val isTypedArray = elemName in KtcType.PrimKind.entries.map { it.name } || elemName == "String"
@@ -649,7 +672,7 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
 
     // Pair/Triple types
     if (resolved.startsWith("Pair_") || resolved.startsWith("Triple_"))
-        return user(resolved)
+        return userType(resolved)
 
     // User-defined classes, interfaces
     if (classes.containsKey(resolved) || objects.containsKey(resolved) || interfaces.containsKey(resolved)) {
@@ -660,11 +683,11 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
             interfaces.containsKey(resolved) -> KtcType.UserKind.Interface
             else -> KtcType.UserKind.Class
         }
-        return user(resolved, kind)
+        return userType(resolved, kind)
     }
 
     // Fallback: unknown type as User
-    return user(resolved)
+    return userType(resolved)
 }
 
 /** C type string from KtcType, uses pfx for user types. */

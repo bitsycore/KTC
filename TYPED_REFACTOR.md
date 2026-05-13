@@ -472,14 +472,14 @@ Phase 2: Bridge & User cleanup ✅
 - cTypeStr(KtcType.User) uses flatName instead of pfx()
 - cType(TypeRef) routes through typeToKtc → cTypeStr(KtcType) (passes @Size)
 - 32 integration tests pass
-Phase 3: TypeDef + PropertyDef Infrastructure
-- [ ] 3.0 — Introduce PropertyDef, refactor ClassInfo/ObjInfo
-- [ ] 3.1 — Introduce TypeDef interface + BuiltinTypeDef
-- [ ] 3.2 — ClassInfo, ObjInfo, EnumInfo, IfaceInfo implement TypeDef
-- [ ] 3.3 — Populate pkg on each TypeDef during collectDecls()
-- [ ] 3.4 — Change KtcType.User to wrap TypeDef reference
-- [ ] 3.5 — Update all User creation sites (remove user() helper)
-- [ ] 3.6 — Replace pfx(name) with info.flatName in emit code
+Phase 3: TypeDef + PropertyDef Infrastructure ✅
+- [x] 3.0 — Introduce PropertyDef, refactor ClassInfo/ObjInfo
+- [x] 3.1 — Introduce TypeDef interface + BuiltinTypeDef
+- [x] 3.2 — ClassInfo, ObjInfo, EnumInfo, IfaceInfo implement TypeDef
+- [x] 3.3 — Populate pkg on each TypeDef during collectDecls()
+- [x] 3.4 — Change KtcType.User to wrap TypeDef reference
+- [x] 3.5 — Update all User creation sites (remove user() helper)
+- [x] 3.6 — Replace pfx(name) with info.flatName in emit code
 Phase 4: Typed Type Resolution
 - [ ] 4.1 — Add resolveTypeNameKtc(TypeRef): KtcType
 - [ ] 4.2 — Add TypeRef.resolveKtc() convenience

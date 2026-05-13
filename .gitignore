@@ -56,3 +56,4 @@ ktc_std.h
 *.exe
 
 /.idea/
+/test_out/

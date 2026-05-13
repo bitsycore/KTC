@@ -853,14 +853,14 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val mangledName = mangledGenericName(resolvedName, resolvedTypeArgs)
         val ci = classes[mangledName] ?: error("Generic class '$mangledName' not materialized (typeSubst=$typeSubst)")
         val templateDecl = genericClassDecls[resolvedName]
-        val allParams = ci.ctorProps + ci.ctorPlainParams
-        val ctorParamList = allParams.map { Param(it.first, it.second) }
-        val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
-            val cp = templateDecl?.ctorParams?.find { p -> p.name == it.first }
-            it.first to cp?.default
-        })
-        val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
-        return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
+		val vAllParams = ci.ctorProps + ci.ctorPlainParams                        // all ctor parameters
+		val vCtorParamList = vAllParams.map { Param(it.name, it.typeRef) }        // as Param list
+		val vFilledArgs = fillDefaults(args, vCtorParamList, vAllParams.associate {
+			val vCp = templateDecl?.ctorParams?.find { vP -> vP.name == it.name }  // matching ctor param
+			it.name to vCp?.default
+			})
+		val expandedArgs = expandCallArgs(vFilledArgs, vCtorParamList, isCtorCall = true)
+		return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
     }
     // Generic class constructor without explicit type args: infer from arguments
     if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && e.args.isNotEmpty()) {
@@ -869,13 +869,13 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         materializeGenericInstantiations()
         val ci = classes[mangledName]
         if (ci != null) {
-            val allParams = ci.ctorProps + ci.ctorPlainParams
-            val ctorParamList = allParams.map { Param(it.first, it.second) }
-            val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
-                it.first to null
-            })
-            val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
-            return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
+			val vAllParams2 = ci.ctorProps + ci.ctorPlainParams               // all ctor parameters
+			val vCtorParamList2 = vAllParams2.map { Param(it.name, it.typeRef) } // as Param list
+			val vFilledArgs2 = fillDefaults(args, vCtorParamList2, vAllParams2.associate {
+				it.name to null
+				})
+			val expandedArgs = expandCallArgs(vFilledArgs2, vCtorParamList2, isCtorCall = true)
+			return "${pfx(mangledName)}_primaryConstructor($expandedArgs)"
         }
     }
     if (classes.containsKey(resolvedName)) {
@@ -890,16 +890,16 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val argStr = args.joinToString(", ") { genExpr(it.expr) }
             return "${pfx(resolvedName)}_$suffix($argStr)"
         }
-        val allParams = ci.ctorProps + ci.ctorPlainParams
-        val ctorParamList = allParams.map { Param(it.first, it.second) }
-        val filledArgs = fillDefaults(args, ctorParamList, allParams.associate {
-            // find matching ctor param default
-            val cp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == resolvedName })
-                ?.ctorParams?.find { p -> p.name == it.first }
-            it.first to cp?.default
-        })
-        val expandedArgs = expandCallArgs(filledArgs, ctorParamList, isCtorCall = true)
-        return "${pfx(resolvedName)}_primaryConstructor($expandedArgs)"
+		val vAllParams3 = ci.ctorProps + ci.ctorPlainParams                        // all ctor parameters
+		val vCtorParamList3 = vAllParams3.map { Param(it.name, it.typeRef) }        // as Param list
+		val vFilledArgs3 = fillDefaults(args, vCtorParamList3, vAllParams3.associate {
+			// find matching ctor param default
+			val vCp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == resolvedName })
+				?.ctorParams?.find { p -> p.name == it.name }                       // matching ctor param
+			it.name to vCp?.default
+			})
+		val expandedArgs = expandCallArgs(vFilledArgs3, vCtorParamList3, isCtorCall = true)
+		return "${pfx(resolvedName)}_primaryConstructor($expandedArgs)"
     }
 
     // Enum access (should be handled as DotExpr, but just in case)
@@ -1095,8 +1095,8 @@ private fun CCodeGen.getSizedArrayFieldSize(expr: Expr): Int? {
     }
     val ci = currentClass?.let { classes[it] }
     val bp = ci?.bodyProps?.find { it.name == fieldName }
-    if (bp != null && bp.type != null && hasSizeAnnotation(bp.type)) {
-        return getSizeAnnotation(bp.type)
+    if (bp != null && hasSizeAnnotation(bp.typeRef)) {
+        return getSizeAnnotation(bp.typeRef)
     }
     return null
 }

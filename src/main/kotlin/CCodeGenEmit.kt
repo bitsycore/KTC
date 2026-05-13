@@ -39,8 +39,8 @@ package com.bitsycore
 // ── class / data class ───────────────────────────────────────────
 
 internal fun CCodeGen.emitClass(d: ClassDecl) {
-    val cName = pfx(d.name)
     val ci = classes[d.name]!!
+    val cName = ci.flatName
 
     val kind = if (d.isData) "data class" else "class"
     impl.appendLine("// ══ $kind ${d.name} ($currentSourceFile) ══")
@@ -79,60 +79,80 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
     hdr.appendLine()
 
     // --- constructor (only takes ctor params, initializes all fields) ---
-    val allCtorParams = ci.ctorProps + ci.ctorPlainParams
-    val paramStr = expandCtorParams(allCtorParams)
-    val paramDecl = paramStr.ifEmpty { "void" }
-    hdr.appendLine("$cName ${cName}_primaryConstructor($paramDecl);")
-    impl.appendLine("$cName ${cName}_primaryConstructor($paramDecl) {")
-    if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-        impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.first }}};")
-    } else {
+	val vAllCtorParams = ci.ctorProps + ci.ctorPlainParams  // all primary constructor parameters
+	val vParamStr = expandCtorParams(vAllCtorParams)        // expanded C parameter list
+	val vParamDecl = vParamStr.ifEmpty { "void" }           // C parameter declaration
+	hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl);")
+	impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl) {")
+	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.typeRef)) || it.typeRef.nullable })
+		{
+		impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
+		}
+	else
+		{
         impl.appendLine("    $cName \$self = {0};")
         impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
-        for ((name, type) in ci.ctorProps) {
-            val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-            val resolved = resolveTypeName(type)
-            val sizeAnn = getSizeAnnotation(type)
-            if (sizeAnn != null) {
-                val elemType = arrayElementCType(resolved)
-                impl.appendLine("    memcpy(\$self.$fieldName, $name, $sizeAnn * sizeof($elemType));")
-            } else if (isArrayType(resolved)) {
-                impl.appendLine("    \$self.$fieldName = $name;")
-                impl.appendLine("    \$self.${fieldName}\$len = ${name}\$len;")
-            } else if (type.nullable) {
-                impl.appendLine("    \$self.$fieldName = $name;")
-            } else {
-                impl.appendLine("    \$self.$fieldName = $name;")
-            }
-        }
-        for (bp in ci.bodyProps) {
-            if (bp.init != null) {
-                if (bp.line > 0) currentStmtLine = bp.line
-                heapAllocTargetType = bp.type
-                val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
-                val sizeAnn = bp.type?.let { getSizeAnnotation(it) }
-                // @Size(N) Array → zero-init: struct is already {0}, skip unless lambda init
-                if (sizeAnn != null && bp.type != null && isSizedArrayTypeRef(bp.type)) {
-                    val isZeroInit = bp.init is CallExpr && (bp.init.callee as? NameExpr)?.name?.endsWith("Array") == true &&
-                        bp.init.args.size == 1 && bp.init.args[0].expr !is LambdaExpr
-                    if (!isZeroInit) {
-                        val expr = genExpr(bp.init)
-                        heapAllocTargetType = null
-                        flushPreStmts("    ")
-                        val elemType = arrayElementCType(resolveTypeName(bp.type))
-                        impl.appendLine("    memcpy(\$self.$bodyFieldName, $expr, $sizeAnn * sizeof($elemType));")
-                    } else {
-                        heapAllocTargetType = null
-                    }
-                } else {
-                    val expr = genExpr(bp.init)
-                    heapAllocTargetType = null
-                    flushPreStmts("    ")
-                    impl.appendLine("    \$self.$bodyFieldName = $expr;")
-                }
-                emitBodyPropLenIfArray(bp)
-            }
-        }
+		for (vProp in ci.ctorProps)
+			{
+			val vName = vProp.name                                          // prop name
+			val vType = vProp.typeRef                                       // prop type
+			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName  // C field name
+			val vResolved = resolveTypeName(vType)                          // resolved C type
+			val vSizeAnn = getSizeAnnotation(vType)                         // @Size annotation
+			if (vSizeAnn != null)
+				{
+                val elemType = arrayElementCType(vResolved)
+				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($elemType));")
+				}
+			else if (isArrayType(vResolved))
+				{
+				impl.appendLine("    \$self.$vFieldName = $vName;")
+				impl.appendLine("    \$self.${vFieldName}\$len = ${vName}\$len;")
+				}
+			else if (vType.nullable)
+				{
+				impl.appendLine("    \$self.$vFieldName = $vName;")
+				}
+			else
+				{
+				impl.appendLine("    \$self.$vFieldName = $vName;")
+				}
+			}
+		for (vBp in ci.bodyProps)
+			{
+			if (vBp.initExpr != null)
+				{
+				if (vBp.line > 0) currentStmtLine = vBp.line
+				heapAllocTargetType = vBp.typeRef
+				val vBodyFieldName = if (vBp.isPrivate) "PRIV_${vBp.name}" else vBp.name  // C field name
+				val vSizeAnn = getSizeAnnotation(vBp.typeRef)  // @Size annotation value
+				if (vSizeAnn != null && isSizedArrayTypeRef(vBp.typeRef))
+					{
+					val vIsZeroInit = vBp.initExpr is CallExpr && (vBp.initExpr.callee as? NameExpr)?.name?.endsWith("Array") == true &&
+						vBp.initExpr.args.size == 1 && vBp.initExpr.args[0].expr !is LambdaExpr
+					if (!vIsZeroInit)
+						{
+						val vExpr = genExpr(vBp.initExpr)
+						heapAllocTargetType = null
+						flushPreStmts("    ")
+						val vElemType = arrayElementCType(resolveTypeName(vBp.typeRef))  // element C type
+						impl.appendLine("    memcpy(\$self.$vBodyFieldName, $vExpr, $vSizeAnn * sizeof($vElemType));")
+						}
+					else
+						{
+						heapAllocTargetType = null
+						}
+					}
+				else
+					{
+					val vExpr = genExpr(vBp.initExpr)
+					heapAllocTargetType = null
+					flushPreStmts("    ")
+					impl.appendLine("    \$self.$vBodyFieldName = $vExpr;")
+					}
+				emitBodyPropLenIfArray(vBp)
+				}
+			}
         impl.appendLine("    return \$self;")
     }
     impl.appendLine("}")
@@ -251,8 +271,8 @@ internal fun CCodeGen.emitSecondaryCtor(className: String, cClass: String, sctor
  * [mangledName] is the concrete class name (e.g. "MyList_Int").
  */
 internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: String) {
-    val cName = pfx(mangledName)
     val ci = classes[mangledName]!!
+    val cName = ci.flatName
 
     val kind = if (templateDecl.isData) "data class" else "class"
     val concreteTypes = mangledName.removePrefix(templateDecl.name).removePrefix("_").replace("_", ", ")
@@ -292,61 +312,80 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
     hdr.appendLine()
 
     // --- constructor ---
-    val allCtorParams = ci.ctorProps + ci.ctorPlainParams
-    val paramStr = expandCtorParams(allCtorParams)
-    val paramDecl = paramStr.ifEmpty { "void" }
-    hdr.appendLine("$cName ${cName}_primaryConstructor($paramDecl);")
-    impl.appendLine("$cName ${cName}_primaryConstructor($paramDecl) {")
-    if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.second)) || it.second.nullable }) {
-        impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.first }}};")
-    } else {
+	val vAllCtorParams2 = ci.ctorProps + ci.ctorPlainParams  // all primary constructor parameters
+	val vParamStr2 = expandCtorParams(vAllCtorParams2)       // expanded C parameter list
+	val vParamDecl2 = vParamStr2.ifEmpty { "void" }          // C parameter declaration
+	hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl2);")
+	impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl2) {")
+	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { isArrayType(resolveTypeName(it.typeRef)) || it.typeRef.nullable })
+		{
+		impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
+		}
+	else
+		{
         impl.appendLine("    $cName \$self = {0};")
         impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
-        for ((name, type) in ci.ctorProps) {
-            val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-            val resolved = resolveTypeName(type)
-            val sizeAnn = getSizeAnnotation(type)
-            if (sizeAnn != null) {
-                val elemType = arrayElementCType(resolved)
-                impl.appendLine("    memcpy(\$self.$fieldName, $name, $sizeAnn * sizeof($elemType));")
-            } else if (isArrayType(resolved)) {
-                impl.appendLine("    \$self.$fieldName = $name;")
-                impl.appendLine("    \$self.${fieldName}\$len = ${name}\$len;")
-            } else if (type.nullable) {
-                impl.appendLine("    \$self.$fieldName = $name;")
-            } else {
-                impl.appendLine("    \$self.$fieldName = $name;")
-            }
-        }
-        for (bp in ci.bodyProps) {
-            if (bp.init != null) {
-                if (bp.line > 0) currentStmtLine = bp.line
-                heapAllocTargetType = bp.type
-                val bodyFieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
-                // @Size(N) arrays → memcpy (C arrays can't be assigned)
-                val sizeAnn = bp.type?.let { getSizeAnnotation(it) }
-                if (sizeAnn != null && bp.type != null && isSizedArrayTypeRef(bp.type)) {
-                    // Zero-init (struct already {0}): skip alloca+memcpy
-                    val isZeroInit = bp.init is CallExpr && (bp.init.callee as? NameExpr)?.name?.endsWith("Array") == true &&
-                        bp.init.args.size == 1 && bp.init.args[0].expr !is LambdaExpr
-                    if (!isZeroInit) {
-                        val expr = genExpr(bp.init)
-                        heapAllocTargetType = null
-                        flushPreStmts("    ")
-                        val elemType = arrayElementCType(resolveTypeName(bp.type))
-                        impl.appendLine("    memcpy(\$self.$bodyFieldName, $expr, $sizeAnn * sizeof($elemType));")
-                    } else {
-                        heapAllocTargetType = null
-                    }
-                } else {
-                    val expr = genExpr(bp.init)
-                    heapAllocTargetType = null
-                    flushPreStmts("    ")
-                    impl.appendLine("    \$self.$bodyFieldName = $expr;")
-                }
-                emitBodyPropLenIfArray(bp)
-            }
-        }
+		for (vProp in ci.ctorProps)
+			{
+			val vName = vProp.name                                          // prop name
+			val vType = vProp.typeRef                                       // prop type
+			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName  // C field name
+			val vResolved = resolveTypeName(vType)                          // resolved C type
+			val vSizeAnn = getSizeAnnotation(vType)                         // @Size annotation
+			if (vSizeAnn != null)
+				{
+                val elemType = arrayElementCType(vResolved)
+				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($elemType));")
+				}
+			else if (isArrayType(vResolved))
+				{
+				impl.appendLine("    \$self.$vFieldName = $vName;")
+				impl.appendLine("    \$self.${vFieldName}\$len = ${vName}\$len;")
+				}
+			else if (vType.nullable)
+				{
+				impl.appendLine("    \$self.$vFieldName = $vName;")
+				}
+			else
+				{
+				impl.appendLine("    \$self.$vFieldName = $vName;")
+				}
+			}
+		for (vBp in ci.bodyProps)
+			{
+			if (vBp.initExpr != null)
+				{
+				if (vBp.line > 0) currentStmtLine = vBp.line
+				heapAllocTargetType = vBp.typeRef
+				val vBodyFieldName = if (vBp.isPrivate) "PRIV_${vBp.name}" else vBp.name  // C field name
+				val vSizeAnn = getSizeAnnotation(vBp.typeRef)  // @Size annotation value
+				if (vSizeAnn != null && isSizedArrayTypeRef(vBp.typeRef))
+					{
+					val vIsZeroInit = vBp.initExpr is CallExpr && (vBp.initExpr.callee as? NameExpr)?.name?.endsWith("Array") == true &&
+						vBp.initExpr.args.size == 1 && vBp.initExpr.args[0].expr !is LambdaExpr
+					if (!vIsZeroInit)
+						{
+						val vExpr = genExpr(vBp.initExpr)
+						heapAllocTargetType = null
+						flushPreStmts("    ")
+						val vElemType = arrayElementCType(resolveTypeName(vBp.typeRef))  // element C type
+						impl.appendLine("    memcpy(\$self.$vBodyFieldName, $vExpr, $vSizeAnn * sizeof($vElemType));")
+						}
+					else
+						{
+						heapAllocTargetType = null
+						}
+					}
+				else
+					{
+					val vExpr = genExpr(vBp.initExpr)
+					heapAllocTargetType = null
+					flushPreStmts("    ")
+					impl.appendLine("    \$self.$vBodyFieldName = $vExpr;")
+					}
+				emitBodyPropLenIfArray(vBp)
+				}
+			}
         impl.appendLine("    return \$self;")
     }
     impl.appendLine("}")
@@ -943,7 +982,8 @@ internal fun CCodeGen.emitStarExtFunForGenericInterface(f: FunDecl, ifaceBaseNam
 // ── enum class ───────────────────────────────────────────────────
 
 internal fun CCodeGen.emitEnum(d: EnumDecl) {
-    val cName = pfx(d.name)
+    val ei = enums[d.name]!!
+    val cName = ei.flatName
     hdr.appendLine("typedef enum {")
     for ((i, e) in d.entries.withIndex()) {
         hdr.append("    ${cName}_$e")
@@ -995,7 +1035,8 @@ internal fun CCodeGen.emitEnumValuesData() {
 // ── object ───────────────────────────────────────────────────────
 
 internal fun CCodeGen.emitObject(d: ObjectDecl) {
-    val cName = pfx(d.name)
+    val oi = objects[d.name]!!
+    val cName = oi.flatName
     val props = d.members.filterIsInstance<PropDecl>()
     val initBlocks = d.members.filterIsInstance<FunDecl>().filter { it.name == "init" }
     val methods = d.members.filterIsInstance<FunDecl>().filter { it.name != "init" }
@@ -1194,7 +1235,7 @@ internal fun CCodeGen.emitInterface(d: InterfaceDecl) {
  * Handles inherited methods/properties from super interfaces.
  */
 internal fun CCodeGen.emitInterfaceVtable(info: IfaceInfo) {
-    val cName = pfx(info.name)
+    val cName = info.flatName
     hdr.appendLine("// ══ interface ${info.name} ($currentSourceFile) ══")
     hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[info.name]!!}")
     // Collect all methods/properties including inherited from super interfaces
@@ -1231,7 +1272,7 @@ internal fun CCodeGen.emitInterfaceVtable(info: IfaceInfo) {
  * Must be called after all class structs and vtables have been emitted.
  */
 internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
-    val cName = pfx(info.name)
+    val cName = info.flatName
     val impls = interfaceImplementors[info.name] ?: emptyList()
     hdr.appendLine("// ══ interface ${info.name} — tagged union ($currentSourceFile) ══")
     hdr.appendLine("typedef struct $cName {")
@@ -1288,7 +1329,7 @@ internal fun CCodeGen.collectAllIfaceProperties(info: IfaceInfo): List<PropDecl>
             val superInfo = interfaces[superName] ?: continue
             collect(superInfo)
         }
-        for (p in i.properties) {
+        for (p in i.propDecls) {
             if (p.name !in seen) { result += p; seen += p.name }
         }
     }

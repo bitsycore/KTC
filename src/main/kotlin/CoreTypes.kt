@@ -10,7 +10,38 @@ package com.bitsycore
  *   - `KtcType.toCType()` to get the C type string (replaces cTypeStr)
  *   - Queries like `isArray`, `isPointer`, `isNullable`, `elementType` replace string checks
  */
-sealed class KtcType {
+/*
+Describes a resolved Kotlin declaration (class, object, enum, or interface).
+Carries the identity needed to compute a flat C name without symbolPrefix.
+*/
+internal interface TypeDef
+	{
+	val baseName: String              // simple declaration name, e.g. "Vec2"
+	val pkg: String                   // C prefix, e.g. "game_" or "ktc_std_"
+	val kind: KtcType.UserKind        // Class/DataClass/Object/Interface/Enum
+	val flatName: String get() = "$pkg$baseName"  // full C identifier
+	val methods: List<FunDecl>        // declared methods
+	val properties: List<PropertyDef> // declared properties
+	val typeParams: List<String>      // generic type parameters
+	val superTypeDefs: List<TypeDef>  // resolved super-interfaces
+	}
+
+/*
+TypeDef for intrinsic types (Pair, Triple, Any, ktc_StrBuf) that have no ClassDecl.
+*/
+internal data class BuiltinTypeDef(
+	override val baseName: String,                               // builtin type name
+	override val pkg: String = "ktc_",                          // always ktc_ prefix
+	override val kind: KtcType.UserKind = KtcType.UserKind.Class // always Class kind
+	) : TypeDef
+	{
+	override val methods: List<FunDecl> get() = emptyList()
+	override val properties: List<PropertyDef> get() = emptyList()
+	override val typeParams: List<String> get() = emptyList()
+	override val superTypeDefs: List<TypeDef> get() = emptyList()
+	}
+
+internal sealed class KtcType {
 
     // ── Primitive types ──────────────────────────────────────────────
 
@@ -51,15 +82,17 @@ sealed class KtcType {
 
     enum class UserKind { Class, DataClass, Object, Interface, Enum }
 
-    data class User(
-        val baseName: String,     // e.g. "Vec2", "Pair_Int_String"
-        val typeArgs: List<KtcType> = emptyList(),
-        val kind: UserKind = UserKind.Class,
-        val pkg: String = ""      // e.g. "ktc_std_", "game_Main_" (prefix, no name)
-    ) : KtcType() {
-        val flatName get() = "$pkg$baseName"
-        override fun toCType(): String = flatName
-    }
+	data class User(
+		val decl: TypeDef,                         // backing declaration descriptor
+		val typeArgs: List<KtcType> = emptyList()  // concrete type arguments
+		) : KtcType()
+		{
+		val baseName: String get() = decl.baseName
+		val kind: KtcType.UserKind get() = decl.kind
+		val pkg: String get() = decl.pkg
+		val flatName: String get() = decl.flatName
+		override fun toCType(): String = decl.flatName
+		}
 
     // ── Array types ──────────────────────────────────────────────────
 
@@ -143,7 +176,7 @@ sealed class KtcType {
                 base == "String" -> Str
                 base == "void" || base == "Nothing" -> Void
                 base in primitiveNames -> Prim(PrimKind.valueOf(base))
-                base == "StringBuffer" -> User(baseName = "ktc_StrBuf")
+                base == "StringBuffer" -> User(BuiltinTypeDef("ktc_StrBuf", pkg = ""))
                 base == "RawArray" && typeRef.typeArgs.isNotEmpty() ->
                     Ptr(from(typeRef.typeArgs[0], resolveName))
                 base == "Array" && typeRef.typeArgs.isNotEmpty() -> {
@@ -160,11 +193,11 @@ sealed class KtcType {
                 }
                 base.startsWith("Pair_") || base.startsWith("Triple_") -> {
                     val typeArgNames = base.removePrefix("Pair_").removePrefix("Triple_").split("_")
-                    val typeArgs = typeArgNames.map { from(TypeRef(it), resolveName) }
-                    User(baseName = base, typeArgs = typeArgs)
+                    val typeArgKtc = typeArgNames.map { from(TypeRef(it), resolveName) }
+                    User(BuiltinTypeDef(base, pkg = "ktc_"), typeArgKtc)
                 }
-                base == "Any" -> User(baseName = "Any")
-                else -> User(baseName = resolved)
+                base == "Any" -> User(BuiltinTypeDef("Any", pkg = ""))
+                else -> User(BuiltinTypeDef(resolved, pkg = ""))
             }
 
             return if (isPtr && inner !is Arr) Ptr(inner)

@@ -20,8 +20,8 @@ class Counter() {
     fun count(): Int = n
 }
 
-fun doIt(): String = "ok"
-fun doIt(x: Int): String = "ok $x"
+fun doIt(): Int = 3
+fun doIt(x: Int): Int = 3 + x
 
 fun main() {
     val a = Calc.add(2, 3)
@@ -47,9 +47,9 @@ fun main() {
     println("Class overloads OK")
 
     val t1 = doIt()
+    if (t1 != 3) error("FAIL doIt=$t1")
     val t2 = doIt(42)
-    if (t1 != "ok") error("FAIL doIt=$t1")
-    if (t2 != "ok 42") error("FAIL doIt 42=$t2")
+    if (t2 != 45) error("FAIL doIt 42=$t2")
     println("Top-level overloads OK")
 
     println("ALL OK")

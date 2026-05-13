@@ -248,41 +248,39 @@ internal fun CCodeGen.materializeGenericInstantiations() {
         for (typeArgs in instantiations) {
             val mangledName = mangledGenericName(baseName, typeArgs)
             if (classes.containsKey(mangledName)) continue  // already materialized
-            // Build substitution map: T→Int, U→Float, etc.
-            val subst = templateCi.typeParams.zip(typeArgs).toMap()
-            // Substitute types in ctor props
-            val ctorProps = templateCi.ctorProps.map { (name, type) ->
-                name to substituteTypeRef(type, subst)
-            }
-            // Substitute types in plain ctor params (not stored as fields)
-            val ctorPlainParams = templateCi.ctorPlainParams.map { (name, type) ->
-                name to substituteTypeRef(type, subst)
-            }
-            // Substitute types in body props
-            val bodyProps = templateCi.bodyProps.map { bp ->
-                BodyProp(bp.name, substituteTypeRef(bp.type, subst), bp.init, bp.line, bp.isPrivate)
-            }
-            val ci = ClassInfo(mangledName, templateCi.isData, ctorProps, ctorPlainParams, bodyProps,
-                initBlocks = templateCi.initBlocks, typeParams = templateCi.typeParams, privateProps = templateCi.privateProps)
+			val vSubst = templateCi.typeParams.zip(typeArgs).toMap() // type param substitution map
+			val vNewCtorProps = templateCi.ctorProps.map { vProp ->  // substitute ctor props
+				vProp.copy(typeRef = substituteTypeRef(vProp.typeRef, vSubst))
+				}
+			val vNewPlainParams = templateCi.ctorPlainParams.map { vProp ->  // substitute plain params
+				vProp.copy(typeRef = substituteTypeRef(vProp.typeRef, vSubst))
+				}
+			val vNewBodyProps = templateCi.bodyProps.map { vProp ->  // substitute body props
+				vProp.copy(typeRef = substituteTypeRef(vProp.typeRef, vSubst))
+				}
+			val vAllNewProps = vNewCtorProps + vNewBodyProps  // combined substituted props
+			val ci = ClassInfo(mangledName, templateCi.isData, vAllNewProps, vNewPlainParams,
+				initBlocks = templateCi.initBlocks, typeParams = templateCi.typeParams)
             // Copy methods from template
             for (m in templateCi.methods) ci.methods += m
             classes[mangledName] = ci
             getTypeId(mangledName)
             // Register symbol prefix for the mangled name (same as template's package)
             symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
+            classes[mangledName]?.pkg = symbolPrefix[mangledName] ?: prefix  // sync pkg
             // Store type bindings for resolving method return types later
-            genericTypeBindings[mangledName] = subst
+			genericTypeBindings[mangledName] = vSubst
 
             // Resolve super interfaces with type substitution
             if (templateDecl.superInterfaces.isNotEmpty()) {
                 val resolvedIfaces = templateDecl.superInterfaces.map { ifaceRef ->
-                    val resolved = substituteTypeRef(ifaceRef, subst)
+                    val resolved = substituteTypeRef(ifaceRef, vSubst)
                     resolveIfaceName(resolved)
                 }
                 classInterfaces[mangledName] = resolvedIfaces
                 // Monomorphize each generic interface
                 for (ifaceRef in templateDecl.superInterfaces) {
-                    val resolved = substituteTypeRef(ifaceRef, subst)
+                    val resolved = substituteTypeRef(ifaceRef, vSubst)
                     materializeGenericInterface(resolved)
                 }
             }
@@ -317,7 +315,7 @@ internal fun CCodeGen.materializeGenericInterface(t: TypeRef) {
         )
     }
     // Substitute types in properties
-    val properties = template.properties.map { p ->
+    val properties = template.propDecls.map { p ->
         p.copy(type = p.type?.let { substituteTypeRef(it, subst) })
     }
     // Resolve super interfaces
@@ -325,6 +323,7 @@ internal fun CCodeGen.materializeGenericInterface(t: TypeRef) {
     interfaces[mangledName] = IfaceInfo(mangledName, methods, properties, emptyList(), resolvedSupers)
     getTypeId(mangledName)
     symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
+    interfaces[mangledName]?.pkg = symbolPrefix[mangledName] ?: prefix  // sync pkg on IfaceInfo
     // Recursively monomorphize parent interfaces
     for (superRef in resolvedSupers) {
         materializeGenericInterface(superRef)

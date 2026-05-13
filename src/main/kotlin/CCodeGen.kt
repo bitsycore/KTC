@@ -453,11 +453,13 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     val valMark = if (ci.isValProp(pn)) "val" else "var"
                     sb.appendLine("    $priv$valMark $pn: ${typeRefToStr(pt)}")
                 }
-                if (ci.ctorPlainParams.isNotEmpty()) {
-                    for ((pn, pt) in ci.ctorPlainParams) {
-                        sb.appendLine("    param $pn: ${typeRefToStr(pt)}")
-                    }
-                }
+				if (ci.ctorPlainParams.isNotEmpty())
+					{
+					for (vParam in ci.ctorPlainParams)
+						{
+						sb.appendLine("    param ${vParam.name}: ${typeRefToStr(vParam.typeRef)}")
+						}
+					}
                 for (m in ci.methods) {
                     val priv = if (m.isPrivate) "private " else ""
                     val op = if (m.isOperator) "operator " else ""
@@ -478,7 +480,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 val sup = if (iface.superInterfaces.isNotEmpty())
                     " : ${iface.superInterfaces.joinToString(", ") { typeRefToStr(it) }}" else ""
                 sb.appendLine("  interface $name$tp$sup")
-                for (p in iface.properties) {
+                for (p in iface.propDecls) {
                     val mut = if (p.mutable) "var" else "val"
                     val pt = if (p.type != null) ": ${typeRefToStr(p.type)}" else ""
                     sb.appendLine("    $mut ${p.name}$pt")
@@ -944,14 +946,16 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 when (d) {
                     is ClassDecl -> {
                         symbolPrefix[d.name] = fpfx
+                        classes[d.name]?.pkg = fpfx  // set pkg on ClassInfo
                         // Register companion object prefix
                         for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
                             symbolPrefix["${d.name}\$${vMember.name}"] = fpfx
+                            objects["${d.name}\$${vMember.name}"]?.pkg = fpfx  // set pkg on ObjInfo
                         }
                     }
-                    is EnumDecl -> symbolPrefix[d.name] = fpfx
-                    is InterfaceDecl -> symbolPrefix[d.name] = fpfx
-                    is ObjectDecl -> symbolPrefix[d.name] = fpfx
+                    is EnumDecl -> { symbolPrefix[d.name] = fpfx; enums[d.name]?.pkg = fpfx }
+                    is InterfaceDecl -> { symbolPrefix[d.name] = fpfx; interfaces[d.name]?.pkg = fpfx }
+                    is ObjectDecl -> { symbolPrefix[d.name] = fpfx; objects[d.name]?.pkg = fpfx }
                     is FunDecl -> {
                         if (d.receiver == null) symbolPrefix[d.name] = fpfx
                     }
@@ -964,6 +968,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             if ('$' in name && name !in symbolPrefix) {
                 val parent = name.substringBefore('$')
                 symbolPrefix[name] = symbolPrefix[parent] ?: prefix
+                ci.pkg = symbolPrefix[name] ?: prefix  // sync pkg
             }
         }
         // Current file's symbols use current prefix (overwrite any from allFiles)
@@ -972,18 +977,32 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             when (d) {
                 is ClassDecl -> {
                     symbolPrefix[d.name] = prefix
+                    classes[d.name]?.pkg = prefix  // override with current file prefix
                     // Register companion object prefix
                     for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
                         symbolPrefix["${d.name}\$${vMember.name}"] = prefix
+                        objects["${d.name}\$${vMember.name}"]?.pkg = prefix  // sync pkg
                     }
                 }
-                is EnumDecl -> symbolPrefix[d.name] = prefix
-                is InterfaceDecl -> symbolPrefix[d.name] = prefix
-                is ObjectDecl -> symbolPrefix[d.name] = prefix
+                is EnumDecl -> { symbolPrefix[d.name] = prefix; enums[d.name]?.pkg = prefix }
+                is InterfaceDecl -> { symbolPrefix[d.name] = prefix; interfaces[d.name]?.pkg = prefix }
+                is ObjectDecl -> { symbolPrefix[d.name] = prefix; objects[d.name]?.pkg = prefix }
                 is FunDecl -> {
                     if (d.receiver == null) symbolPrefix[d.name] = prefix
                 }
                 else -> {}
+            }
+        }
+        // Sync pkg for nested classes that may have been replaced in the current file pass
+        for ((name, ci) in classes) {
+            if ('$' in name) {
+                ci.pkg = symbolPrefix[name] ?: prefix  // ensure pkg matches symbolPrefix
+            }
+        }
+        // Sync pkg for nested objects (companion objects etc.)
+        for ((name, oi) in objects) {
+            if ('$' in name) {
+                oi.pkg = symbolPrefix[name] ?: prefix
             }
         }
     }
@@ -1003,15 +1022,36 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                         codegenError("Class property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                     }
                 }
-                val ctorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { it.name to it.type }
-                val valCtorPropNames = d.ctorParams.filter { it.isVal }.map { it.name }.toSet()
-                val ctorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { it.name to it.type }
-                val bodyProps = d.members.filterIsInstance<PropDecl>().map { p ->
-                    BodyProp(p.name, p.type ?: inferInitType(p.init), p.init, p.line, p.isPrivate, p.mutable, p.isPrivateSet)
-                }
-                val privateProps = (bodyProps.filter { it.isPrivate }.map { it.name } + d.ctorParams.filter { it.isPrivate && (it.isVal || it.isVar) }.map { it.name }).toSet()
-                val privateSetPropNames = bodyProps.filter { it.isPrivateSet }.map { it.name }.toSet()
-                val ci = ClassInfo(d.name, d.isData, ctorProps, ctorPlainParams, bodyProps, initBlocks = d.initBlocks, typeParams = d.typeParams, privateProps = privateProps, valCtorProps = valCtorPropNames, privateSetProps = privateSetPropNames)
+				val vCtorProps = d.ctorParams.filter { it.isVal || it.isVar }.map { vP ->  // ctor val/var props
+					PropertyDef(
+						name = vP.name,
+						typeRef = vP.type,
+						isVal = vP.isVal,
+						isPrivate = vP.isPrivate,
+						isConstructorParam = true
+						)
+					}
+				val vCtorPlainParams = d.ctorParams.filter { !it.isVal && !it.isVar }.map { vP ->  // plain ctor params
+					PropertyDef(
+						name = vP.name,
+						typeRef = vP.type,
+						isVal = false,
+						isConstructorParam = true
+						)
+					}
+				val vBodyProps = d.members.filterIsInstance<PropDecl>().map { vP ->  // body-declared props
+					PropertyDef(
+						name = vP.name,
+						typeRef = vP.type ?: inferInitType(vP.init),
+						isVal = !vP.mutable,
+						isPrivate = vP.isPrivate,
+						isPrivateSet = vP.isPrivateSet,
+						initExpr = vP.init,
+						line = vP.line
+						)
+					}
+				val vAllProps = vCtorProps + vBodyProps  // combined property list
+				val ci = ClassInfo(d.name, d.isData, vAllProps, vCtorPlainParams, initBlocks = d.initBlocks, typeParams = d.typeParams)
                 if (d.typeParams.isNotEmpty()) allGenericTypeParamNames += d.typeParams
                 for (m in d.members) if (m is FunDecl && m.receiver == null) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
@@ -1089,9 +1129,18 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                         codegenError("Object property '${p.name}' cannot have raw array type '${propType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")
                     }
                 }
-                val props = d.members.filterIsInstance<PropDecl>().map { it.name to (it.type ?: TypeRef("Int")) }
-                val privateProps = d.members.filterIsInstance<PropDecl>().filter { it.isPrivate }.map { it.name }.toSet()
-                val oi = ObjInfo(d.name, props, privateProps = privateProps)
+				val vObjProps = d.members.filterIsInstance<PropDecl>().map { vP ->  // object properties
+					PropertyDef(
+						name = vP.name,
+						typeRef = vP.type ?: TypeRef("Int"),
+						isVal = !vP.mutable,
+						isPrivate = vP.isPrivate,
+						isPrivateSet = vP.isPrivateSet,
+						initExpr = vP.init,
+						line = vP.line
+						)
+					}
+				val oi = ObjInfo(d.name, vObjProps)
                 for (m in d.members) if (m is FunDecl) {
                     if (m.returnType != null && isRawArrayTypeRef(m.returnType)) {
                         codegenError("Method '${m.name}' cannot return raw array type '${m.returnType.name}'. Use @Ptr Array<T> or @Size(N) Array<T> instead")

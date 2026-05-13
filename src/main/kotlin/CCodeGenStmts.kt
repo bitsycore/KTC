@@ -548,20 +548,23 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
     return TypeRef(inferExprType(init) ?: "Int")
 }
 
-/** If a body prop is an array type, emit $self.name$len = allocSize after the assignment. */
-internal fun CCodeGen.emitBodyPropLenIfArray(bp: BodyProp) {
-    val resolved = resolveTypeName(bp.type)
-    if (!isArrayType(resolved)) return
-    if (hasSizeAnnotation(bp.type)) return
-    val fieldName = if (bp.isPrivate) "PRIV_${bp.name}" else bp.name
-    val allocSize = extractAllocSize(bp.init)
-    if (allocSize != null) {
-        impl.appendLine("    \$self.$fieldName\$len = ${genExpr(allocSize)};")
-    } else if (bp.init is NameExpr) {
-        val initName = (bp.init as NameExpr).name
-        impl.appendLine("    \$self.$fieldName\$len = ${initName}\$len;")
-    }
-}
+/* If a body prop is an array type, emit $self.name$len = allocSize after assignment. */
+internal fun CCodeGen.emitBodyPropLenIfArray(inProp: PropertyDef) {
+	val vResolved = resolveTypeName(inProp.typeRef)  // resolved C type string
+	if (!isArrayType(vResolved)) return
+	if (hasSizeAnnotation(inProp.typeRef)) return
+	val vFieldName = if (inProp.isPrivate) "PRIV_${inProp.name}" else inProp.name  // C field name
+	val vAllocSize = extractAllocSize(inProp.initExpr)  // extracted allocation size expr
+	if (vAllocSize != null)
+		{
+		impl.appendLine("    \$self.$vFieldName\$len = ${genExpr(vAllocSize)};")
+		}
+	else if (inProp.initExpr is NameExpr)
+		{
+		val vInitName = (inProp.initExpr as NameExpr).name  // source variable name
+		impl.appendLine("    \$self.$vFieldName\$len = ${vInitName}\$len;")
+		}
+	}
 
 /** Generate a call expression that returns nullable, appending &outVar as extra arg.
  *  The function returns bool (has value), and writes the value through the out pointer. */
