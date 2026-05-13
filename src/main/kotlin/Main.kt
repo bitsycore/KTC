@@ -158,9 +158,12 @@ fun main(args: Array<String>) {
 
     val outDir = File(outputDir)
     outDir.mkdirs()
+    val ktcDir = File(outDir, "ktc") // subdir for stdlib + intrinsics
+    ktcDir.mkdirs()
 
     val allAsts = parsedFiles.map { it.ast }
-    val allOutputNames = mutableListOf<String>()
+    val ktcOutputNames = mutableListOf<String>() // ktc_* packages (e.g. ktc_std)
+    val userOutputNames = mutableListOf<String>() // user packages
 
     for ((pkg, group) in byPackage) {
         // Merge all files in the same package into one KtFile
@@ -180,17 +183,19 @@ fun main(args: Array<String>) {
         }
 
         val baseName = mergedFile.pkg?.replace('.', '_') ?: pkg
-        val headerFile = File(outDir, "$baseName.h")
-        val sourceFile = File(outDir, "$baseName.c")
+        val isKtcPkg = baseName.startsWith("ktc_") // route ktc_* packages to ktc/ subdir
+        val targetDir = if (isKtcPkg) ktcDir else outDir
+        val headerFile = File(targetDir, "$baseName.h")
+        val sourceFile = File(targetDir, "$baseName.c")
         headerFile.writeText(output.header)
         sourceFile.writeText(output.source)
-        allOutputNames += baseName
+        if (isKtcPkg) ktcOutputNames += baseName else userOutputNames += baseName
         println("  wrote ${headerFile.path}")
         println("  wrote ${sourceFile.path}")
     }
 
-    // ── Copy intrinsic header (always overwrite to keep in sync) ────
-    val intrinsicDst = File(outDir, "ktc_intrinsic.h")
+    // ── Copy intrinsic files to ktc/ subdirectory ────────────────
+    val intrinsicDst = File(ktcDir, "ktc_intrinsic.h")
     val intrinsicSrc = aClass.getResourceAsStream("/ktc_intrinsic.h")
     if (intrinsicSrc != null) {
         intrinsicDst.writeText(intrinsicSrc.bufferedReader().readText())
@@ -198,8 +203,7 @@ fun main(args: Array<String>) {
         System.err.println("Warning: ktc_intrinsic.h not found in resources, copy it manually.")
     }
 
-    // ── Copy intrinsic header (always overwrite to keep in sync) ────
-    val intrinsicDstC = File(outDir, "ktc_intrinsic.c")
+    val intrinsicDstC = File(ktcDir, "ktc_intrinsic.c")
     val intrinsicSrcC = aClass.getResourceAsStream("/ktc_intrinsic.c")
     if (intrinsicSrcC != null) {
         intrinsicDstC.writeText(intrinsicSrcC.bufferedReader().readText())
@@ -207,11 +211,12 @@ fun main(args: Array<String>) {
         System.err.println("Warning: ktc_intrinsic.c not found in resources, copy it manually.")
     }
 
-    // Print compile command (ensure ktc_std.c is first if present)
-    val sortedNames = allOutputNames.sortedBy { if (it == "ktc_std") 0 else 1 }
-    val sourceNames = sortedNames.joinToString(" ") { "$it.c" }
-    val mainBase = sortedNames.find { it != "ktc_std" } ?: sortedNames.first()
-    println("Done. Compile with:  cc -std=c11 -o $mainBase $sourceNames")
+    // Print compile command: ktc/ files first (intrinsic then stdlib), then user files
+    val ktcSources = (listOf("ktc_intrinsic") + ktcOutputNames.sorted())
+        .joinToString(" ") { "ktc/$it.c" }
+    val userSources = userOutputNames.sorted().joinToString(" ") { "$it.c" }
+    val mainBase = userOutputNames.firstOrNull() ?: "output"
+    println("Done. Compile with:  cc -std=c11 -o $mainBase $ktcSources $userSources")
 }
 
 // ═══════════════════════════ AST Dump ═══════════════════════════

@@ -673,7 +673,7 @@ internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null
     // Pointer suffix — for array types that are already pointers, don't double-wrap
     if (resolved.endsWith("*?")) {
         val base = resolved.dropLast(2)
-        if (base.endsWith("Array")) return parseResolvedTypeName(base, t)  // Array* → already a pointer
+        if (base.endsWith("Array")) return KtcType.Nullable(parseResolvedTypeName(base, t))  // Array*? → nullable array ptr
         return KtcType.Nullable(KtcType.Ptr(parseResolvedTypeName(base, t)))
     }
     if (resolved.endsWith("*")) {

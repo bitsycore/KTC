@@ -196,6 +196,23 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                 if (s.init is NullLit) {
                     impl.appendLine("$ind$mutComment$elemCType* ${s.name} = NULL;")
                     impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
+                } else if (s.init is DotExpr && (s.init as DotExpr).name == "buffer") {
+                    val dotInit = s.init as DotExpr
+                    val dotRecvType = inferExprType(dotInit.obj)
+                    if (dotRecvType == "ktc_StrBuf" || dotRecvType == "StringBuffer") {
+                        val recvExpr = genExpr(dotInit.obj)
+                        val expr = genExpr(s.init)
+                        flushPreStmts(ind)
+                        impl.appendLine("$ind$mutComment$elemCType* ${s.name} /* nullable */ = $expr;")
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $recvExpr.cap;")
+                    } else {
+                        val expr = genExpr(s.init)
+                        flushPreStmts(ind)
+                        val lenExpr = "${expr}\$len"
+                        impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
+                    }
                 } else {
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)

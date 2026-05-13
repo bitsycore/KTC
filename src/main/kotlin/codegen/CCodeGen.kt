@@ -723,7 +723,10 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 
         hdr.appendLine("#pragma once")
         if (memTrack) hdr.appendLine("#define KTC_MEM_TRACK")
-        hdr.appendLine("#include \"ktc_intrinsic.h\"")
+        // ktc_* packages live in ktc/ subdir alongside ktc_intrinsic; user packages live one level up
+        val vIsKtcPkg = (file.pkg?.replace('.', '_') ?: "").startsWith("ktc_")
+        val vKtcPrefix = if (vIsKtcPkg) "" else "ktc/"
+        hdr.appendLine("#include \"${vKtcPrefix}ktc_intrinsic.h\"")
         hdr.appendLine()
 
         // Imports → #include (skip ktc stdlib imports — handled below)
@@ -736,7 +739,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         // Auto-include ktc_std.h for non-stdlib packages when stdlib is present
         val hasStdlib = allFiles.any { it.pkg == "ktc.std" }
         if (hasStdlib && file.pkg != "ktc_std") {
-            hdr.appendLine("#include \"ktc_std.h\"")
+            hdr.appendLine("#include \"${vKtcPrefix}ktc_std.h\"")
         }
         hdr.appendLine()
 

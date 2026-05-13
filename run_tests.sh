@@ -31,7 +31,6 @@ usage() {
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 JAR="$ROOT/build/libs/KotlinToC-1.0-SNAPSHOT.jar"
 RELEASE_JAR="$ROOT/build/libs/KotlinToC-1.0-SNAPSHOT-release.jar"
-OUT_DIR="$ROOT/test_out"
 TESTS_DIR="$ROOT/tests"
 
 SKIP_UNIT=false
@@ -74,7 +73,7 @@ fi
 
 # ── Clean mode ──────────────────────────────────────────────────
 if [[ "$CLEAN" == true ]]; then
-    echo "Cleaning all test output directories..."
+    echo "Cleaning per-test output directories..."
     cleaned=0
     for d in "$TESTS_DIR"/*/; do
         [[ -d "$d" ]] || continue
@@ -208,23 +207,26 @@ invoke_test() {
     if [[ "$verbose" == "true" ]]; then pass "Transpilation succeeded"; fi
 
     # ── Discover generated .c files ─────────────────────────────
-    local c_files=()
-    local ktc_first=()
-    local others=()
+    local ktc_dir="$test_out_dir/ktc"
+    local c_sources=()
+    if [[ -d "$ktc_dir" ]]; then
+        [[ -f "$ktc_dir/ktc_intrinsic.c" ]] && c_sources+=("$ktc_dir/ktc_intrinsic.c")
+        for f in "$ktc_dir"/*.c; do
+            [[ -e "$f" ]] || continue
+            [[ "$(basename "$f")" == "ktc_intrinsic.c" ]] && continue
+            c_sources+=("$f")
+        done
+    fi
+    local user_c=()
     for f in "$test_out_dir"/*.c; do
-        [[ -e "$f" ]] || continue
-        local cname
-        cname="$(basename "$f")"
-        if [[ "$cname" == "ktc_std.c" ]]; then
-            ktc_first+=("$cname")
-        else
-            others+=("$cname")
-        fi
+        [[ -e "$f" ]] && user_c+=("$f")
     done
-    IFS=$'\n' others=($(sort <<< "${others[*]}")); unset IFS
-    c_files=("${ktc_first[@]}" "${others[@]}")
+    if [[ ${#user_c[@]} -gt 0 ]]; then
+        IFS=$'\n' user_c=($(sort <<< "${user_c[*]}")); unset IFS
+        c_sources+=("${user_c[@]}")
+    fi
 
-    if [[ ${#c_files[@]} -eq 0 ]]; then
+    if [[ ${#c_sources[@]} -eq 0 ]]; then
         if [[ "$verbose" == "true" ]]; then
             fail "No .c files generated"
         else
@@ -235,11 +237,6 @@ invoke_test() {
 
     # Binary name: use test name
     local exe_path="$test_out_dir/$name"
-
-    local c_sources=()
-    for cf in "${c_files[@]}"; do
-        c_sources+=("$test_out_dir/$cf")
-    done
 
     # ── Compile ─────────────────────────────────────────────────
     if [[ "$verbose" == "true" ]]; then
@@ -269,9 +266,10 @@ invoke_test() {
     # ── Generated files (verbose only) ──────────────────────────
     if [[ "$verbose" == "true" ]]; then
         section "Generated Files"
-        for f in "$test_out_dir"/*; do
+        for f in "$test_out_dir"/* "$test_out_dir"/ktc/*; do
+            [[ -f "$f" ]] || continue
             local fname
-            fname="$(basename "$f")"
+            fname="${f#$test_out_dir/}"
             local size
             size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo "?")
             local human
@@ -358,7 +356,7 @@ if [[ -n "$RUN_TEST" ]]; then
         exit 1
     fi
 
-    if invoke_test "$RUN_TEST" "$test_src_dir" "$OUT_DIR/$RUN_TEST" "true" "$EXTRA_ARGS"; then
+    if invoke_test "$RUN_TEST" "$test_src_dir" "$test_src_dir/out" "true" "$EXTRA_ARGS"; then
         exit 0
     else
         exit 1
@@ -412,9 +410,9 @@ if [[ "$BUILD" != "gradle" ]]; then
     esac
 fi
 
-# ── Prepare output directory ────────────────────────────────────
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"
+# ── Create temp dir for parallel output capture (auto-deleted on exit) ──
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
 # ── 3. Integration Tests — auto-discover from tests/ ───────────
 section "Integration Tests"
@@ -433,8 +431,8 @@ else
     for dir in "${test_dirs[@]}"; do
         dir_name="$(basename "$dir")"
         (
-            invoke_test "$dir_name" "$dir" "$OUT_DIR/$dir_name" "false" "$EXTRA_ARGS" > "$OUT_DIR/${dir_name}.out" 2>&1
-            echo $? > "$OUT_DIR/${dir_name}.code"
+            invoke_test "$dir_name" "$dir" "$dir/out" "false" "$EXTRA_ARGS" > "$TEMP_DIR/${dir_name}.out" 2>&1
+            echo $? > "$TEMP_DIR/${dir_name}.code"
         ) &
         pids+=($!)
     done
@@ -445,8 +443,8 @@ else
 
     for dir in "${test_dirs[@]}"; do
         dir_name="$(basename "$dir")"
-        exit_code=$(cat "$OUT_DIR/${dir_name}.code" 2>/dev/null || echo 1)
-        cat "$OUT_DIR/${dir_name}.out" 2>/dev/null || true
+        exit_code=$(cat "$TEMP_DIR/${dir_name}.code" 2>/dev/null || echo 1)
+        cat "$TEMP_DIR/${dir_name}.out" 2>/dev/null || true
         ((TOTAL++)) || true
         if [[ "$exit_code" == "0" ]]; then
             ((PASSED++)) || true

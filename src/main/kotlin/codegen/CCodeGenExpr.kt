@@ -156,8 +156,8 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
         val lt = inferExprType(e.left)
         val l = genExpr(e.left)
         val rt = inferExprType(e.right)
-        // If right side returns Nothing (e.g., error("msg")), emit non-null assertion
-        if (rt != null && (rt == "Nothing" || rt.removeSuffix("?") == "Nothing")) {
+        // If right side returns Nothing or Unit/void (e.g., error("msg")), emit non-null assertion
+        if (rt != null && (rt == "Nothing" || rt == "Unit" || rt.removeSuffix("?") == "Nothing")) {
             val baseType = lt?.removeSuffix("?") ?: "void*"
             val ct = cTypeStr(baseType)
             val t = tmp()
@@ -1148,7 +1148,8 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
         } else if (argIdx < args.size) {
             val arg = args[argIdx]
             val expr = genExpr(arg.expr)
-            if (paramType.endsWith("*") || paramType.endsWith("*?")) {
+            val hasAtPtr = param.type.annotations.any { it.name == "Ptr" }
+            if (hasAtPtr || paramType.endsWith("*") || paramType.endsWith("*?")) {
                 // @Ptr-annotated type — pass raw pointer (NULL for null)
                 if (arg.expr is NullLit) {
                     parts += "NULL"

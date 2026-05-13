@@ -59,7 +59,7 @@ $testsDir = "$root\tests"
 
 # ── Clean mode ──────────────────────────────────────────────────
 if ($Clean) {
-    Write-Host "Cleaning all test output directories..." -ForegroundColor Cyan
+    Write-Host "Cleaning per-test output directories..." -ForegroundColor Cyan
     $cleaned = 0
     Get-ChildItem $testsDir -Directory | ForEach-Object {
         $outPath = Join-Path $_.FullName "out"
@@ -171,14 +171,24 @@ function Invoke-Test {
     if ($Verbose) { Write-Pass "Transpilation succeeded" }
 
     # ── Discover generated .c files ─────────────────────────────
-    $cFiles = @(Get-ChildItem "$TestOutDir\*.c" | Select-Object -ExpandProperty Name)
-    if ($cFiles.Count -eq 0) {
+    $ktcSubDir = "$TestOutDir\ktc"
+    $cSources = @()
+    if (Test-Path $ktcSubDir -PathType Container) {
+        $ktcIntrinsic = "$ktcSubDir\ktc_intrinsic.c"
+        if (Test-Path $ktcIntrinsic) { $cSources += $ktcIntrinsic }
+        Get-ChildItem "$ktcSubDir\*.c" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne "ktc_intrinsic.c" } |
+            Sort-Object Name |
+            ForEach-Object { $cSources += $_.FullName }
+    }
+    Get-ChildItem "$TestOutDir\*.c" -ErrorAction SilentlyContinue |
+        Sort-Object Name |
+        ForEach-Object { $cSources += $_.FullName }
+
+    if ($cSources.Count -eq 0) {
         if ($Verbose) { Write-Fail "No .c files generated" } else { Write-Fail "$Name (no .c files generated)" }
         return $false
     }
-    # Sort: ktc_std.c first, then the rest alphabetically
-    $cFiles = $cFiles | Sort-Object { if ($_ -eq "ktc_std.c") { 0 } else { 1 } }, { $_ }
-    $cSources = $cFiles | ForEach-Object { "$TestOutDir\$_" }
 
     # Binary name: use test name (e.g., PointerTest.exe)
     $exePath = "$TestOutDir\$Name.exe"
@@ -212,9 +222,10 @@ function Invoke-Test {
     # ── Generated files (verbose only) ──────────────────────────
     if ($Verbose) {
         Write-Section "Generated Files"
-        Get-ChildItem "$TestOutDir\*" | ForEach-Object {
+        Get-ChildItem "$TestOutDir" -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $relName = $_.FullName.Substring($TestOutDir.Length + 1)
             $size = if ($_.Length -ge 1024) { "{0:N1} KB" -f ($_.Length / 1024) } else { "$($_.Length) B" }
-            Write-Info ("{0,-30} {1,10}" -f $_.Name, $size)
+            Write-Info ("{0,-30} {1,10}" -f $relName, $size)
         }
     }
 
@@ -401,14 +412,24 @@ if ($testDirs.Count -eq 0) {
             return @{ Name = $dirName; Passed = $false; Reason = "transpile failed" }
         }
 
-        # Discover .c files
-        $cFiles = @(Get-ChildItem "$testOutDir\*.c" -ErrorAction SilentlyContinue)
-        if ($cFiles.Count -eq 0) {
+        # Discover .c files: ktc/ subdir first (intrinsic then rest), then user files
+        $ktcSubDir = "$testOutDir\ktc"
+        $cSources = @()
+        if (Test-Path $ktcSubDir -PathType Container) {
+            $ktcIntrinsic = "$ktcSubDir\ktc_intrinsic.c"
+            if (Test-Path $ktcIntrinsic) { $cSources += $ktcIntrinsic }
+            Get-ChildItem "$ktcSubDir\*.c" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -ne "ktc_intrinsic.c" } |
+                Sort-Object Name |
+                ForEach-Object { $cSources += $_.FullName }
+        }
+        Get-ChildItem "$testOutDir\*.c" -ErrorAction SilentlyContinue |
+            Sort-Object Name |
+            ForEach-Object { $cSources += $_.FullName }
+        if ($cSources.Count -eq 0) {
             Write-Host "  FAIL $dirName (no .c files generated)" -ForegroundColor Red
             return @{ Name = $dirName; Passed = $false; Reason = "no .c files" }
         }
-        $cFiles = $cFiles | Sort-Object { if ($_.Name -eq "ktc_std.c") { 0 } else { 1 } }, { $_.Name }
-        $cSources = $cFiles | ForEach-Object FullName
 
         # Compile
         $exePath = "$testOutDir\$dirName.exe"
