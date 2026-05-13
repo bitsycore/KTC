@@ -41,7 +41,7 @@ package com.bitsycore
  * ## State accessed (read-only):
  *   classes, interfaces, enums, classArrayTypes, pairTypeComponents,
  *   tripleTypeComponents, tupleTypeComponents, genericClassDecls, genericIfaceDecls,
- *   allGenericTypeParamNames, typeSubst, symbolPrefix, prefix
+ *   allGenericTypeParamNames, typeSubst, prefix
  *
  * ## Dependencies:
  *   None (leaf module). Called from all other modules.
@@ -85,10 +85,7 @@ internal fun CCodeGen.expandCtorParams(inProps: List<PropertyDef>): String {
 	return vParts.joinToString(", ")
 	}
 
-internal fun CCodeGen.cType(t: TypeRef): String {
-    val ktc = typeToKtc(t)
-    return cTypeStr(ktc)
-}
+internal fun CCodeGen.cType(t: TypeRef): String = cTypeStr(resolveTypeNameKtc(t))
 
 // Emit alloca+memcpy copies for all variable array params and record them as trampolined.
 internal fun CCodeGen.emitArrayParamCopies(params: List<Param>, ind: String) {
@@ -175,7 +172,7 @@ internal fun CCodeGen.expandParams(params: List<Param>): String {
 }
 
 internal fun CCodeGen.cTypeStr(t: String): String {
-    val ktc = stringToKtc(t)
+    val ktc = parseResolvedTypeName(t)
     return cTypeStr(ktc)
 }
 
@@ -593,11 +590,8 @@ Phase 4.1: canonical entry point for TypeRef → KtcType resolution.
 internal fun CCodeGen.resolveTypeNameKtc(inT: TypeRef?): KtcType {
 	if (inT == null) return KtcType.Prim(KtcType.PrimKind.Int) // default to Int for null TypeRef
 	val vResolved = resolveTypeName(inT)                        // string-based resolution (bridge)
-	return stringToKtc(vResolved, inT)
+	return parseResolvedTypeName(vResolved, inT)
 	}
-
-/* Backward-compat alias — callers migrated to resolveTypeNameKtc incrementally. */
-internal fun CCodeGen.typeToKtc(inT: TypeRef?): KtcType = resolveTypeNameKtc(inT)
 
 /* Phase 4.2 — convenience extension so TypeRef can self-resolve. */
 internal fun TypeRef.resolveKtc(inGen: CCodeGen): KtcType = inGen.resolveTypeNameKtc(this)
@@ -620,20 +614,20 @@ internal fun CCodeGen.userType(inName: String, inKind: KtcType.UserKind = KtcTyp
 	return KtcType.User(vTypeDef)
 	}
 
-internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType {
+internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null): KtcType {
     // Pointer suffix — for array types that are already pointers, don't double-wrap
     if (resolved.endsWith("*?")) {
         val base = resolved.dropLast(2)
-        if (base.endsWith("Array")) return stringToKtc(base, t)  // Array* → already a pointer
-        return KtcType.Nullable(KtcType.Ptr(stringToKtc(base, t)))
+        if (base.endsWith("Array")) return parseResolvedTypeName(base, t)  // Array* → already a pointer
+        return KtcType.Nullable(KtcType.Ptr(parseResolvedTypeName(base, t)))
     }
     if (resolved.endsWith("*")) {
         val base = resolved.dropLast(1)
-        if (base.endsWith("Array")) return stringToKtc(base, t)  // Array* → already a pointer
-        return KtcType.Ptr(stringToKtc(base, t))
+        if (base.endsWith("Array")) return parseResolvedTypeName(base, t)  // Array* → already a pointer
+        return KtcType.Ptr(parseResolvedTypeName(base, t))
     }
     // Nullable suffix
-    if (resolved.endsWith("?")) return KtcType.Nullable(stringToKtc(resolved.dropLast(1)))
+    if (resolved.endsWith("?")) return KtcType.Nullable(parseResolvedTypeName(resolved.dropLast(1)))
 
     // Function type
     if (resolved.startsWith("Fun(")) return KtcType.Func(emptyList(), KtcType.Void)
@@ -672,7 +666,7 @@ internal fun CCodeGen.stringToKtc(resolved: String, t: TypeRef? = null): KtcType
     // Optional arrays: IntOptArray → Ptr(Arr(Nullable(elem)))
     if (resolved.endsWith("OptArray")) {
         val elemName = resolved.removeSuffix("OptArray")
-        val elem = stringToKtc(elemName)
+        val elem = parseResolvedTypeName(elemName)
         return KtcType.Ptr(KtcType.Arr(KtcType.Nullable(elem)))
     }
 

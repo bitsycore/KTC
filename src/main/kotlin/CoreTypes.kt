@@ -12,7 +12,7 @@ package com.bitsycore
  */
 /*
 Describes a resolved Kotlin declaration (class, object, enum, or interface).
-Carries the identity needed to compute a flat C name without symbolPrefix.
+Carries the identity needed to compute a flat C name (pkg + baseName = flatName).
 */
 internal interface TypeDef
 	{
@@ -147,15 +147,6 @@ internal sealed class KtcType {
         else -> null
     }
 
-    /** Internal name for symbol prefix lookup (e.g. "Vec2", "Pair_Int_String"). */
-    val internalName: String get() = when (this) {
-        is Prim -> ktName
-        is Str -> "String"
-        is Void -> "void"
-        is User -> baseName
-        is Func -> "Fun"
-        else -> toCType()
-    }
 
     /*
     Convert to the internal scope string format used by string-based type tracking.

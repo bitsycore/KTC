@@ -265,9 +265,8 @@ internal fun CCodeGen.materializeGenericInstantiations() {
             for (m in templateCi.methods) ci.methods += m
             classes[mangledName] = ci
             getTypeId(mangledName)
-            // Register symbol prefix for the mangled name (same as template's package)
-            symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
-            classes[mangledName]?.pkg = symbolPrefix[mangledName] ?: prefix  // sync pkg
+            // Set pkg for the mangled name from the base class's pkg
+            classes[mangledName]?.pkg = classes[baseName]?.pkg ?: prefix
             // Store type bindings for resolving method return types later
 			genericTypeBindings[mangledName] = vSubst
 
@@ -322,8 +321,8 @@ internal fun CCodeGen.materializeGenericInterface(t: TypeRef) {
     val resolvedSupers = template.superInterfaces.map { substituteTypeRef(it, subst) }
     interfaces[mangledName] = IfaceInfo(mangledName, methods, properties, emptyList(), resolvedSupers)
     getTypeId(mangledName)
-    symbolPrefix[mangledName] = symbolPrefix[baseName] ?: prefix
-    interfaces[mangledName]?.pkg = symbolPrefix[mangledName] ?: prefix  // sync pkg on IfaceInfo
+    // Set pkg for the mangled name from the base interface's pkg
+    interfaces[mangledName]?.pkg = interfaces[baseName]?.pkg ?: prefix
     // Recursively monomorphize parent interfaces
     for (superRef in resolvedSupers) {
         materializeGenericInterface(superRef)
@@ -444,7 +443,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                     scanExpr(s.init)
                     /* Track variable type as KtcType for subsequent inference in this function. */
                     val vVarTypeStr = if (s.type != null) resolveTypeName(s.type) else inferExprType(s.init)
-                    if (vVarTypeStr != null) preScanVarTypes?.set(s.name, stringToKtc(vVarTypeStr))
+                    if (vVarTypeStr != null) preScanVarTypes?.set(s.name, parseResolvedTypeName(vVarTypeStr))
                 }
                 is AssignStmt -> { scanExpr(s.target); scanExpr(s.value) }
                 is ExprStmt -> scanExpr(s.expr)

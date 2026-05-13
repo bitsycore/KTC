@@ -54,16 +54,12 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     // ── Package prefix ───────────────────────────────────────────────
     internal val prefix: String = file.pkg?.replace('.', '_')?.plus("_") ?: ""
 
-    // Map symbol name → its C prefix (for cross-file references)
-    internal val symbolPrefix = mutableMapOf<String, String>()
-
-    internal fun pfx(name: String): String {
-        if (name == "main") return name
-        if (name.startsWith("ktc_")) return name
-        val sp = symbolPrefix[name]
-        if (sp != null) return "$sp$name"
-        return "$prefix$name"
-    }
+    /* Fallback C name: prefix + name. Used only for names not found in TypeDef maps or funNames. */
+    internal fun pfx(inName: String): String {
+        if (inName == "main") return inName
+        if (inName.startsWith("ktc_")) return inName
+        return "$prefix$inName"
+        }
 
     /*
     Phase 6: TypeDef-based C name resolution.
@@ -227,8 +223,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     /* Store a variable type using a KtcType (Phase 4.3+ primary API). */
     internal fun defineVarKtc(inName: String, inType: KtcType) { scopes.last()[inName] = inType }
 
-    /* Store a variable type using a string (backward-compat bridge, converts via stringToKtc). */
-    internal fun defineVar(inName: String, inType: String) { scopes.last()[inName] = stringToKtc(inType) }
+    /* Store a variable type using a string (backward-compat bridge, converts via parseResolvedTypeName). */
+    internal fun defineVar(inName: String, inType: String) { scopes.last()[inName] = parseResolvedTypeName(inType) }
 
     /* Look up a variable's KtcType (Phase 4.3+ primary API). */
     internal fun lookupVarKtc(inName: String): KtcType?
@@ -891,7 +887,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     emitInterfaceVtable(info)
                     emittedMonoIfaceVtables += name
                 } else {
-                    val isCrossPackage = symbolPrefix[name]?.let { it.isNotEmpty() && it != prefix } == true
+                    val isCrossPackage = interfaces[name]?.pkg?.let { it.isNotEmpty() && it != prefix } == true
                     if (!isCrossPackage) {
                         emitInterfaceVtable(info)
                         emittedMonoIfaceVtables += name
@@ -1001,36 +997,31 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                         else -> {}
                     }
                 }
-                // Record the prefix for cross-file symbols
+                // Record the package prefix for cross-file symbols
                 when (d) {
                     is ClassDecl -> {
-                        symbolPrefix[d.name] = fpfx
                         classes[d.name]?.pkg = fpfx  // set pkg on ClassInfo
                         // Register companion object prefix
                         for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                            symbolPrefix["${d.name}\$${vMember.name}"] = fpfx
                             objects["${d.name}\$${vMember.name}"]?.pkg = fpfx  // set pkg on ObjInfo
                         }
                     }
-                    is EnumDecl -> { symbolPrefix[d.name] = fpfx; enums[d.name]?.pkg = fpfx }
-                    is InterfaceDecl -> { symbolPrefix[d.name] = fpfx; interfaces[d.name]?.pkg = fpfx }
-                    is ObjectDecl -> { symbolPrefix[d.name] = fpfx; objects[d.name]?.pkg = fpfx }
+                    is EnumDecl -> enums[d.name]?.pkg = fpfx
+                    is InterfaceDecl -> interfaces[d.name]?.pkg = fpfx
+                    is ObjectDecl -> objects[d.name]?.pkg = fpfx
                     is FunDecl -> {
-                        if (d.receiver == null) {
-                            symbolPrefix[d.name] = fpfx
+                        if (d.receiver == null)
                             funNames[d.name] = if (d.name == "main") "main" else "$fpfx${d.name}"  // cross-file C name
-                            }
                         }
                     else -> {}
                 }
             }
         }
-        // Register symbol prefix for nested classes (created during collectDecl)
+        // Set pkg for nested classes whose pkg wasn't explicitly set (non-companion inner classes)
         for ((name, ci) in classes) {
-            if ('$' in name && name !in symbolPrefix) {
-                val parent = name.substringBefore('$')
-                symbolPrefix[name] = symbolPrefix[parent] ?: prefix
-                ci.pkg = symbolPrefix[name] ?: prefix  // sync pkg
+            if ('$' in name && ci.pkg.isEmpty()) {
+                val vParent = name.substringBefore('$')  // parent type name (may be class or object)
+                ci.pkg = classes[vParent]?.pkg ?: objects[vParent]?.pkg ?: prefix
             }
         }
         // Current file's symbols use current prefix (overwrite any from allFiles)
@@ -1038,36 +1029,33 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             collectDecl(d, validate = true)
             when (d) {
                 is ClassDecl -> {
-                    symbolPrefix[d.name] = prefix
                     classes[d.name]?.pkg = prefix  // override with current file prefix
                     // Register companion object prefix
                     for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                        symbolPrefix["${d.name}\$${vMember.name}"] = prefix
                         objects["${d.name}\$${vMember.name}"]?.pkg = prefix  // sync pkg
                     }
                 }
-                is EnumDecl -> { symbolPrefix[d.name] = prefix; enums[d.name]?.pkg = prefix }
-                is InterfaceDecl -> { symbolPrefix[d.name] = prefix; interfaces[d.name]?.pkg = prefix }
-                is ObjectDecl -> { symbolPrefix[d.name] = prefix; objects[d.name]?.pkg = prefix }
+                is EnumDecl -> enums[d.name]?.pkg = prefix
+                is InterfaceDecl -> interfaces[d.name]?.pkg = prefix
+                is ObjectDecl -> objects[d.name]?.pkg = prefix
                 is FunDecl -> {
-                    if (d.receiver == null) {
-                        symbolPrefix[d.name] = prefix
+                    if (d.receiver == null)
                         funNames[d.name] = if (d.name == "main") "main" else "$prefix${d.name}"  // current-file C name (overrides allFiles)
-                        }
                     }
                 else -> {}
             }
         }
-        // Sync pkg for nested classes that may have been replaced in the current file pass
+        // Sync pkg for nested classes/objects after the current-file pass
         for ((name, ci) in classes) {
             if ('$' in name) {
-                ci.pkg = symbolPrefix[name] ?: prefix  // ensure pkg matches symbolPrefix
+                val vParent = name.substringBefore('$')  // parent type name (may be class or object)
+                ci.pkg = classes[vParent]?.pkg ?: objects[vParent]?.pkg ?: prefix
             }
         }
-        // Sync pkg for nested objects (companion objects etc.)
         for ((name, oi) in objects) {
             if ('$' in name) {
-                oi.pkg = symbolPrefix[name] ?: prefix
+                val vParent = name.substringBefore('$')  // parent type name (may be class or object)
+                oi.pkg = classes[vParent]?.pkg ?: objects[vParent]?.pkg ?: prefix
             }
         }
     }

@@ -608,7 +608,7 @@ internal fun CCodeGen.inferExprTypeKtc(inExpr: Expr?): KtcType?
 		/* Fall through to string-based for objects/enums/parent-object lookup. */
 		}
 	val vStr = inferExprType(inExpr) ?: return null  // string-based fallback
-	return stringToKtc(vStr)
+	return parseResolvedTypeName(vStr)
 	}
 
 // ── Phase 4.5 — KtcType dot / method-return inference ───────────────
@@ -617,12 +617,12 @@ internal fun CCodeGen.inferExprTypeKtc(inExpr: Expr?): KtcType?
 internal fun CCodeGen.inferDotTypeKtc(inExpr: DotExpr): KtcType?
 	{
 	val vStr = inferDotType(inExpr) ?: return null  // delegate to string version
-	return stringToKtc(vStr)
+	return parseResolvedTypeName(vStr)
 	}
 
 /* Infer the KtcType of a method call return. */
 internal fun CCodeGen.inferMethodReturnTypeKtc(inDot: DotExpr, inArgs: List<Arg>): KtcType?
 	{
 	val vStr = inferMethodReturnType(inDot, inArgs) ?: return null
-	return stringToKtc(vStr)
+	return parseResolvedTypeName(vStr)
 	}

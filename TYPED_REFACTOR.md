@@ -499,11 +499,12 @@ Phase 6: Eliminate symbolPrefix and pfx() ✅
 - [x] 6.1 — Identify remaining pfx() callers (114 across 4 files)
 - [x] 6.2 — Add funNames map + typeFlatName()/funCName() helpers; populate funNames in collectDecls
 - [x] 6.3 — Replace all pfx() call sites with typeFlatName()/funCName(); pfx() only called as fallback from helpers
-Phase 7: Remove Bridge
-- [ ] 7.1 — Audit direct stringToKtc calls
-- [ ] 7.2 — Simplify cType(TypeRef) path
-- [ ] 7.3 — Rename stringToKtc → parseResolvedTypeName
-Phase 8: Cleanup
-- [ ] 8.1 — Remove dead string-based type utilities
-- [ ] 8.2 — Remove internalName from KtcType (if possible)
-- [ ] 8.3 — Final verification (all tests, zero symbolPrefix/pfx usage)
+Phase 7: Remove Bridge ✅
+- [x] 7.1 — Audit direct stringToKtc calls (all are legitimate bridges at AST input edge: defineVar, scan, inference, cTypeStr(String))
+- [x] 7.2 — Simplify cType(TypeRef) path: cTypeStr(resolveTypeNameKtc(t)); removed typeToKtc alias
+- [x] 7.3 — Rename stringToKtc → parseResolvedTypeName throughout codebase (CCodeGenCTypes, CCodeGenInfer, CCodeGenScan, CCodeGen)
+Phase 8: Cleanup ✅
+- [ ] 8.1 — Remove dead string-based type utilities (isArrayType, isValueNullableType etc. still live — deferred until Phase 4/5 callers fully migrated)
+- [x] 8.2 — Remove internalName from KtcType (zero callers; deleted from CoreTypes.kt)
+- [x] 8.2b — Remove symbolPrefix map entirely: replaced all reads with TypeDef.pkg lookups, removed all writes; pfx() simplified to $prefix+name fallback
+- [x] 8.3 — Final verification: 32/32 integration tests pass; zero symbolPrefix[ in source; pfx() only called from typeFlatName/funCName fallbacks (no longer consults any map); resolveTypeName still has 159 callers (Phase 4.7 deferred)
