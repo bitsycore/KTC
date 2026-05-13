@@ -350,8 +350,9 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 	/* Emit a C function pointer declaration from a KtcType.Func. */
 	internal fun cFuncPtrDecl(inKtc: KtcType.Func, inName: String): String {
 		val vCRet = cTypeStr(inKtc.ret)                                                     // C return type string
-		val vCParams = if (inKtc.params.isEmpty()) "void"
-			else inKtc.params.joinToString(", ") { cTypeStr(it) }                          // C parameter type list
+		val vReceiverList = inKtc.receiver?.let { listOf(cTypeStr(it)) } ?: emptyList()     // receiver as first C param
+		val vAllParams = vReceiverList + inKtc.params.map { cTypeStr(it) }                  // all C params including receiver
+		val vCParams = if (vAllParams.isEmpty()) "void" else vAllParams.joinToString(", ")  // C parameter type list
 		return "$vCRet (*$inName)($vCParams)"
 		}
 
@@ -1276,7 +1277,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val base = f.name
         val overloads = siblings.filter { it.name == base }
         if (overloads.size <= 1) return base
-        val types = f.params.map { resolveTypeNameStr(it.type).removeSuffix("*") }
+        val types = f.params.map { resolveTypeName(it.type).toInternalStr.removeSuffix("*") }
         if (types.isEmpty()) return base   // no-arg keeps plain name
         return "${base}With${types.joinToString("_")}"
     }

@@ -123,9 +123,14 @@ internal sealed class KtcType {
 
     // ── Function type ────────────────────────────────────────────────
 
-    data class Func(val params: List<KtcType>, val ret: KtcType) : KtcType() {
-        override fun toCType() = "void*"
-    }
+    data class Func(
+    	val params: List<KtcType>,      // non-receiver parameters
+    	val ret: KtcType,               // return type
+    	val receiver: KtcType? = null   // extension receiver (T in T.() -> R), null for plain lambdas
+    	) : KtcType()
+    	{
+    	override fun toCType() = "void*"
+    	}
 
     // ── Abstract methods ─────────────────────────────────────────────
 
@@ -170,8 +175,9 @@ internal sealed class KtcType {
         is Void     -> "Unit"
         is User     -> baseName                              // bare class name, no pkg
         is Func     -> {
-            val vParams = params.joinToString(",") { it.toInternalStr }  // param strings
-            "Fun($vParams)->${ret.toInternalStr}"
+            val vReceiverStr = receiver?.let { it.toInternalStr + "|" } ?: ""  // "T|" or ""
+            val vParams = params.joinToString(",") { it.toInternalStr }         // param strings
+            "Fun($vReceiverStr$vParams)->${ret.toInternalStr}"
             }
         is Arr      -> "${elem.toInternalStr}Array"          // "IntArray", "Vec2Array"
         is Ptr      -> when (val vInner = inner)

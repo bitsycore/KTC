@@ -290,7 +290,7 @@ internal fun CCodeGen.materializeGenericInstantiations() {
 /** Resolve an interface TypeRef to its concrete name (e.g. MutableList<Int> → "MutableList_Int"). */
 internal fun CCodeGen.resolveIfaceName(t: TypeRef): String {
     if (t.typeArgs.isEmpty()) return t.name
-    return mangledGenericName(t.name, t.typeArgs.map { resolveTypeNameStr(it) })
+    return mangledGenericName(t.name, t.typeArgs.map { resolveTypeName(it).toInternalStr })
 }
 
 /**
@@ -302,7 +302,7 @@ internal fun CCodeGen.materializeGenericInterface(t: TypeRef) {
     val baseName = t.name
     val template = interfaces[baseName] ?: return
     if (template.typeParams.isEmpty()) return  // non-generic template
-    val typeArgs = t.typeArgs.map { resolveTypeNameStr(it) }
+    val typeArgs = t.typeArgs.map { resolveTypeName(it).toInternalStr }
     val mangledName = mangledGenericName(baseName, typeArgs)
     if (interfaces.containsKey(mangledName)) return  // already materialized
     val subst = template.typeParams.zip(typeArgs).toMap()
@@ -414,7 +414,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                                 genericFunInstantiations.getOrPut(dotName) { mutableSetOf() }.add(typeArgs)
                                 // Also register in extensionFuns for method dispatch
                                 val mangledRecvName = substituteTypeRef(f.receiver!!, f.typeParams.zip(typeArgs).toMap()).let {
-                                    resolveTypeNameStr(it)
+                                    resolveTypeName(it).toInternalStr
                                 }
                                 extensionFuns.getOrPut(mangledRecvName) { mutableListOf() }.add(f)
                             }
@@ -705,7 +705,7 @@ internal fun CCodeGen.computeGenericFunConcreteReturns() {
             val subst = funDecl.typeParams.zip(typeArgs).toMap()
             val prevSubst = typeSubst
             typeSubst = subst
-            val resolvedReturn = resolveTypeNameStr(funDecl.returnType)
+            val resolvedReturn = resolveTypeName(funDecl.returnType).toInternalStr
             if (interfaces.containsKey(resolvedReturn)) {
                 val concrete = inferConcreteReturnClass(funDecl.body, subst)
                 if (concrete != null) {

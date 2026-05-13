@@ -175,7 +175,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     is StrTemplateExpr -> genStrTemplate(e)
     is IsCheckExpr -> {
         val targetKtc = resolveTypeName(e.type)                                   // KtcType for is-check target
-        val target = resolveTypeNameStr(e.type)                                          // String for fallback/array checks
+        val target = targetKtc.toInternalStr                                             // String for fallback/array checks
         val inner = genExpr(e.expr)
         val exprType = inferExprType(e.expr)
         val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
@@ -210,7 +210,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     }
     is CastExpr    -> {
         val targetKtc = resolveTypeName(e.type)                                   // KtcType for cast target
-        val target = resolveTypeNameStr(e.type)                                          // String for fallback/cTypeStr calls
+        val target = targetKtc.toInternalStr                                             // String for fallback/cTypeStr calls
         val inner = genExpr(e.expr)
         val srcType = inferExprType(e.expr)?.removeSuffix("?")
         val isPtr = srcType?.endsWith("*") == true
@@ -790,8 +790,8 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 
     // Pair constructor (intrinsic — only when no user-defined class named Pair)
     if (name == "Pair" && args.size == 2 && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
-        val a = if (e.typeArgs.size == 2) resolveTypeNameStr(e.typeArgs[0]) else inferExprType(args[0].expr) ?: "Int"
-        val b = if (e.typeArgs.size == 2) resolveTypeNameStr(e.typeArgs[1]) else inferExprType(args[1].expr) ?: "Int"
+        val a = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[0]).toInternalStr else inferExprType(args[0].expr) ?: "Int"
+        val b = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[1]).toInternalStr else inferExprType(args[1].expr) ?: "Int"
         pairTypes.add(Pair(a, b))
         pairTypeComponents["Pair_${a}_${b}"] = Pair(a, b)
         ensurePairType(a, b)
@@ -801,9 +801,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 
     // Triple constructor (intrinsic)
     if (name == "Triple" && args.size == 3 && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
-        val a = if (e.typeArgs.size == 3) resolveTypeNameStr(e.typeArgs[0]) else inferExprType(args[0].expr) ?: "Int"
-        val b = if (e.typeArgs.size == 3) resolveTypeNameStr(e.typeArgs[1]) else inferExprType(args[1].expr) ?: "Int"
-        val c = if (e.typeArgs.size == 3) resolveTypeNameStr(e.typeArgs[2]) else inferExprType(args[2].expr) ?: "Int"
+        val a = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[0]).toInternalStr else inferExprType(args[0].expr) ?: "Int"
+        val b = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[1]).toInternalStr else inferExprType(args[1].expr) ?: "Int"
+        val c = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[2]).toInternalStr else inferExprType(args[2].expr) ?: "Int"
         tripleTypeComponents["Triple_${a}_${b}_${c}"] = Triple(a, b, c)
         ensureTripleType(a, b, c)
         return "(ktc_Triple_${a}_${b}_${c}){${genExpr(args[0].expr)}, ${genExpr(args[1].expr)}, ${genExpr(args[2].expr)}}"
@@ -896,7 +896,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val primaryParamCount = ci.ctorProps.size + ci.ctorPlainParams.size
         val sctor = declClass?.secondaryCtors?.find { it.params.size == args.size && it.params.size != primaryParamCount }
         if (sctor != null) {
-            val types = sctor.params.map { resolveTypeNameStr(it.type).removeSuffix("*") }
+            val types = sctor.params.map { resolveTypeName(it.type).toInternalStr.removeSuffix("*") }
             val suffix = if (types.isEmpty()) "emptyConstructor" else "constructorWith${types.joinToString("_")}"
             val argStr = args.joinToString(", ") { genExpr(it.expr) }
             return "${ci.flatName}_$suffix($argStr)"                               // ci.flatName replaces pfx(resolvedName)
@@ -939,7 +939,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             typeSubst = genFun.typeParams.zip(typeArgNames).toMap()
             // Check for @Size array return
             if (genFun.returnType != null && isSizedArrayTypeRef(genFun.returnType)) {
-                val retType = resolveTypeNameStr(genFun.returnType)
+                val retType = resolveTypeName(genFun.returnType).toInternalStr
                 val elemCType = arrayElementCType(retType)
                 val size = getSizeAnnotation(genFun.returnType)!!
                 val t = tmp()
@@ -986,7 +986,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val allArgs = if (expandedArgs2.isEmpty()) selfArg else "$selfArg, $expandedArgs2"
             // @Size(N) return → out-parameter ABI
             if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-                val retType = resolveTypeNameStr(methodDecl.returnType)
+                val retType = resolveTypeName(methodDecl.returnType).toInternalStr
                 val elemCType = arrayElementCType(retType)
                 val size = getSizeAnnotation(methodDecl.returnType)!!
                 val t = tmp()
@@ -1009,7 +1009,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
                 // @Size(N) return → out-parameter ABI
                 if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-                    val retType = resolveTypeNameStr(methodDecl.returnType)
+                    val retType = resolveTypeName(methodDecl.returnType).toInternalStr
                     val elemCType = arrayElementCType(retType)
                     val size = getSizeAnnotation(methodDecl.returnType)!!
                     val t = tmp()
@@ -1035,7 +1035,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
             // @Size(N) return → out-parameter ABI
             if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-                val retType = resolveTypeNameStr(methodDecl.returnType)
+                val retType = resolveTypeName(methodDecl.returnType).toInternalStr
                 val elemCType = arrayElementCType(retType)
                 val size = getSizeAnnotation(methodDecl.returnType)!!
                 val t = tmp()
@@ -1057,7 +1057,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 
     // Top-level @Size(N) return → out-parameter ABI
     if (sig?.returnType != null && isSizedArrayTypeRef(sig.returnType)) {
-        val retType = resolveTypeNameStr(sig.returnType)
+        val retType = resolveTypeName(sig.returnType).toInternalStr
         val elemCType = arrayElementCType(retType)
         val size = getSizeAnnotation(sig.returnType)!!
         val t = tmp()
@@ -1079,7 +1079,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val expandedArgs2 = expandCallArgs(filledArgs, topOvr.params)
         // @Size(N) return → out-parameter ABI
         if (topOvr.returnType != null && isSizedArrayTypeRef(topOvr.returnType)) {
-            val retType = resolveTypeNameStr(topOvr.returnType)
+            val retType = resolveTypeName(topOvr.returnType).toInternalStr
             val elemCType = arrayElementCType(retType)
             val size = getSizeAnnotation(topOvr.returnType)!!
             val t = tmp()
@@ -1121,7 +1121,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
 
     var argIdx = 0
     for (param in params) {
-        val paramType    = resolveTypeNameStr(param.type)   // string type (for structural checks: endsWith, isArray, etc.)
+        val paramType    = resolveTypeName(param.type).toInternalStr   // string type (for structural checks: endsWith, isArray, etc.)
         val paramTypeKtc = resolveTypeName(param.type)      // KtcType (for C type emission)
         if (param.isVararg) {
             // Consume remaining args for vararg
@@ -1498,7 +1498,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val ifaceMethod = vIfaceInfo.methods.find { it.name == method }
             ?: collectAllIfaceMethods(vIfaceInfo).find { it.name == method }
         if (ifaceMethod?.returnType?.nullable == true) {
-            val retType = resolveTypeNameStr(ifaceMethod.returnType)
+            val retType = resolveTypeName(ifaceMethod.returnType).toInternalStr
             val optType = optCTypeName("${retType}?")
             val t = tmp()
             preStmts += "$optType $t = $recv.vt->$method($allArgs);"
@@ -1556,7 +1556,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_$overloadedName" else overloadedName
         // @Size(N) return → out-parameter ABI
         if (methodDecl?.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-            val retType = resolveTypeNameStr(methodDecl.returnType)
+            val retType = resolveTypeName(methodDecl.returnType).toInternalStr
             val elemCType = arrayElementCType(retType)
             val size = getSizeAnnotation(methodDecl.returnType)!!
             val t = tmp()
@@ -1583,7 +1583,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         } else argStr
         // @Size(N) return → out-parameter ABI
         if (vObjMethod?.returnType != null && isSizedArrayTypeRef(vObjMethod.returnType)) {
-            val retType = resolveTypeNameStr(vObjMethod.returnType)
+            val retType = resolveTypeName(vObjMethod.returnType).toInternalStr
             val elemCType = arrayElementCType(retType)
             val size = getSizeAnnotation(vObjMethod.returnType)!!
             val t = tmp()
@@ -1609,7 +1609,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val vCompCName = vCompObjInfo?.flatName ?: typeFlatName(vCompanionName)       // C name with package prefix
         // @Size(N) return → out-parameter ABI
         if (vCompMethod?.returnType != null && isSizedArrayTypeRef(vCompMethod.returnType)) {
-            val retType = resolveTypeNameStr(vCompMethod.returnType)
+            val retType = resolveTypeName(vCompMethod.returnType).toInternalStr
             val elemCType = arrayElementCType(retType)
             val size = getSizeAnnotation(vCompMethod.returnType)!!
             val t = tmp()
@@ -2091,7 +2091,7 @@ internal fun CCodeGen.emitStmtToPreStmts(s: Stmt, indent: String) {
             preStmts += "$indent$expr;"
         }
         is VarDeclStmt -> {
-            val t = if (s.type != null) resolveTypeNameStr(s.type) else (inferExprType(s.init) ?: "Int")
+            val t = if (s.type != null) resolveTypeName(s.type).toInternalStr else (inferExprType(s.init) ?: "Int")
             val ct = cTypeStr(t)
             val initExpr = if (s.init != null) genExpr(s.init) else defaultVal(t)
             preStmts += "$indent$ct ${s.name} = $initExpr;"
@@ -2214,7 +2214,7 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
 internal fun CCodeGen.narrowSubjectForBranch(br: WhenBranch, subjName: String?): String? {
     if (br.conds == null || subjName == null || isMutable(subjName)) return null
     val isCond = br.conds.find { it is IsCond && !it.negated } as? IsCond ?: return null
-    val target = resolveTypeNameStr(isCond.type)
+    val target = resolveTypeName(isCond.type).toInternalStr
     val current = lookupVar(subjName) ?: return null
     // Don't narrow pointer types (Any* etc.) — they need original type for ->data dereference
     if (current.endsWith("*")) return null
@@ -2434,7 +2434,7 @@ internal fun CCodeGen.toStringMaxLen(baseType: String, visited: MutableSet<Strin
         var total = t.length + 2  // "Name(" + ")"
         for ((i, prop) in ci.props.withIndex()) {
             val (name, propType) = prop
-            val tBase = resolveTypeNameStr(propType)
+            val tBase = resolveTypeName(propType).toInternalStr
             val baseClean = tBase.removeSuffix("?")
             val fieldMax = toStringMaxLen(baseClean, visited)
             if (fieldMax == null) { visited.remove(t); return null }

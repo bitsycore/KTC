@@ -632,12 +632,12 @@ Handles function types directly; bridges through resolveTypeNameStr for all othe
 internal fun CCodeGen.resolveTypeName(inT: TypeRef?): KtcType {
 	if (inT == null) return KtcType.Prim(KtcType.PrimKind.Int) // default to Int for null TypeRef
 	val vSubstituted = substituteTypeParams(inT)                // apply type param substitutions
-	// Function types: build KtcType.Func directly to preserve param info
+	// Function types: build KtcType.Func directly to preserve param info and receiver
 	if (vSubstituted.funcParams != null) {
-		val vReceiverParams = vSubstituted.funcReceiver?.let { listOf(resolveTypeName(it)) } ?: emptyList()
-		val vParams = vReceiverParams + vSubstituted.funcParams.map { resolveTypeName(it) }  // all params
-		val vRet = resolveTypeName(vSubstituted.funcReturn)     // return type
-		return KtcType.Func(vParams, vRet)
+		val vReceiver = vSubstituted.funcReceiver?.let { resolveTypeName(it) }          // extension receiver, or null
+		val vParams = vSubstituted.funcParams.map { resolveTypeName(it) }               // non-receiver params only
+		val vRet = resolveTypeName(vSubstituted.funcReturn)                             // return type
+		return KtcType.Func(vParams, vRet, receiver = vReceiver)
 		}
 	val vResolved = resolveTypeNameStr(inT)                     // string-based resolution (bridge)
 	return parseResolvedTypeName(vResolved, inT)
