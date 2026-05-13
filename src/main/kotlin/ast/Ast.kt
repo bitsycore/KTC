@@ -1,4 +1,4 @@
-package com.bitsycore
+package com.bitsycore.ast
 
 // ═══════════════════════════ Type Reference ═══════════════════════════
 

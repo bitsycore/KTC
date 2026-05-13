@@ -1,4 +1,9 @@
-package com.bitsycore
+package com.bitsycore.types
+
+import com.bitsycore.ast.FunDecl
+import com.bitsycore.ast.IntLit
+import com.bitsycore.ast.TypeRef
+import com.bitsycore.codegen.PropertyDef
 
 /**
  * Typed representation of Kotlin-to-C types.

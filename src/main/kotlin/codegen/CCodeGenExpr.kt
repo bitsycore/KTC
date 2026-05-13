@@ -1,4 +1,7 @@
-package com.bitsycore
+package com.bitsycore.codegen
+
+import com.bitsycore.ast.*
+import com.bitsycore.types.KtcType
 
 /**
  * ── Expression Codegen ──────────────────────────────────────────────────

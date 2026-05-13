@@ -1,4 +1,7 @@
-package com.bitsycore
+package com.bitsycore.codegen
+
+import com.bitsycore.ast.*
+import com.bitsycore.types.KtcType
 
 /**
  * Translates a parsed KtFile AST into C11 source code.
