@@ -201,7 +201,7 @@ internal fun CCodeGen.emitClassEquals(cName: String, ci: ClassInfo) {
         val vTStr  = vKtcEq.toInternalStr            // string for class lookup
         when {
             type.nullable -> "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == ktc_NONE || a.$fieldName.value == b.$fieldName.value))"
-            vTStr == "String" -> "ktc_string_eq(a.$fieldName, b.$fieldName)"
+            vTStr == "String" -> "ktc_core_string_eq(a.$fieldName, b.$fieldName)"
             classes[vTStr]?.isData == true -> "${typeFlatName(vTStr)}_equals(a.$fieldName, b.$fieldName)"
             else -> "a.$fieldName == b.$fieldName"
         }
@@ -222,10 +222,10 @@ internal fun CCodeGen.emitDataClassToString(ktName: String, cName: String, ci: C
         val vKtcTs = resolveTypeName(type)                            // KtcType for toString dispatch
         val tFull  = if (type.nullable) vKtcTs.nullable else vKtcTs   // KtcType, wrap nullable if needed
         val prefix = if (i == 0) "$ktName($name=" else ", $name="
-        impl.appendLine("    ktc_sb_append_str(sb, ktc_str(\"$prefix\"));")
+        impl.appendLine("    ktc_core_sb_append_str(sb, ktc_core_str(\"$prefix\"));")
         impl.appendLine("    ${genSbAppendKtc("sb", "\$self->$fieldName", tFull)}")
     }
-    impl.appendLine("    ktc_sb_append_char(sb, ')');")
+    impl.appendLine("    ktc_core_sb_append_char(sb, ')');")
     impl.appendLine("}")
     impl.appendLine()
 }
@@ -707,7 +707,7 @@ internal fun CCodeGen.emitEnum(d: EnumDecl) {
     }
     hdr.appendLine("} $cName;")
     val n = d.entries.size
-    val nameInits = d.entries.joinToString(", ") { "ktc_str(\"$it\")" }
+    val nameInits = d.entries.joinToString(", ") { "ktc_core_str(\"$it\")" }
     hdr.appendLine("extern const ktc_String ${cName}_names[$n];")
     hdr.appendLine()
     impl.appendLine("const ktc_String ${cName}_names[$n] = {$nameInits};")
@@ -736,7 +736,7 @@ internal fun CCodeGen.emitEnumValuesData() {
         val body = StringBuilder()
         body.appendLine("$cName ${cName}_valueOf(ktc_String name) {")
         for (entry in info.entries) {
-            body.appendLine("    if (ktc_string_eq(name, ktc_str(\"$entry\"))) return ${cName}_$entry;")
+            body.appendLine("    if (ktc_core_string_eq(name, ktc_core_str(\"$entry\"))) return ${cName}_$entry;")
         }
         body.appendLine("    return ${cName}_${info.entries.first()};")
         body.append("}")
@@ -782,7 +782,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         }
     }
     hdr.appendLine("} ${cName}_t;")
-    val tls = if (d.name in tlsObjects) "ktc_tls " else ""
+    val tls = if (d.name in tlsObjects) "ktc_core_tls " else ""
     hdr.appendLine("extern ${tls}${cName}_t $cName;")
     hdr.appendLine()
 
@@ -1080,7 +1080,7 @@ internal fun CCodeGen.emitImplicitHashCode(cName: String, ci: ClassInfo, isData:
         impl.appendLine("    ktc_UInt hi = (ktc_UInt)(p >> 32);")
         impl.appendLine("    ktc_UInt t = (ktc_UInt)\$self->__type_id * 0x9e3779b1U;")
         impl.appendLine("    ktc_UInt h = lo ^ hi ^ t;")
-        impl.appendLine("    h = ktc_fmix32(h);")
+        impl.appendLine("    h = ktc_core_fmix32(h);")
         impl.appendLine("    return (ktc_Int)h;")
     } else {
         impl.appendLine("    uintptr_t x = (uintptr_t)\$self;")
@@ -1203,13 +1203,13 @@ internal fun CCodeGen.emitVtable(cClass: String, cIface: String, ifaceName: Stri
             if (p.type.nullable) ", ${optCTypeName(vPStr)}" else ", ${cType(p.type)}"
         }
         val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
-            "ktc_noop_dispose"
+            "ktc_core_noop_dispose"
         else "${cClass}_${m.name}"
         impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
     }
     if (methods.none { it.name == "dispose" }) {
         val fnDispose = if (classes[className]?.methods?.none { it.name == "dispose" } == true)
-            "ktc_noop_dispose"
+            "ktc_core_noop_dispose"
         else "${cClass}_dispose"
         impl.appendLine("    (void (*)(void*)) $fnDispose,")
     }
@@ -1223,22 +1223,22 @@ internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String 
     }
 
     is KtcType.Prim -> when (ktc.kind) {
-        KtcType.PrimKind.Byte -> "ktc_hash_i8($valueExpr)"
-        KtcType.PrimKind.Short -> "ktc_hash_i16($valueExpr)"
-        KtcType.PrimKind.Int -> "ktc_hash_i32($valueExpr)"
-        KtcType.PrimKind.Long -> "ktc_hash_i64($valueExpr)"
-        KtcType.PrimKind.Float -> "ktc_hash_f32($valueExpr)"
-        KtcType.PrimKind.Double -> "ktc_hash_f64($valueExpr)"
-        KtcType.PrimKind.Boolean -> "ktc_hash_bool($valueExpr)"
-        KtcType.PrimKind.Char -> "ktc_hash_char($valueExpr)"
-        KtcType.PrimKind.UByte -> "ktc_hash_u8($valueExpr)"
-        KtcType.PrimKind.UShort -> "ktc_hash_u16($valueExpr)"
-        KtcType.PrimKind.UInt -> "ktc_hash_u32($valueExpr)"
-        KtcType.PrimKind.ULong -> "ktc_hash_u64($valueExpr)"
-        KtcType.PrimKind.Rune -> "ktc_hash_i32($valueExpr)"
+        KtcType.PrimKind.Byte -> "ktc_core_hash_i8($valueExpr)"
+        KtcType.PrimKind.Short -> "ktc_core_hash_i16($valueExpr)"
+        KtcType.PrimKind.Int -> "ktc_core_hash_i32($valueExpr)"
+        KtcType.PrimKind.Long -> "ktc_core_hash_i64($valueExpr)"
+        KtcType.PrimKind.Float -> "ktc_core_hash_f32($valueExpr)"
+        KtcType.PrimKind.Double -> "ktc_core_hash_f64($valueExpr)"
+        KtcType.PrimKind.Boolean -> "ktc_core_hash_bool($valueExpr)"
+        KtcType.PrimKind.Char -> "ktc_core_hash_char($valueExpr)"
+        KtcType.PrimKind.UByte -> "ktc_core_hash_u8($valueExpr)"
+        KtcType.PrimKind.UShort -> "ktc_core_hash_u16($valueExpr)"
+        KtcType.PrimKind.UInt -> "ktc_core_hash_u32($valueExpr)"
+        KtcType.PrimKind.ULong -> "ktc_core_hash_u64($valueExpr)"
+        KtcType.PrimKind.Rune -> "ktc_core_hash_i32($valueExpr)"
     }
 
-    is KtcType.Str -> "ktc_hash_str($valueExpr)"
+    is KtcType.Str -> "ktc_core_hash_str($valueExpr)"
     is KtcType.Ptr -> "((ktc_Int)(uintptr_t)($valueExpr))"
     is KtcType.User, is KtcType.Arr, is KtcType.Nullable -> "($valueExpr).__type_id"
     else -> "($valueExpr).__type_id"
@@ -1419,7 +1419,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     impl.appendLine("$cRet $cName($params) {")
 
     if (isMain) {
-        impl.appendLine("    ktc_mainInit();")
+        impl.appendLine("    ktc_core_mainInit();")
     }
 
     val prevState = saveFunState()
@@ -1477,7 +1477,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     }
     if (isMain && memTrack) {
         impl.appendLine("    fflush(stdout);")
-        impl.appendLine("    ktc_mem_report();")
+        impl.appendLine("    ktc_core_mem_report();")
     }
     if (isMain) impl.appendLine("    return 0;")
     else if (returnsNullable && lastStmt !is ReturnStmt) {
@@ -1502,7 +1502,7 @@ internal fun CCodeGen.emitTopProp(d: PropDecl) {
     val t       = vKtcTop?.toInternalStr ?: (inferExprType(d.init) ?: "Int")  // string for cTypeStr/defaultVal
     val ct      = cTypeStr(t)
     val cName = typeFlatName(d.name)  // top-level prop — typeFlatName falls back to prefix+name
-    val tls = if (d.name in tlsProps) "ktc_tls " else ""
+    val tls = if (d.name in tlsProps) "ktc_core_tls " else ""
     val qual = if (!d.mutable) "const " else ""
     val mutComment = if (d.mutable) "/*VAR*/ " else "/*VAL*/ "
     if (d.init != null) {

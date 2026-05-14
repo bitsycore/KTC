@@ -107,7 +107,7 @@ class ToStringUnitTest : TranspilerTestBase() {
             """.trimIndent()
         )
         r.sourceContains("Point_toString")
-        r.sourceContains("ktc_sb_to_string")
+        r.sourceContains("ktc_core_sb_to_string")
         val sbPattern = Regex("ktc_StrBuf \\w+_sb = \\{NULL, 0, 0\\};")
         assertFalse(sbPattern.containsMatchIn(r.source), "Should not contain two-pass StrBuf init pattern")
     }
@@ -117,8 +117,8 @@ class ToStringUnitTest : TranspilerTestBase() {
             val sb = StringBuffer(null, 0)
             val s = 42.toString(sb)
         """.trimIndent())
-        r.sourceContains("ktc_sb_append_int")
-        r.sourceContains("ktc_sb_to_string")
+        r.sourceContains("ktc_core_sb_append_int")
+        r.sourceContains("ktc_core_sb_to_string")
     }
 
     @Test fun `toString returns String when called via StringBuffer`() {
@@ -131,7 +131,7 @@ class ToStringUnitTest : TranspilerTestBase() {
             """.trimIndent()
         )
         r.sourceContains("Vec2_toString")
-        r.sourceContains("ktc_sb_to_string")
+        r.sourceContains("ktc_core_sb_to_string")
     }
 
     @Test fun `counting mode StringBuffer toString`() {
@@ -188,7 +188,7 @@ class ToStringUnitTest : TranspilerTestBase() {
             body = "val p = Person(\"Alice\", 30)\nval s = p.toString()"
         )
         // Should have two-pass (String field makes it unbounded)
-        r.sourceContains("ktc_alloca")
+        r.sourceContains("ktc_core_alloca")
     }
 
     @Test fun `nested bounded data class uses single-pass`() {
@@ -233,7 +233,7 @@ class ToStringUnitTest : TranspilerTestBase() {
     @Test fun `primitive toString uses tighter buffer sizes`() {
         // Int toString should use ~12 bytes instead of 32
         val r = transpileMain("val s = 42.toString()")
-        r.sourceContains("ktc_sb_append_int")
+        r.sourceContains("ktc_core_sb_append_int")
         // Check that buffer is not 32 bytes (should be 12)
         assertFalse(Regex("char \\w+\\[32\\];").containsMatchIn(r.source),
             "Int toString should use 12-byte buffer, not 32")

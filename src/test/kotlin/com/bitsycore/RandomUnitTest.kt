@@ -19,7 +19,7 @@ class RandomUnitTest : TranspilerTestBase() {
 
 	@Test fun randomExternDeclaredInHeader() {
 		val vResult = transpileStdlibFile("Random.kt")
-		vResult.headerContains("extern ktc_tls ktc_std_Random_t ktc_std_Random;")
+		vResult.headerContains("extern ktc_core_tls ktc_std_Random_t ktc_std_Random;")
 	}
 
 	@Test fun randomNextIntDeclaredInHeader() {

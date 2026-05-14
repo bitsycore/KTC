@@ -1,10 +1,11 @@
-#include "ktc_intrinsic.h"
+#include "ktc_core.h"
+#include <math.h>
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Rand
 // ══════════════════════════════════════════════════════════════════
 
-void ktc_srand(
+void ktc_core_srand(
     ktc_ULong* state,
     ktc_ULong* inc,
     ktc_ULong seed
@@ -12,14 +13,14 @@ void ktc_srand(
     *state = 0;
     *inc = (seed << 1u) | 1u;
 
-    ktc_rand(state, inc);
+    ktc_core_rand(state, inc);
 
     *state += seed;
 
-    ktc_rand(state, inc);
+    ktc_core_rand(state, inc);
 }
 
-ktc_UInt ktc_rand(
+ktc_UInt ktc_core_rand(
     ktc_ULong* state,
     ktc_ULong* inc
 ) {
@@ -36,7 +37,7 @@ ktc_UInt ktc_rand(
            (xorshifted << ((-rot) & 31));
 }
 
-ktc_UInt ktc_rand_range(
+ktc_UInt ktc_core_rand_range(
     ktc_ULong* state,
     ktc_ULong* inc,
     ktc_UInt bound
@@ -46,7 +47,7 @@ ktc_UInt ktc_rand_range(
     ktc_UInt threshold = -bound % bound;
 
     for (;;) {
-        ktc_UInt r = ktc_rand(state, inc);
+        ktc_UInt r = ktc_core_rand(state, inc);
 
         if (r >= threshold)
             return r % bound;
@@ -57,7 +58,7 @@ ktc_UInt ktc_rand_range(
 // MARK: Time
 // ══════════════════════════════════════════════════════════════════
 
-ktc_Double ktc_time_seconds(void)
+ktc_Double ktc_core_time_seconds(void)
 {
 #if defined(_WIN32)
     static LARGE_INTEGER freq;
@@ -81,7 +82,7 @@ ktc_Double ktc_time_seconds(void)
 #endif
 }
 
-ktc_ULong ktc_time_ms(void)
+ktc_ULong ktc_core_time_ms(void)
 {
 #if defined(_WIN32)
     static LARGE_INTEGER freq;
@@ -106,7 +107,7 @@ ktc_ULong ktc_time_ms(void)
 #endif
 }
 
-void ktc_time_sleep_ms(ktc_UInt ms)
+void ktc_core_time_sleep_ms(ktc_UInt ms)
 {
 #if defined(_WIN32)
 
@@ -122,10 +123,10 @@ void ktc_time_sleep_ms(ktc_UInt ms)
 #endif
 }
 
-void ktc_time_sleep_seconds(ktc_Double seconds)
+void ktc_core_time_sleep_seconds(ktc_Double seconds)
 {
 #if defined(_WIN32)
-    ktc_time_sleep_ms((ktc_UInt)(seconds * 1000.0));
+    ktc_core_time_sleep_ms((ktc_UInt)(seconds * 1000.0));
 #else
     struct timespec req;
     req.tv_sec  = (time_t)seconds;
@@ -140,7 +141,7 @@ void ktc_time_sleep_seconds(ktc_Double seconds)
 
 /* Maximum number of frames to capture */
 #define KTC_ST_MAX_FRAMES  32
-/* Frames to skip: ktc_stacktrace_print itself + the generated error() wrapper */
+/* Frames to skip: ktc_core_stacktrace_print itself + the generated error() wrapper */
 #define KTC_ST_SKIP_FRAMES  2
 
 #if defined(_WIN32)
@@ -211,7 +212,7 @@ static ULONGLONG ktc_st_disk_image_base(const char* inExe)
     return (ULONGLONG)nt.OptionalHeader.ImageBase;
 }
 
-void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
+void ktc_core_stacktrace_print(const char* inMessage, int inMessageLen)
 {
     fprintf(stderr, "Exception in thread \"main\" kotlin.Error: %.*s\n",
         inMessageLen, inMessage);
@@ -290,7 +291,7 @@ typedef BOOL (WINAPI *PFN_SymFromAddr)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
 typedef BOOL (WINAPI *PFN_SymGetLineFromAddr64)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
 typedef BOOL (WINAPI *PFN_SymCleanup)(HANDLE);
 
-void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
+void ktc_core_stacktrace_print(const char* inMessage, int inMessageLen)
 {
     fprintf(stderr, "Exception in thread \"main\" kotlin.Error: %.*s\n",
         inMessageLen, inMessage);
@@ -352,7 +353,7 @@ void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
 #include <execinfo.h>
 #include <dlfcn.h>
 
-void ktc_stacktrace_print(const char* message, int message_len)
+void ktc_core_stacktrace_print(const char* message, int message_len)
 {
     fprintf(stderr, "Exception in thread \"main\" kotlin.Error: %.*s\n",
         message_len, message);
@@ -382,7 +383,7 @@ void ktc_stacktrace_print(const char* message, int message_len)
 #else
 
 /* Unsupported platform: print message only, no frames. */
-void ktc_stacktrace_print(const char* message, int message_len)
+void ktc_core_stacktrace_print(const char* message, int message_len)
 {
     fprintf(stderr, "Exception in thread \"main\" kotlin.Error: %.*s\n",
         message_len, message);
@@ -395,7 +396,7 @@ void ktc_stacktrace_print(const char* message, int message_len)
 // MARK: String
 // ══════════════════════════════════════════════════════════════════
 
-ktc_String ktc_string_cat(
+ktc_String ktc_core_string_cat(
     ktc_Char* buf,
     ktc_Int   bufsz,
     ktc_String a,
@@ -408,11 +409,14 @@ ktc_String ktc_string_cat(
     return (ktc_String){buf, vALen + vBLen};
 }
 
+static ktc_Int ktc_core_f2s(ktc_Float  v, ktc_Char* buf, ktc_Int bufsz); // defined in Conversion
+static ktc_Int ktc_core_d2s(ktc_Double v, ktc_Char* buf, ktc_Int bufsz); // defined in Conversion
+
 // ══════════════════════════════════════════════════════════════════
 // MARK: StrBuf
 // ══════════════════════════════════════════════════════════════════
 
-void ktc_sb_append_str(ktc_StrBuf* sb, ktc_String s) {
+void ktc_core_sb_append_str(ktc_StrBuf* sb, ktc_String s) {
     if (!sb->ptr) { sb->len += s.len; return; }
     ktc_Int vRoom = sb->cap - sb->len;
     ktc_Int vCopy = s.len < vRoom ? s.len : vRoom;
@@ -420,71 +424,71 @@ void ktc_sb_append_str(ktc_StrBuf* sb, ktc_String s) {
     sb->len += vCopy;
 }
 
-void ktc_sb_append_cstr(ktc_StrBuf* sb, const ktc_Char* s) {
-    ktc_sb_append_str(sb, (ktc_String){s, (ktc_Int)strlen(s)});
+void ktc_core_sb_append_cstr(ktc_StrBuf* sb, const ktc_Char* s) {
+    ktc_core_sb_append_str(sb, (ktc_String){s, (ktc_Int)strlen(s)});
 }
 
-void ktc_sb_append_int(ktc_StrBuf* sb, ktc_Int v) {
+void ktc_core_sb_append_int(ktc_StrBuf* sb, ktc_Int v) {
     ktc_Char vBuf[24]; // enough for any int32
     ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRId32, v);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-void ktc_sb_append_long(ktc_StrBuf* sb, ktc_Long v) {
+void ktc_core_sb_append_long(ktc_StrBuf* sb, ktc_Long v) {
     ktc_Char vBuf[24]; // enough for any int64
     ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRId64, v);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-void ktc_sb_append_double(ktc_StrBuf* sb, ktc_Double v) {
-    ktc_Char vBuf[32]; // enough for any double
-    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%g", v);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+void ktc_core_sb_append_double(ktc_StrBuf* sb, ktc_Double v) {
+    ktc_Char vBuf[32];
+    ktc_Int  vLen = ktc_core_d2s(v, vBuf, (ktc_Int)sizeof(vBuf));
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-void ktc_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v) {
-    ktc_sb_append_int(sb, (ktc_Int)v);
+void ktc_core_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v) {
+    ktc_core_sb_append_int(sb, (ktc_Int)v);
 }
 
-void ktc_sb_append_short(ktc_StrBuf* sb, ktc_Short v) {
-    ktc_sb_append_int(sb, (ktc_Int)v);
+void ktc_core_sb_append_short(ktc_StrBuf* sb, ktc_Short v) {
+    ktc_core_sb_append_int(sb, (ktc_Int)v);
 }
 
-void ktc_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v) {
+void ktc_core_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v) {
     ktc_Char vBuf[8];
     ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu8, v);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-void ktc_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v) {
+void ktc_core_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v) {
     ktc_Char vBuf[8];
     ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu16, v);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-void ktc_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v) {
+void ktc_core_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v) {
     ktc_Char vBuf[16];
     ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu32, v);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-void ktc_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v) {
+void ktc_core_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v) {
     ktc_Char vBuf[24];
     ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu64, v);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-void ktc_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r) {
+void ktc_core_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r) {
     ktc_Char vBuf[4]; // max 4 bytes for a UTF-8 code point
-    ktc_Int  vLen = ktc_utf8_encode(r, vBuf);
-    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+    ktc_Int  vLen = ktc_core_utf8_encode(r, vBuf);
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: UTF-8
 // ══════════════════════════════════════════════════════════════════
 
-ktc_Rune ktc_utf8_decode(const ktc_Char* p, ktc_Int* byteLen) {
+ktc_Rune ktc_core_utf8_decode(const ktc_Char* p, ktc_Int* byteLen) {
     unsigned char vC = (unsigned char)*p;
     if (vC < 0x80) { *byteLen = 1; return (ktc_Rune)vC; }
     if (vC < 0xC0) { *byteLen = 1; return 0xFFFD; } // continuation byte, invalid start
@@ -505,7 +509,7 @@ ktc_Rune ktc_utf8_decode(const ktc_Char* p, ktc_Int* byteLen) {
            ((p[2] & 0x3F) <<  6) | (p[3] & 0x3F);
 }
 
-ktc_Int ktc_utf8_encode(ktc_Rune r, ktc_Char* out) {
+ktc_Int ktc_core_utf8_encode(ktc_Rune r, ktc_Char* out) {
     if (r < 0x80)    { out[0] = (ktc_Char)r; return 1; }
     if (r < 0x800)   { out[0] = (ktc_Char)(0xC0 | (r >> 6));
                         out[1] = (ktc_Char)(0x80 | (r & 0x3F)); return 2; }
@@ -519,12 +523,12 @@ ktc_Int ktc_utf8_encode(ktc_Rune r, ktc_Char* out) {
     return 4;
 }
 
-ktc_Int ktc_str_runeLen(ktc_String s) {
+ktc_Int ktc_core_str_runeLen(ktc_String s) {
     ktc_Int vCount = 0;
     ktc_Int vI     = 0;
     while (vI < s.len) {
         ktc_Int vBLen;
-        ktc_utf8_decode(s.ptr + vI, &vBLen);
+        ktc_core_utf8_decode(s.ptr + vI, &vBLen);
         vI += vBLen;
         vCount++;
     }
@@ -535,21 +539,152 @@ ktc_Int ktc_str_runeLen(ktc_String s) {
 // MARK: Conversion
 // ══════════════════════════════════════════════════════════════════
 
-ktc_String ktc_int_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Int v) {
+ktc_String ktc_core_int_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Int v) {
     ktc_Int vLen = snprintf(buf, (size_t)bufsz, "%" PRId32, v);
     if (vLen < 0 || vLen >= bufsz) vLen = bufsz - 1;
     return (ktc_String){buf, vLen};
 }
 
-ktc_String ktc_long_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Long v) {
+ktc_String ktc_core_long_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Long v) {
     ktc_Int vLen = snprintf(buf, (size_t)bufsz, "%" PRId64, v);
     if (vLen < 0 || vLen >= bufsz) vLen = bufsz - 1;
     return (ktc_String){buf, vLen};
 }
 
-ktc_String ktc_double_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Double v) {
-    ktc_Int vLen = snprintf(buf, (size_t)bufsz, "%g", v);
-    if (vLen < 0 || vLen >= bufsz) vLen = bufsz - 1;
+/* Kotlin-like float formatting — same rules as double but uses float precision
+ * (up to 9 significant digits) and strtof for round-trip checking. */
+static ktc_Int ktc_core_f2s(ktc_Float v, ktc_Char* buf, ktc_Int bufsz) {
+    if (isnan(v))   return snprintf(buf, (size_t)bufsz, "NaN");
+    if (isinf(v))   return snprintf(buf, (size_t)bufsz, v > 0 ? "Infinity" : "-Infinity");
+    if (v == 0.0f) {
+        ktc_UInt vBits;
+        memcpy(&vBits, &v, sizeof(vBits));
+        return snprintf(buf, (size_t)bufsz, (vBits >> 31) ? "-0.0" : "0.0");
+    }
+
+    // Find shortest precision that round-trips through strtof
+    // Format as double (superset) so snprintf doesn't lose bits, then check via strtof
+    ktc_Char vTmp[64];
+    ktc_Int  vPrec;
+    for (vPrec = 1; vPrec <= 9; vPrec++) {
+        snprintf(vTmp, sizeof(vTmp), "%.*e", vPrec - 1, (double)v);
+        if (strtof(vTmp, NULL) == v) break;
+    }
+
+    ktc_Char* vEp  = strchr(vTmp, 'e');
+    ktc_Int   vExp = atoi(vEp + 1);
+    *vEp = '\0';
+
+    ktc_Char* vDot = strchr(vTmp, '.');
+    if (vDot) {
+        ktc_Char* vEnd = vTmp + strlen(vTmp) - 1;
+        while (vEnd > vDot + 1 && *vEnd == '0') vEnd--;
+        *(vEnd + 1) = '\0';
+    } else {
+        size_t vTl = strlen(vTmp);
+        vTmp[vTl] = '.'; vTmp[vTl + 1] = '0'; vTmp[vTl + 2] = '\0';
+    }
+
+    if (vExp >= 7 || vExp <= -4) {
+        ktc_Int vN = snprintf(buf, (size_t)bufsz, "%sE%d", vTmp, vExp);
+        return vN < bufsz ? vN : bufsz - 1;
+    }
+
+    ktc_Int vDec = vPrec - (vExp + 1);
+    if (vDec < 1) vDec = 1;
+    snprintf(vTmp, sizeof(vTmp), "%.*f", (int)vDec, (double)v);
+
+    vDot = strchr(vTmp, '.');
+    if (vDot) {
+        ktc_Char* vEnd = vTmp + strlen(vTmp) - 1;
+        while (vEnd > vDot + 1 && *vEnd == '0') vEnd--;
+        *(vEnd + 1) = '\0';
+    }
+
+    ktc_Int vN = snprintf(buf, (size_t)bufsz, "%s", vTmp);
+    return vN < bufsz ? vN : bufsz - 1;
+}
+
+ktc_String ktc_core_float_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Float v) {
+    ktc_Int vLen = ktc_core_f2s(v, buf, bufsz);
+    return (ktc_String){buf, vLen};
+}
+
+void ktc_core_sb_append_float(ktc_StrBuf* sb, ktc_Float v) {
+    ktc_Char vBuf[24];
+    ktc_Int  vLen = ktc_core_f2s(v, vBuf, (ktc_Int)sizeof(vBuf));
+    ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+/* Kotlin-like double formatting:
+ * - shortest representation that round-trips
+ * - always has a decimal digit (1.0 not 1)
+ * - strips trailing zeros (3.5 not 3.500000)
+ * - E-notation (uppercase, no + sign) when exponent >= 7 or <= -4
+ * - NaN, Infinity, -Infinity match Kotlin names
+ * - -0.0 preserved */
+static ktc_Int ktc_core_d2s(ktc_Double v, ktc_Char* buf, ktc_Int bufsz) {
+    if (isnan(v))
+        return snprintf(buf, (size_t)bufsz, "NaN");
+    if (isinf(v))
+        return snprintf(buf, (size_t)bufsz, v > 0 ? "Infinity" : "-Infinity");
+    if (v == 0.0) {
+        // Detect -0.0 via sign bit without <math.h> signbit dependency conflicts
+        ktc_ULong vBits;
+        memcpy(&vBits, &v, sizeof(vBits));
+        return snprintf(buf, (size_t)bufsz, (vBits >> 63) ? "-0.0" : "0.0");
+    }
+
+    // Find shortest precision that round-trips through %e / strtod
+    ktc_Char vTmp[64];
+    ktc_Int  vPrec;
+    for (vPrec = 1; vPrec <= 17; vPrec++) {
+        snprintf(vTmp, sizeof(vTmp), "%.*e", vPrec - 1, v);
+        if (strtod(vTmp, NULL) == v) break;
+    }
+
+    // Parse exponent from the %e result, then split mantissa / exp
+    ktc_Char* vEp  = strchr(vTmp, 'e');
+    ktc_Int   vExp = atoi(vEp + 1);
+    *vEp = '\0';
+
+    // Strip trailing zeros from mantissa, keep at least one decimal digit
+    ktc_Char* vDot = strchr(vTmp, '.');
+    if (vDot) {
+        ktc_Char* vEnd = vTmp + strlen(vTmp) - 1;
+        while (vEnd > vDot + 1 && *vEnd == '0') vEnd--;
+        *(vEnd + 1) = '\0';
+    } else {
+        // No decimal point in mantissa — append .0
+        size_t vTl = strlen(vTmp);
+        vTmp[vTl] = '.'; vTmp[vTl + 1] = '0'; vTmp[vTl + 2] = '\0';
+    }
+
+    // Kotlin uses E-notation when exp >= 7 or <= -4
+    if (vExp >= 7 || vExp <= -4) {
+        ktc_Int vN = snprintf(buf, (size_t)bufsz, "%sE%d", vTmp, vExp);
+        return vN < bufsz ? vN : bufsz - 1;
+    }
+
+    // Fixed notation — re-format with %f using just enough decimal places
+    ktc_Int vDec = vPrec - (vExp + 1);
+    if (vDec < 1) vDec = 1;
+    snprintf(vTmp, sizeof(vTmp), "%.*f", (int)vDec, v);
+
+    // Strip trailing zeros, keep at least one decimal digit
+    vDot = strchr(vTmp, '.');
+    if (vDot) {
+        ktc_Char* vEnd = vTmp + strlen(vTmp) - 1;
+        while (vEnd > vDot + 1 && *vEnd == '0') vEnd--;
+        *(vEnd + 1) = '\0';
+    }
+
+    ktc_Int vN = snprintf(buf, (size_t)bufsz, "%s", vTmp);
+    return vN < bufsz ? vN : bufsz - 1;
+}
+
+ktc_String ktc_core_double_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Double v) {
+    ktc_Int vLen = ktc_core_d2s(v, buf, bufsz);
     return (ktc_String){buf, vLen};
 }
 
@@ -557,25 +692,25 @@ ktc_String ktc_double_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Double v) {
 // MARK: Number Parsing
 // ══════════════════════════════════════════════════════════════════
 
-ktc_Int ktc_str_toInt(ktc_String s) {
+ktc_Int ktc_core_str_toInt(ktc_String s) {
     ktc_Int vOut = 0;
-    ktc_str_toIntOrNull(s, &vOut);
+    ktc_core_str_toIntOrNull(s, &vOut);
     return vOut;
 }
 
-ktc_Long ktc_str_toLong(ktc_String s) {
+ktc_Long ktc_core_str_toLong(ktc_String s) {
     ktc_Long vOut = 0;
-    ktc_str_toLongOrNull(s, &vOut);
+    ktc_core_str_toLongOrNull(s, &vOut);
     return vOut;
 }
 
-ktc_Double ktc_str_toDouble(ktc_String s) {
+ktc_Double ktc_core_str_toDouble(ktc_String s) {
     ktc_Double vOut = 0.0;
-    ktc_str_toDoubleOrNull(s, &vOut);
+    ktc_core_str_toDoubleOrNull(s, &vOut);
     return vOut;
 }
 
-ktc_Bool ktc_str_toIntOrNull(ktc_String s, ktc_Int* out) {
+ktc_Bool ktc_core_str_toIntOrNull(ktc_String s, ktc_Int* out) {
     if (s.len == 0) return false;
     // strtol needs a null-terminated string; copy if needed
     ktc_Char  vBuf[24];
@@ -590,7 +725,7 @@ ktc_Bool ktc_str_toIntOrNull(ktc_String s, ktc_Int* out) {
     return true;
 }
 
-ktc_Bool ktc_str_toLongOrNull(ktc_String s, ktc_Long* out) {
+ktc_Bool ktc_core_str_toLongOrNull(ktc_String s, ktc_Long* out) {
     if (s.len == 0) return false;
     ktc_Char  vBuf[24];
     ktc_Int   vLen = s.len < 23 ? s.len : 23;
@@ -604,7 +739,7 @@ ktc_Bool ktc_str_toLongOrNull(ktc_String s, ktc_Long* out) {
     return true;
 }
 
-ktc_Bool ktc_str_toDoubleOrNull(ktc_String s, ktc_Double* out) {
+ktc_Bool ktc_core_str_toDoubleOrNull(ktc_String s, ktc_Double* out) {
     if (s.len == 0) return false;
     ktc_Char vBuf[64];
     ktc_Int  vLen = s.len < 63 ? s.len : 63;
@@ -629,6 +764,6 @@ static void ktc_console_init(void) {
 #endif
 }
 
-void ktc_mainInit(void) {
+void ktc_core_mainInit(void) {
     ktc_console_init();
 }

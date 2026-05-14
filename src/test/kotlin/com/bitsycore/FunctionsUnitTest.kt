@@ -63,7 +63,7 @@ class FunctionsUnitTest : TranspilerTestBase() {
             }
         """)
         // When called without the default arg, the default is substituted
-        r.sourceContains("ktc_str(\"Hello\")")
+        r.sourceContains("ktc_core_str(\"Hello\")")
     }
 
     @Test fun defaultParamOverridden() {
@@ -76,7 +76,7 @@ class FunctionsUnitTest : TranspilerTestBase() {
                 greet("World", "Hi")
             }
         """)
-        r.sourceContains("ktc_str(\"Hi\")")
+        r.sourceContains("ktc_core_str(\"Hi\")")
     }
 
     // ── Multiple return paths ────────────────────────────────────────

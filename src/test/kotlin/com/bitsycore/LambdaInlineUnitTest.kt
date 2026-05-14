@@ -30,7 +30,7 @@ class LambdaInlineUnitTest : TranspilerTestBase() {
             }
         """)
         r.sourceContains("/* inline greet(name = \"World\"): String */")
-        r.sourceContains("ktc_String name = ktc_str(\"World\");")
+        r.sourceContains("ktc_String name = ktc_core_str(\"World\");")
     }
 
     @Test fun inlineFunWithReturn() {

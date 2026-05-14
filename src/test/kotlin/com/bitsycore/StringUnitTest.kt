@@ -79,7 +79,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "42"
             val n = s.toInt()
         """)
-        r.sourceContains("ktc_str_toInt(s)")
+        r.sourceContains("ktc_core_str_toInt(s)")
     }
 
     // ── String toDouble ──────────────────────────────────────────────
@@ -89,7 +89,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "3.14"
             val d = s.toDouble()
         """)
-        r.sourceContains("ktc_str_toDouble(s)")
+        r.sourceContains("ktc_core_str_toDouble(s)")
     }
 
     // ── String comparison ────────────────────────────────────────────
@@ -100,7 +100,7 @@ class StringUnitTest : TranspilerTestBase() {
             val b = "world"
             println(a == b)
         """)
-        r.sourceContains("ktc_string_eq")
+        r.sourceContains("ktc_core_string_eq")
     }
 
     @Test fun stringLessThan() {
@@ -109,7 +109,7 @@ class StringUnitTest : TranspilerTestBase() {
             val b = "banana"
             println(a < b)
         """)
-        r.sourceContains("ktc_string_cmp")
+        r.sourceContains("ktc_core_string_cmp")
     }
 
     // ── String concatenation ─────────────────────────────────────────
@@ -120,10 +120,10 @@ class StringUnitTest : TranspilerTestBase() {
             val b = " world"
             val c = a + b
         """)
-        r.sourceContains("ktc_string_cat")
+        r.sourceContains("ktc_core_string_cat")
         // Verify buffer declaration and 4-arg call: (buf, sizeof(buf), a, b)
         r.sourceMatches(Regex("""ktc_Char \$\w+\[512\];"""))
-        r.sourceMatches(Regex("""ktc_string_cat\(\$\w+, sizeof\(\$\w+\), a, b\)"""))
+        r.sourceMatches(Regex("""ktc_core_string_cat\(\$\w+, sizeof\(\$\w+\), a, b\)"""))
     }
 
     // ── toIntOrNull ──────────────────────────────────────────────────
@@ -133,7 +133,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "42"
             val n = s.toIntOrNull()
         """)
-        r.sourceContains("ktc_str_toIntOrNull")
+        r.sourceContains("ktc_core_str_toIntOrNull")
         r.sourceContains("n = ")
         r.sourceContains("ktc_Int_Optional")
     }
@@ -143,7 +143,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "abc"
             val n = s.toIntOrNull() ?: 0
         """)
-        r.sourceContains("ktc_str_toIntOrNull")
+        r.sourceContains("ktc_core_str_toIntOrNull")
     }
 
     // ── toLongOrNull ─────────────────────────────────────────────────
@@ -153,7 +153,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "999"
             val n = s.toLongOrNull()
         """)
-        r.sourceContains("ktc_str_toLongOrNull")
+        r.sourceContains("ktc_core_str_toLongOrNull")
         r.sourceContains("n = ")
         r.sourceContains("ktc_Long_Optional")
     }
@@ -165,7 +165,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "3.14"
             val d = s.toDoubleOrNull()
         """)
-        r.sourceContains("ktc_str_toDoubleOrNull")
+        r.sourceContains("ktc_core_str_toDoubleOrNull")
         r.sourceContains("d = ")
         r.sourceContains("ktc_Double_Optional")
     }
@@ -177,7 +177,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "1.5"
             val f = s.toFloatOrNull()
         """)
-        r.sourceContains("ktc_str_toDoubleOrNull")
+        r.sourceContains("ktc_core_str_toDoubleOrNull")
         r.sourceContains("(ktc_Float)")
         r.sourceContains("f = ")
         r.sourceContains("ktc_Float_Optional")
@@ -194,7 +194,7 @@ class StringUnitTest : TranspilerTestBase() {
             }
         """)
         r.sourceContains("n.tag")
-        r.sourceContains("ktc_str_toIntOrNull")
+        r.sourceContains("ktc_core_str_toIntOrNull")
     }
 
     // ── String character indexing ───────────────────────────────────
@@ -231,7 +231,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "hello world"
             val sub = s.substring(0, 5)
         """)
-        r.sourceContains("ktc_string_substring(s, 0, 5)")
+        r.sourceContains("ktc_core_string_substring(s, 0, 5)")
     }
 
     @Test fun substringOneArg() {
@@ -239,7 +239,7 @@ class StringUnitTest : TranspilerTestBase() {
             val s = "hello"
             val tail = s.substring(2)
         """)
-        r.sourceContains("ktc_string_substring(s, 2, s.len)")
+        r.sourceContains("ktc_core_string_substring(s, 2, s.len)")
     }
 
     // ── String.startsWith / endsWith ─────────────────────────────────

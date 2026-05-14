@@ -54,7 +54,7 @@ class InfixUnitTest : TranspilerTestBase() {
 
 	@Test fun infixOnString() {
 		/* String-returning inline functions have a known stack-lifetime issue: the
-		internal buffer used by ktc_string_cat is local to the inline block. */
+		internal buffer used by ktc_core_string_cat is local to the inline block. */
 		notYetImpl("String-returning infix inline: stack buffer lifetime issue")
 	}
 

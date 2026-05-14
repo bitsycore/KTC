@@ -93,8 +93,8 @@ class EnumUnitTest : TranspilerTestBase() {
             println(c)
         """, decls = colorDecl)
         r.sourceContains("test_Main_Color_valueOf")
-        r.sourceContains("ktc_string_eq")
-        r.sourceContains("ktc_str(\"GREEN\")")
+        r.sourceContains("ktc_core_string_eq")
+        r.sourceContains("ktc_core_str(\"GREEN\")")
     }
 
     @Test fun enumValueOfHeader() {

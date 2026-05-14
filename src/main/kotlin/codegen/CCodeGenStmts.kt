@@ -251,7 +251,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
                         val lenExpr = "${expr}\$len"
-                        impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
+                        impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_core_alloca(sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenExpr;")
                     }
@@ -259,7 +259,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)
                     val lenExpr = if (s.init is NameExpr) "${s.init.name}\$len" else "${expr}\$len"
-                    impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
+                    impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_core_alloca(sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenExpr;")
                 }
@@ -318,7 +318,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                 if (vKtcCore is KtcType.Arr && s.init !is NullLit) {
                     val elemCType = arrayElementCTypeKtc(vKtcCore)
                     val lenExpr = if (s.init is NameExpr) "${s.init.name}\$len" else "${expr}\$len"
-                    impl.appendLine("${ind}$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
+                    impl.appendLine("${ind}$elemCType* ${s.name} = ($elemCType*)ktc_core_alloca(sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenExpr;")
                 } else {
@@ -394,7 +394,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         val elemName = typeSubst[typeArg?.name ?: "Int"] ?: (typeArg?.name ?: "Int")
         val optCType = optCTypeName("${elemName}?")
         val size = if (init.args.isNotEmpty()) genExpr(init.args[0].expr) else "0"
-        return "${ind}$optCType* $varName = ($optCType*)ktc_alloca(sizeof($optCType) * (size_t)($size));\n" +
+        return "${ind}$optCType* $varName = ($optCType*)ktc_core_alloca(sizeof($optCType) * (size_t)($size));\n" +
                 "${ind}memset($varName, 0, sizeof($optCType) * (size_t)($size));\n" +
                 "${ind}const ktc_Int ${varName}\$len = $size;"
     }
@@ -425,7 +425,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
             val itName = lambda.params.firstOrNull() ?: "it"
             flushPreStmts(ind)
             val sb = StringBuilder()
-            sb.appendLine("${ind}$elemC* $varName = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));")
+            sb.appendLine("${ind}$elemC* $varName = ($elemC*)ktc_core_alloca(sizeof($elemC) * (size_t)($size));")
             sb.appendLine("${ind}const ktc_Int ${varName}\$len = $size;")
             sb.appendLine("${ind}for (ktc_Int $itName = 0; $itName < $size; $itName++) {")
             pushScope()
@@ -476,7 +476,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
             return sb.toString()
         }
         flushPreStmts(ind)
-        return "${ind}$elemC* $varName = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));\n" +
+        return "${ind}$elemC* $varName = ($elemC*)ktc_core_alloca(sizeof($elemC) * (size_t)($size));\n" +
                 "${ind}const ktc_Int ${varName}\$len = $size;"
     }
     // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
@@ -1319,15 +1319,15 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
                 impl.appendLine("${ind}char ${buf}[$maxLen];")
                 impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
                 impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
-                impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
+                impl.appendLine("${ind}else { ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"null\")); }")
                 impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
             } else {
                 impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
                 impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
-                impl.appendLine("${ind}char* $buf = (char*)ktc_alloca(${buf}_sb.len + 1);")
+                impl.appendLine("${ind}char* $buf = (char*)ktc_core_alloca(${buf}_sb.len + 1);")
                 impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
                 impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
-                impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
+                impl.appendLine("${ind}else { ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"null\")); }")
                 impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
             }
         } else {
@@ -1355,7 +1355,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
             impl.appendLine("${ind}${tKtcCore.toCType()} $vTmp = ($expr);")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
             impl.appendLine("${ind}${typeFlatName(baseName)}_toString(&$vTmp, &${buf}_sb);")
-            impl.appendLine("${ind}char* $buf = (char*)ktc_alloca(${buf}_sb.len + 1);")
+            impl.appendLine("${ind}char* $buf = (char*)ktc_core_alloca(${buf}_sb.len + 1);")
             impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
             impl.appendLine("${ind}${typeFlatName(baseName)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
@@ -1376,7 +1376,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         } else {
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
             impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
-            impl.appendLine("${ind}char* $buf = (char*)ktc_alloca(${buf}_sb.len + 1);")
+            impl.appendLine("${ind}char* $buf = (char*)ktc_core_alloca(${buf}_sb.len + 1);")
             impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
             impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
@@ -1445,7 +1445,7 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
         impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
         for (p in parts) {
             when {
-                p.lit != null -> impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));")
+                p.lit != null -> impl.appendLine("${ind}ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"${escapeStr(p.lit)}\"));")
                 p.sbAppend != null -> {
                     flushPreStmts(ind)
                     impl.appendLine("$ind${p.sbAppend}")
@@ -1459,7 +1459,7 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
     impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
     for (p in parts) {
         when {
-            p.lit != null -> impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));")
+            p.lit != null -> impl.appendLine("${ind}ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"${escapeStr(p.lit)}\"));")
             p.sbAppend != null -> {
                 flushPreStmts(ind)
                 impl.appendLine("$ind${p.sbAppend}")
@@ -1467,11 +1467,11 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
         }
     }
     // Allocate + second pass
-    impl.appendLine("${ind}char* $buf = (char*)ktc_alloca(${buf}_sb.len + 1);")
+    impl.appendLine("${ind}char* $buf = (char*)ktc_core_alloca(${buf}_sb.len + 1);")
     impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
     for (p in parts) {
         when {
-            p.lit != null -> impl.appendLine("${ind}ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));")
+            p.lit != null -> impl.appendLine("${ind}ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"${escapeStr(p.lit)}\"));")
             p.sbAppend != null -> impl.appendLine("$ind${p.sbAppend}")
         }
     }

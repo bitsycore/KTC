@@ -42,7 +42,7 @@ class DataClassUnitTest : TranspilerTestBase() {
     @Test fun toStringGenerated() {
         val r = transpileMain("val v = Vec2(1.0f, 2.0f)\nprintln(v)", decls = vec2Decl)
         r.sourceContains("test_Main_Vec2_toString")
-        r.sourceContains("ktc_sb_append_str(sb, ktc_str(\"Vec2(x=\")")
+        r.sourceContains("ktc_core_sb_append_str(sb, ktc_core_str(\"Vec2(x=\")")
     }
 
     // ── equals ───────────────────────────────────────────────────────

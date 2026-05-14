@@ -94,7 +94,7 @@ class ArrayAliasUnitTest : TranspilerTestBase() {
 
     @Test fun arrayOfStringEmitsCompoundLiteral() {
         val v = transpileMain("val a = arrayOf(\"hello\", \"world\")", decls = "")
-        v.sourceContains("ktc_String a[] = {ktc_str(\"hello\"), ktc_str(\"world\")};")
+        v.sourceContains("ktc_String a[] = {ktc_core_str(\"hello\"), ktc_core_str(\"world\")};")
         v.sourceContains("ktc_Int a\$len = 2;")
     }
 

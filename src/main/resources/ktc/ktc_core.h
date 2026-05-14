@@ -1,4 +1,4 @@
-//ktc_intrinsic.h — KotlinToC compiler intrinsics
+//ktc_core.h — KotlinToC compiler intrinsics
 #pragma once
 
 #include <stdio.h>
@@ -35,7 +35,7 @@ typedef uint64_t ktc_ULong;
 // MARK: Initialization
 // ══════════════════════════════════════════════════════════════════
 
-void ktc_mainInit(void);
+void ktc_core_mainInit(void);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Stack Trace
@@ -44,16 +44,16 @@ void ktc_mainInit(void);
 /** Print a Java-style stack trace to stderr, then return.
  * The caller (error()) exits afterwards.
  * Compile with -g (MinGW/GCC) for function names and file:line. */
-void ktc_stacktrace_print(const char* message, int message_len);
+void ktc_core_stacktrace_print(const char* message, int message_len);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Time
 // ══════════════════════════════════════════════════════════════════
 
-ktc_ULong  ktc_time_ms(void);
-ktc_Double ktc_time_seconds(void);
-void       ktc_time_sleep_ms(ktc_UInt ms);
-void       ktc_time_sleep_seconds(ktc_Double seconds);
+ktc_ULong  ktc_core_time_ms(void);
+ktc_Double ktc_core_time_seconds(void);
+void       ktc_core_time_sleep_ms(ktc_UInt ms);
+void       ktc_core_time_sleep_seconds(ktc_Double seconds);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Rand
@@ -61,9 +61,9 @@ void       ktc_time_sleep_seconds(ktc_Double seconds);
 
 #define KTC_RAND_MAX UINT32_MAX
 
-void     ktc_srand(ktc_ULong* state, ktc_ULong* inc, ktc_ULong seed);
-ktc_UInt ktc_rand(ktc_ULong* state, ktc_ULong* inc);
-ktc_UInt ktc_rand_range(ktc_ULong* state, ktc_ULong* inc, ktc_UInt bound);
+void     ktc_core_srand(ktc_ULong* state, ktc_ULong* inc, ktc_ULong seed);
+ktc_UInt ktc_core_rand(ktc_ULong* state, ktc_ULong* inc);
+ktc_UInt ktc_core_rand_range(ktc_ULong* state, ktc_ULong* inc, ktc_UInt bound);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Compat
@@ -71,28 +71,28 @@ ktc_UInt ktc_rand_range(ktc_ULong* state, ktc_ULong* inc, ktc_UInt bound);
 
 #if defined(_MSC_VER)
     #include <malloc.h>
-    #define ktc_alloca(size) _alloca(size)
+    #define ktc_core_alloca(size) _alloca(size)
 #elif defined(__clang__) || defined(__GNUC__)
-    #define ktc_alloca(size) __builtin_alloca(size)
+    #define ktc_core_alloca(size) __builtin_alloca(size)
 #elif defined(__has_builtin) && __has_builtin(__builtin_alloca)
-    #define ktc_alloca(size) __builtin_alloca(size)
+    #define ktc_core_alloca(size) __builtin_alloca(size)
 #else
     #include <alloca.h>
-    #define ktc_alloca(size) alloca(size)
+    #define ktc_core_alloca(size) alloca(size)
 #endif
 
 /* Portable thread-local storage specifier. */
-#ifndef ktc_tls
+#ifndef ktc_core_tls
     #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
-        #define ktc_tls _Thread_local
+        #define ktc_core_tls _Thread_local
     #elif defined(__cplusplus) && (__cplusplus >= 201103L)
-        #define ktc_tls thread_local
+        #define ktc_core_tls thread_local
     #elif defined(_MSC_VER)
-        #define ktc_tls __declspec(thread)
+        #define ktc_core_tls __declspec(thread)
     #elif defined(__GNUC__) || defined(__clang__) || defined(__INTEL_COMPILER)
-        #define ktc_tls __thread
+        #define ktc_core_tls __thread
     #else
-        #define ktc_tls
+        #define ktc_core_tls
         #warning "Thread-local storage not supported on this compiler."
     #endif
 #endif
@@ -112,7 +112,7 @@ typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 #define KTC_OPTIONAL(T) typedef struct { ktc_OptionalTag tag; T value; } T##_Optional
 
 /** No-op dispose used by vtables when a class has no custom dispose. */
-static void ktc_noop_dispose(void* obj) { (void)obj; }
+static void ktc_core_noop_dispose(void* obj) { (void)obj; }
 
 KTC_OPTIONAL(ktc_Byte);
 KTC_OPTIONAL(ktc_Short);
@@ -153,7 +153,7 @@ KTC_OPTIONAL(ktc_ULong);
 
 /**
  * Define KTC_MEM_TRACK before including this header to intercept
- * malloc/calloc/realloc/free. Call ktc_mem_report() at exit to
+ * malloc/calloc/realloc/free. Call ktc_core_mem_report() at exit to
  * print the alloc/free summary and any leaked allocations.
  */
 #ifdef KTC_MEM_TRACK
@@ -170,76 +170,76 @@ typedef struct {
     ktc_Bool        active;
 } ktc_MemRecord;
 
-static ktc_MemRecord ktc_mem_records[KTC_MEM_MAX];
-static ktc_Int   ktc_mem_count  = 0;
-static ktc_Int   ktc_mem_allocs = 0;
-static ktc_Int   ktc_mem_frees  = 0;
-static ktc_ULong ktc_mem_bytes  = 0;
+static ktc_MemRecord ktc_core_mem_records[KTC_MEM_MAX];
+static ktc_Int   ktc_core_mem_count  = 0;
+static ktc_Int   ktc_core_mem_allocs = 0;
+static ktc_Int   ktc_core_mem_frees  = 0;
+static ktc_ULong ktc_core_mem_bytes  = 0;
 
-static inline void ktc_mem_record_alloc(void* p, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
-    ktc_mem_allocs++;
-    ktc_mem_bytes += sz;
-    if (ktc_mem_count < KTC_MEM_MAX)
-        ktc_mem_records[ktc_mem_count++] = (ktc_MemRecord){p, sz, file, line, true};
+static inline void ktc_core_mem_record_alloc(void* p, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    ktc_core_mem_allocs++;
+    ktc_core_mem_bytes += sz;
+    if (ktc_core_mem_count < KTC_MEM_MAX)
+        ktc_core_mem_records[ktc_core_mem_count++] = (ktc_MemRecord){p, sz, file, line, true};
 }
 
-static inline void* ktc_malloc(ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+static inline void* ktc_core_malloc(ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
     void* p = (malloc)(sz);
-    ktc_mem_record_alloc(p, sz, file, line);
+    ktc_core_mem_record_alloc(p, sz, file, line);
     return p;
 }
 
-static inline void* ktc_calloc(ktc_ULong n, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+static inline void* ktc_core_calloc(ktc_ULong n, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
     void* p = (calloc)(n, sz);
-    ktc_mem_record_alloc(p, n * sz, file, line);
+    ktc_core_mem_record_alloc(p, n * sz, file, line);
     return p;
 }
 
-static inline void* ktc_realloc(void* old, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
-    for (ktc_Int i = ktc_mem_count - 1; i >= 0; i--) {
-        if (ktc_mem_records[i].ptr == old && ktc_mem_records[i].active) {
-            ktc_mem_records[i].active = false;
-            ktc_mem_bytes -= ktc_mem_records[i].size;
-            ktc_mem_frees++;
+static inline void* ktc_core_realloc(void* old, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    for (ktc_Int i = ktc_core_mem_count - 1; i >= 0; i--) {
+        if (ktc_core_mem_records[i].ptr == old && ktc_core_mem_records[i].active) {
+            ktc_core_mem_records[i].active = false;
+            ktc_core_mem_bytes -= ktc_core_mem_records[i].size;
+            ktc_core_mem_frees++;
             break;
         }
     }
     void* p = (realloc)(old, sz);
-    ktc_mem_record_alloc(p, sz, file, line);
+    ktc_core_mem_record_alloc(p, sz, file, line);
     return p;
 }
 
-static inline void ktc_free(void* p, const ktc_Char* file, ktc_Int line) {
+static inline void ktc_core_free(void* p, const ktc_Char* file, ktc_Int line) {
     if (!p) return;
-    for (ktc_Int i = ktc_mem_count - 1; i >= 0; i--) {
-        if (ktc_mem_records[i].ptr == p && ktc_mem_records[i].active) {
-            ktc_mem_records[i].active = false;
-            ktc_mem_bytes -= ktc_mem_records[i].size;
-            ktc_mem_frees++;
+    for (ktc_Int i = ktc_core_mem_count - 1; i >= 0; i--) {
+        if (ktc_core_mem_records[i].ptr == p && ktc_core_mem_records[i].active) {
+            ktc_core_mem_records[i].active = false;
+            ktc_core_mem_bytes -= ktc_core_mem_records[i].size;
+            ktc_core_mem_frees++;
             (free)(p);
             return;
         }
     }
     printf("[mem] WARNING: free(%p) unknown pointer at %s:%d\n", p, file, line);
-    ktc_mem_frees++;
+    ktc_core_mem_frees++;
     (free)(p);
 }
 
-static inline void ktc_mem_report(void) {
+static inline void ktc_core_mem_report(void) {
     ktc_Int   leaks        = 0;
     ktc_ULong leaked_bytes = 0;
     printf("\n====== ktc memory report ======\n");
-    printf("  total allocs : %d\n", ktc_mem_allocs);
-    printf("  total frees  : %d\n", ktc_mem_frees);
-    printf("  balance      : %d\n", ktc_mem_allocs - ktc_mem_frees);
-    for (ktc_Int i = 0; i < ktc_mem_count; i++) {
-        if (ktc_mem_records[i].active) {
+    printf("  total allocs : %d\n", ktc_core_mem_allocs);
+    printf("  total frees  : %d\n", ktc_core_mem_frees);
+    printf("  balance      : %d\n", ktc_core_mem_allocs - ktc_core_mem_frees);
+    for (ktc_Int i = 0; i < ktc_core_mem_count; i++) {
+        if (ktc_core_mem_records[i].active) {
             if (leaks == 0) printf("\n  LEAKS:\n");
             printf("    %p  %6zu bytes  %s:%d\n",
-                ktc_mem_records[i].ptr, (size_t)ktc_mem_records[i].size,
-                ktc_mem_records[i].file, ktc_mem_records[i].line);
+                ktc_core_mem_records[i].ptr, (size_t)ktc_core_mem_records[i].size,
+                ktc_core_mem_records[i].file, ktc_core_mem_records[i].line);
             leaks++;
-            leaked_bytes += ktc_mem_records[i].size;
+            leaked_bytes += ktc_core_mem_records[i].size;
         }
     }
     if (leaks == 0)
@@ -249,10 +249,10 @@ static inline void ktc_mem_report(void) {
     printf("===============================\n");
 }
 
-#define malloc(sz)     ktc_malloc(sz, __FILE__, __LINE__)
-#define calloc(n, sz)  ktc_calloc(n, sz, __FILE__, __LINE__)
-#define realloc(p, sz) ktc_realloc(p, sz, __FILE__, __LINE__)
-#define free(p)        ktc_free(p, __FILE__, __LINE__)
+#define malloc(sz)     ktc_core_malloc(sz, __FILE__, __LINE__)
+#define calloc(n, sz)  ktc_core_calloc(n, sz, __FILE__, __LINE__)
+#define realloc(p, sz) ktc_core_realloc(p, sz, __FILE__, __LINE__)
+#define free(p)        ktc_core_free(p, __FILE__, __LINE__)
 
 #endif /* KTC_MEM_TRACK */
 
@@ -267,17 +267,17 @@ typedef struct {
 KTC_OPTIONAL(ktc_String);
 
 /** String from a string literal — zero-cost, points into static storage. */
-#define ktc_str(s) ((ktc_String){(s), (ktc_Int)(sizeof(s) - 1)})
+#define ktc_core_str(s) ((ktc_String){(s), (ktc_Int)(sizeof(s) - 1)})
 
 /** String from pointer + length — no copy. */
-#define ktc_string_wrap(p, n) ((ktc_String){(p), (ktc_Int)(n)})
+#define ktc_core_string_wrap(p, n) ((ktc_String){(p), (ktc_Int)(n)})
 
-static inline ktc_Bool ktc_string_eq(ktc_String a, ktc_String b) {
+static inline ktc_Bool ktc_core_string_eq(ktc_String a, ktc_String b) {
     return a.len == b.len && memcmp(a.ptr, b.ptr, (size_t)a.len) == 0;
 }
 
 /** Lexicographic comparison — returns <0, 0, or >0. */
-static inline ktc_Int ktc_string_cmp(ktc_String a, ktc_String b) {
+static inline ktc_Int ktc_core_string_cmp(ktc_String a, ktc_String b) {
     ktc_Int minlen = a.len < b.len ? a.len : b.len;
     ktc_Int r = memcmp(a.ptr, b.ptr, (size_t)minlen);
     if (r != 0) return r;
@@ -285,7 +285,7 @@ static inline ktc_Int ktc_string_cmp(ktc_String a, ktc_String b) {
 }
 
 /** Substring as a view — no copy. Clamps out-of-range indices. */
-static inline ktc_String ktc_string_substring(ktc_String s, ktc_Int from, ktc_Int to) {
+static inline ktc_String ktc_core_string_substring(ktc_String s, ktc_Int from, ktc_Int to) {
     if (from < 0) from = 0;
     if (to > s.len) to = s.len;
     if (from >= to) return (ktc_String){"", 0};
@@ -293,7 +293,7 @@ static inline ktc_String ktc_string_substring(ktc_String s, ktc_Int from, ktc_In
 }
 
 /** Concatenate into caller-provided buffer. Clamps each half independently. */
-ktc_String ktc_string_cat(ktc_Char* buf, ktc_Int bufsz, ktc_String a, ktc_String b);
+ktc_String ktc_core_string_cat(ktc_Char* buf, ktc_Int bufsz, ktc_String a, ktc_String b);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: StrBuf
@@ -311,28 +311,29 @@ typedef struct {
  */
 
 /** View of current buffer contents — no copy. */
-#define ktc_sb_to_string(sb) ((ktc_String){(sb)->ptr, (sb)->len})
+#define ktc_core_sb_to_string(sb) ((ktc_String){(sb)->ptr, (sb)->len})
 
-static inline void ktc_sb_append_char(ktc_StrBuf* sb, ktc_Char c) {
+static inline void ktc_core_sb_append_char(ktc_StrBuf* sb, ktc_Char c) {
     if (!sb->ptr) { sb->len++; return; }
     if (sb->len < sb->cap) sb->ptr[sb->len++] = c;
 }
 
-#define ktc_sb_append_bool(sb, v) \
-    ktc_sb_append_str(sb, (v) ? ktc_str("true") : ktc_str("false"))
+#define ktc_core_sb_append_bool(sb, v) \
+    ktc_core_sb_append_str(sb, (v) ? ktc_core_str("true") : ktc_core_str("false"))
 
-void ktc_sb_append_str(ktc_StrBuf* sb, ktc_String s);
-void ktc_sb_append_cstr(ktc_StrBuf* sb, const ktc_Char* s);
-void ktc_sb_append_int(ktc_StrBuf* sb, ktc_Int v);
-void ktc_sb_append_long(ktc_StrBuf* sb, ktc_Long v);
-void ktc_sb_append_double(ktc_StrBuf* sb, ktc_Double v);
-void ktc_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v);
-void ktc_sb_append_short(ktc_StrBuf* sb, ktc_Short v);
-void ktc_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v);
-void ktc_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v);
-void ktc_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v);
-void ktc_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v);
-void ktc_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r);
+void ktc_core_sb_append_str(ktc_StrBuf* sb, ktc_String s);
+void ktc_core_sb_append_cstr(ktc_StrBuf* sb, const ktc_Char* s);
+void ktc_core_sb_append_int(ktc_StrBuf* sb, ktc_Int v);
+void ktc_core_sb_append_long(ktc_StrBuf* sb, ktc_Long v);
+void ktc_core_sb_append_float(ktc_StrBuf* sb, ktc_Float v);
+void ktc_core_sb_append_double(ktc_StrBuf* sb, ktc_Double v);
+void ktc_core_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v);
+void ktc_core_sb_append_short(ktc_StrBuf* sb, ktc_Short v);
+void ktc_core_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v);
+void ktc_core_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v);
+void ktc_core_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v);
+void ktc_core_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v);
+void ktc_core_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: UTF-8
@@ -340,45 +341,45 @@ void ktc_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r);
 
 /** Decode one UTF-8 code point. Sets *byteLen to bytes consumed (1-4).
  * Invalid sequences return U+FFFD with *byteLen = 1. */
-ktc_Rune ktc_utf8_decode(const ktc_Char* p, ktc_Int* byteLen);
+ktc_Rune ktc_core_utf8_decode(const ktc_Char* p, ktc_Int* byteLen);
 
 /** Encode a code point into out[4]. Returns byte count (1-4). */
-ktc_Int ktc_utf8_encode(ktc_Rune r, ktc_Char* out);
+ktc_Int ktc_core_utf8_encode(ktc_Rune r, ktc_Char* out);
 
 /** Count Unicode code points — O(n) scan. */
-ktc_Int ktc_str_runeLen(ktc_String s);
+ktc_Int ktc_core_str_runeLen(ktc_String s);
 
 /** Decode the code point at byte offset pos. Returns U+FFFD if out of range. */
-static inline ktc_Rune ktc_str_runeAt(ktc_String s, ktc_Int pos) {
+static inline ktc_Rune ktc_core_str_runeAt(ktc_String s, ktc_Int pos) {
     if (pos < 0 || pos >= s.len) return 0xFFFD;
     ktc_Int blen;
-    return ktc_utf8_decode(s.ptr + pos, &blen);
+    return ktc_core_utf8_decode(s.ptr + pos, &blen);
 }
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Hash
 // ══════════════════════════════════════════════════════════════════
 
-static inline ktc_Int ktc_hash_i8(ktc_Byte v)    { return (ktc_Int)v; }
-static inline ktc_Int ktc_hash_i16(ktc_Short v)  { return (ktc_Int)v; }
-static inline ktc_Int ktc_hash_i32(ktc_Int v)    { return v; }
-static inline ktc_Int ktc_hash_i64(ktc_Long v)   { ktc_ULong u = (ktc_ULong)v; return (ktc_Int)(ktc_UInt)(u ^ (u >> 32)); }
-static inline ktc_Int ktc_hash_f32(ktc_Float v)  { ktc_UInt  b; memcpy(&b, &v, 4); return (ktc_Int)b; }
-static inline ktc_Int ktc_hash_f64(ktc_Double v) { ktc_ULong b; memcpy(&b, &v, 8); return (ktc_Int)(ktc_UInt)(b ^ (b >> 32)); }
-static inline ktc_Int ktc_hash_bool(ktc_Bool v)  { return v ? 1 : 0; }
-static inline ktc_Int ktc_hash_char(ktc_Char v)  { return (ktc_Int)(unsigned char)v; }
-static inline ktc_Int ktc_hash_u8(ktc_UByte v)   { return (ktc_Int)(ktc_UInt)v; }
-static inline ktc_Int ktc_hash_u16(ktc_UShort v) { return (ktc_Int)(ktc_UInt)v; }
-static inline ktc_Int ktc_hash_u32(ktc_UInt v)   { return (ktc_Int)v; }
-static inline ktc_Int ktc_hash_u64(ktc_ULong v)  { return (ktc_Int)(ktc_UInt)(v ^ (v >> 32)); }
-static inline ktc_Int ktc_hash_str(ktc_String s) {
+static inline ktc_Int ktc_core_hash_i8(ktc_Byte v)    { return (ktc_Int)v; }
+static inline ktc_Int ktc_core_hash_i16(ktc_Short v)  { return (ktc_Int)v; }
+static inline ktc_Int ktc_core_hash_i32(ktc_Int v)    { return v; }
+static inline ktc_Int ktc_core_hash_i64(ktc_Long v)   { ktc_ULong u = (ktc_ULong)v; return (ktc_Int)(ktc_UInt)(u ^ (u >> 32)); }
+static inline ktc_Int ktc_core_hash_f32(ktc_Float v)  { ktc_UInt  b; memcpy(&b, &v, 4); return (ktc_Int)b; }
+static inline ktc_Int ktc_core_hash_f64(ktc_Double v) { ktc_ULong b; memcpy(&b, &v, 8); return (ktc_Int)(ktc_UInt)(b ^ (b >> 32)); }
+static inline ktc_Int ktc_core_hash_bool(ktc_Bool v)  { return v ? 1 : 0; }
+static inline ktc_Int ktc_core_hash_char(ktc_Char v)  { return (ktc_Int)(unsigned char)v; }
+static inline ktc_Int ktc_core_hash_u8(ktc_UByte v)   { return (ktc_Int)(ktc_UInt)v; }
+static inline ktc_Int ktc_core_hash_u16(ktc_UShort v) { return (ktc_Int)(ktc_UInt)v; }
+static inline ktc_Int ktc_core_hash_u32(ktc_UInt v)   { return (ktc_Int)v; }
+static inline ktc_Int ktc_core_hash_u64(ktc_ULong v)  { return (ktc_Int)(ktc_UInt)(v ^ (v >> 32)); }
+static inline ktc_Int ktc_core_hash_str(ktc_String s) {
     ktc_UInt h = 2166136261u;
     for (ktc_Int i = 0; i < s.len; i++) { h ^= (ktc_UByte)s.ptr[i]; h *= 16777619u; }
     return (ktc_Int)h;
 }
 
 /** Murmur3-style finalisation mix. */
-static inline ktc_UInt ktc_fmix32(ktc_UInt h) {
+static inline ktc_UInt ktc_core_fmix32(ktc_UInt h) {
     h ^= h >> 16; h *= 0x85ebca6bU;
     h ^= h >> 13; h *= 0xc2b2ae35U;
     h ^= h >> 16;
@@ -389,20 +390,21 @@ static inline ktc_UInt ktc_fmix32(ktc_UInt h) {
 // MARK: Conversion
 // ══════════════════════════════════════════════════════════════════
 
-#define ktc_bool_to_string(v) ((v) ? ktc_str("true") : ktc_str("false"))
-ktc_String ktc_int_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Int v);
-ktc_String ktc_long_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Long v);
-ktc_String ktc_double_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Double v);
+#define ktc_core_bool_to_string(v) ((v) ? ktc_core_str("true") : ktc_core_str("false"))
+ktc_String ktc_core_int_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Int v);
+ktc_String ktc_core_long_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Long v);
+ktc_String ktc_core_float_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Float v);
+ktc_String ktc_core_double_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Double v);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Parsing
 // ══════════════════════════════════════════════════════════════════
 
-ktc_Int    ktc_str_toInt(ktc_String s);
-ktc_Long   ktc_str_toLong(ktc_String s);
-ktc_Double ktc_str_toDouble(ktc_String s);
+ktc_Int    ktc_core_str_toInt(ktc_String s);
+ktc_Long   ktc_core_str_toLong(ktc_String s);
+ktc_Double ktc_core_str_toDouble(ktc_String s);
 
 /** Returns false on parse failure (empty, non-numeric, or overflow). */
-ktc_Bool ktc_str_toIntOrNull(ktc_String s, ktc_Int* out);
-ktc_Bool ktc_str_toLongOrNull(ktc_String s, ktc_Long* out);
-ktc_Bool ktc_str_toDoubleOrNull(ktc_String s, ktc_Double* out);
+ktc_Bool ktc_core_str_toIntOrNull(ktc_String s, ktc_Int* out);
+ktc_Bool ktc_core_str_toLongOrNull(ktc_String s, ktc_Long* out);
+ktc_Bool ktc_core_str_toDoubleOrNull(ktc_String s, ktc_Double* out);

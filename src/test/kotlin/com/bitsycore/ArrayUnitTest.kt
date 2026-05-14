@@ -76,9 +76,9 @@ class ArrayUnitTest : TranspilerTestBase() {
             println(arr.size)
         """)
         r.sourceContains("ktc_Int_Optional*")
-        r.sourceContains("ktc_alloca")
+        r.sourceContains("ktc_core_alloca")
         r.sourceContains("arr\$len")
-        r.sourceContainsXTime("ktc_alloca", 1)
+        r.sourceContainsXTime("ktc_core_alloca", 1)
     }
 
     @Test fun arrayOfNullsString() {
@@ -88,7 +88,7 @@ class ArrayUnitTest : TranspilerTestBase() {
         """)
         r.sourceContains("ktc_String_Optional*")
         r.sourceContains("arr\$len")
-        r.sourceContainsXTime("ktc_alloca", 1)
+        r.sourceContainsXTime("ktc_core_alloca", 1)
     }
 
     @Test fun arrayOfNullsAccess() {
@@ -98,7 +98,7 @@ class ArrayUnitTest : TranspilerTestBase() {
         """)
         r.sourceContains("ktc_Int_Optional")
         r.sourceContains("arr")
-        r.sourceContainsXTime("ktc_alloca", 1)
+        r.sourceContainsXTime("ktc_core_alloca", 1)
     }
 
     @Test fun arrayOfNullsWithVariableSize() {
@@ -109,7 +109,7 @@ class ArrayUnitTest : TranspilerTestBase() {
         """)
         r.sourceContains("ktc_Float_Optional*")
         r.sourceContains("arr\$len")
-        r.sourceContainsXTime("ktc_alloca")
+        r.sourceContainsXTime("ktc_core_alloca")
     }
 
 }

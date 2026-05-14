@@ -17,7 +17,7 @@ class CInteropUnitTest : TranspilerTestBase() {
 
     @Test fun cPrintfWithString() {
         val r = transpileMain("""c.printf("hello %d", 42)""")
-        // string literals in c.* calls are unwrapped to raw C strings (not ktc_str)
+        // string literals in c.* calls are unwrapped to raw C strings (not ktc_core_str)
         r.sourceContains("printf(\"hello %d\", 42)")
     }
 

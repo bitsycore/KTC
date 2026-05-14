@@ -44,7 +44,7 @@ class ConstructorUnitTest : TranspilerTestBase() {
     @Test
     fun ctorParamDefaultValue() {
         val r = transpileMain("val p = Player()", decls = "class Player(val name: String = \"unknown\")")
-        r.sourceContains("test_Main_Player_primaryConstructor(ktc_str(\"unknown\"))")
+        r.sourceContains("test_Main_Player_primaryConstructor(ktc_core_str(\"unknown\"))")
     }
 
     @Test
@@ -84,7 +84,7 @@ class ConstructorUnitTest : TranspilerTestBase() {
         """
         )
         r.sourceContains("test_Main_Player_emptyConstructor")
-        r.sourceContains("\$self = test_Main_Player_primaryConstructor(ktc_str(\"default\"));")
+        r.sourceContains("\$self = test_Main_Player_primaryConstructor(ktc_core_str(\"default\"));")
     }
 
     @Test
@@ -141,7 +141,7 @@ class ConstructorUnitTest : TranspilerTestBase() {
             val c = Player("Bob", 100)
             """
         )
-        r.sourceContains("test_Main_Player_primaryConstructor(ktc_str(\"Alice\"))")
+        r.sourceContains("test_Main_Player_primaryConstructor(ktc_core_str(\"Alice\"))")
         r.sourceContains("test_Main_Player_emptyConstructor")
         r.sourceContains("test_Main_Player_constructorWithString_Int")
         r.sourceContains("health = 0;")

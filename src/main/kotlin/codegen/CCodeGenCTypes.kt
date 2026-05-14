@@ -102,11 +102,11 @@ internal fun CCodeGen.emitArrayParamCopies(inParams: List<Param>, inInd: String)
         if (vP.type.nullable) {
             impl.appendLine("${inInd}$vElemCType* local$${vP.name} = NULL;")
             impl.appendLine("${inInd}if (${vP.name}.data != NULL) {")
-            impl.appendLine("$inInd    local$${vP.name} = ($vElemCType*)ktc_alloca(sizeof($vElemCType) * ${vP.name}.size);")
+            impl.appendLine("$inInd    local$${vP.name} = ($vElemCType*)ktc_core_alloca(sizeof($vElemCType) * ${vP.name}.size);")
             impl.appendLine("$inInd    memcpy(local$${vP.name}, ${vP.name}.data, sizeof($vElemCType) * ${vP.name}.size);")
             impl.appendLine("${inInd}}")
         } else {
-            impl.appendLine("${inInd}$vElemCType* local$${vP.name} = ($vElemCType*)ktc_alloca(sizeof($vElemCType) * ${vP.name}.size);")
+            impl.appendLine("${inInd}$vElemCType* local$${vP.name} = ($vElemCType*)ktc_core_alloca(sizeof($vElemCType) * ${vP.name}.size);")
             impl.appendLine("${inInd}memcpy(local$${vP.name}, ${vP.name}.data, sizeof($vElemCType) * ${vP.name}.size);")
         }
         trampolinedParams += vP.name
@@ -298,7 +298,7 @@ internal fun CCodeGen.defaultVal(t: KtcType): String = when (t) {
         else -> "0"
     }
 
-    is KtcType.Str -> "ktc_str(\"\")"
+    is KtcType.Str -> "ktc_core_str(\"\")"
     is KtcType.Ptr -> "NULL"
     else -> {
         val ct = cTypeStr(t.toInternalStr.removeSuffix("?"))

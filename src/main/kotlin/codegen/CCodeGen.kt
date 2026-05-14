@@ -138,7 +138,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal val interfaces = mutableMapOf<String, IfaceInfo>()
     // Type ID registry: each class/interface gets an incrementing integer ID for is/as checks
     internal val typeIds = mutableMapOf<String, Int>()
-    internal var nextTypeId = 14  // 0-13 reserved for builtin types (ktc_intrinsic.h)
+    internal var nextTypeId = 14  // 0-13 reserved for builtin types (ktc_core.h)
 
     init {
         for ((i, t) in listOf(
@@ -294,7 +294,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal var selfIsPointer = true
     // Objects with dispose methods — called on main() exit
     internal val objectsWithDispose = mutableListOf<String>()  // cName of objects with dispose
-    // @Tls-annotated objects and top-level properties → emit ktc_tls specifier
+    // @Tls-annotated objects and top-level properties → emit ktc_core_tls specifier
     internal val tlsObjects = mutableSetOf<String>()  // object names
     internal val tlsProps = mutableSetOf<String>()    // top-level property names
 
@@ -556,10 +556,10 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     // ── Memory tracking helpers (Kotlin source attribution) ──────────
     /** Kotlin source location string for current statement, e.g. `"File.kt", 42` */
     internal fun ktSrc(): String = "\"$currentSourceFile\", $currentStmtLine"
-    internal fun tMalloc(sizeExpr: String) = if (memTrack) "ktc_malloc($sizeExpr, ${ktSrc()})" else "malloc($sizeExpr)"
-    internal fun tCalloc(nExpr: String, sizeExpr: String) = if (memTrack) "ktc_calloc($nExpr, $sizeExpr, ${ktSrc()})" else "calloc($nExpr, $sizeExpr)"
-    internal fun tRealloc(ptrExpr: String, sizeExpr: String) = if (memTrack) "ktc_realloc($ptrExpr, $sizeExpr, ${ktSrc()})" else "realloc($ptrExpr, $sizeExpr)"
-    internal fun tFree(ptrExpr: String) = if (memTrack) "ktc_free($ptrExpr, ${ktSrc()})" else "free($ptrExpr)"
+    internal fun tMalloc(sizeExpr: String) = if (memTrack) "ktc_core_malloc($sizeExpr, ${ktSrc()})" else "malloc($sizeExpr)"
+    internal fun tCalloc(nExpr: String, sizeExpr: String) = if (memTrack) "ktc_core_calloc($nExpr, $sizeExpr, ${ktSrc()})" else "calloc($nExpr, $sizeExpr)"
+    internal fun tRealloc(ptrExpr: String, sizeExpr: String) = if (memTrack) "ktc_core_realloc($ptrExpr, $sizeExpr, ${ktSrc()})" else "realloc($ptrExpr, $sizeExpr)"
+    internal fun tFree(ptrExpr: String) = if (memTrack) "ktc_core_free($ptrExpr, ${ktSrc()})" else "free($ptrExpr)"
 
     // ── Pre-statements (hoisted before the current statement) ────────
     internal val preStmts = mutableListOf<String>()
@@ -804,17 +804,17 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 
     fun generate(): COutput {
         /* @file:DocumentationOnly files provide type information to other files but
-        produce no C output themselves — the real implementations live in ktc_intrinsic. */
+        produce no C output themselves — the real implementations live in ktc_core. */
         if (file.documentationOnly) return COutput("", "")
 
         collectDecls()
 
         hdr.appendLine("#pragma once")
         if (memTrack) hdr.appendLine("#define KTC_MEM_TRACK")
-        // ktc_* packages live in ktc/ subdir alongside ktc_intrinsic; user packages live one level up
+        // ktc_* packages live in ktc/ subdir alongside ktc_core; user packages live one level up
         val vIsKtcPkg = (file.pkg?.replace('.', '_') ?: "").startsWith("ktc_")
         val vKtcPrefix = if (vIsKtcPkg) "" else "ktc/"
-        hdr.appendLine("#include \"${vKtcPrefix}ktc_intrinsic.h\"")
+        hdr.appendLine("#include \"${vKtcPrefix}ktc_core.h\"")
         hdr.appendLine()
 
         // Imports → #include (skip ktc stdlib imports — handled below)

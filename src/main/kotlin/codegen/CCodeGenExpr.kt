@@ -52,7 +52,7 @@ import com.bitsycore.ktc.types.KtcType
 // ═══════════════════════════ Expression codegen ═══════════════════
 
 /** Generate an expression for use as a C function argument.
- *  String literals are emitted as raw C strings (not ktc_str wrapped). */
+ *  String literals are emitted as raw C strings (not ktc_core_str wrapped). */
 internal fun CCodeGen.genCArg(e: Expr): String = when (e) {
     is StrLit -> "\"${escapeStr(e.value)}\""
     else -> genExpr(e)
@@ -67,7 +67,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     is FloatLit -> "${e.value}f"
     is BoolLit -> if (e.value) "true" else "false"
     is CharLit -> "'${escapeC(e.value)}'"
-    is StrLit -> "ktc_str(\"${escapeStr(e.value)}\")"
+    is StrLit -> "ktc_core_str(\"${escapeStr(e.value)}\")"
     is NullLit -> "NULL"
     is ThisExpr -> {
         val inlineThis = lambdaParamSubst["\$this"]
@@ -508,19 +508,19 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         val eq = "${typeFlatName(classKey)}_equals($l, $r)"
         return if (e.op == "==") eq else "!$eq"
     }
-    // String == → ktc_string_eq
+    // String == → ktc_core_string_eq
     val ltKtc3 = inferExprTypeKtc(e.left)
     if (e.op == "==" && ltKtc3 is KtcType.Str) {
-        return "ktc_string_eq(${genExpr(e.left)}, ${genExpr(e.right)})"
+        return "ktc_core_string_eq(${genExpr(e.left)}, ${genExpr(e.right)})"
     }
     if (e.op == "!=" && ltKtc3 is KtcType.Str) {
-        return "!ktc_string_eq(${genExpr(e.left)}, ${genExpr(e.right)})"
+        return "!ktc_core_string_eq(${genExpr(e.left)}, ${genExpr(e.right)})"
     }
-    // String <, >, <=, >= → ktc_string_cmp
+    // String <, >, <=, >= → ktc_core_string_cmp
     if (ltKtc3 is KtcType.Str && e.op in listOf("<", ">", "<=", ">=")) {
-        return "(ktc_string_cmp(${genExpr(e.left)}, ${genExpr(e.right)}) ${e.op} 0)"
+        return "(ktc_core_string_cmp(${genExpr(e.left)}, ${genExpr(e.right)}) ${e.op} 0)"
     }
-    // String + → ktc_string_cat
+    // String + → ktc_core_string_cat
     if (e.op == "+" && (lt == "String" || inferExprType(e.right) == "String")) {
         return genStringConcat(e)
     }
@@ -624,7 +624,7 @@ internal fun inferInlineFunSubst(
 internal fun CCodeGen.genStringConcat(e: BinExpr): String {
     val buf = tmp()
     preStmts += "ktc_Char ${buf}[512];"
-    return "ktc_string_cat($buf, sizeof($buf), ${genExpr(e.left)}, ${genExpr(e.right)})"
+    return "ktc_core_string_cat($buf, sizeof($buf), ${genExpr(e.left)}, ${genExpr(e.right)})"
 }
 
 // ── function / constructor call ──────────────────────────────────
@@ -656,7 +656,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             return resultName
         }
         // C package passthrough: c.printf(...) → printf(...)
-        // String literals are emitted as raw C strings (not ktc_str wrapped)
+        // String literals are emitted as raw C strings (not ktc_core_str wrapped)
         if (e.callee.obj is NameExpr && e.callee.obj.name == "c" && lookupVar(e.callee.obj.name) == null) {
             val cFnName = e.callee.name
             val argStr = e.args.joinToString(", ") { genCArg(it.expr) }
@@ -1439,7 +1439,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             if (dot.obj is StrLit) {
                 val str = dot.obj.value
                 val trimmed = trimIndentImpl(str)
-                return "ktc_str(\"${escapeStr(trimmed)}\")"
+                return "ktc_core_str(\"${escapeStr(trimmed)}\")"
             }
             // Runtime: not supported
             codegenError("trimIndent() only supported on string literals")
@@ -1453,7 +1453,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                     (args[0].expr as? StrLit)?.value ?: "|"
                 } else "|"
                 val trimmed = trimMarginImpl(str, marginPrefix)
-                return "ktc_str(\"${escapeStr(trimmed)}\")"
+                return "ktc_core_str(\"${escapeStr(trimmed)}\")"
             }
             // Runtime: not supported
             codegenError("trimMargin() only supported on string literals")
@@ -1461,7 +1461,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
 
         "runeAt" -> {
             if (recvTypeKtc is KtcType.Str && args.size == 1) {
-                return "ktc_str_runeAt($recv, ${genExpr(args[0].expr)})"
+                return "ktc_core_str_runeAt($recv, ${genExpr(args[0].expr)})"
             }
             codegenError("runeAt() only supported on String with a byteIndex argument")
         }
@@ -1477,22 +1477,22 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
 
         "toInt" -> {
-            if (recvTypeKtc is KtcType.Str) return "ktc_str_toInt($recv)"
+            if (recvTypeKtc is KtcType.Str) return "ktc_core_str_toInt($recv)"
             return "((ktc_Int)($recv))"
         }
 
         "toLong" -> {
-            if (recvTypeKtc is KtcType.Str) return "ktc_str_toLong($recv)"
+            if (recvTypeKtc is KtcType.Str) return "ktc_core_str_toLong($recv)"
             return "((ktc_Long)($recv))"
         }
 
         "toFloat" -> {
-            if (recvTypeKtc is KtcType.Str) return "((ktc_Float)ktc_str_toDouble($recv))"
+            if (recvTypeKtc is KtcType.Str) return "((ktc_Float)ktc_core_str_toDouble($recv))"
             return "((ktc_Float)($recv))"
         }
 
         "toDouble" -> {
-            if (recvTypeKtc is KtcType.Str) return "ktc_str_toDouble($recv)"
+            if (recvTypeKtc is KtcType.Str) return "ktc_core_str_toDouble($recv)"
             return "((ktc_Double)($recv))"
         }
 
@@ -1509,7 +1509,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "ktc_Int ${t}_val;"
             preStmts += "ktc_Int_Optional $t;"
-            preStmts += "$t.tag = ktc_str_toIntOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
+            preStmts += "$t.tag = ktc_core_str_toIntOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
         }
@@ -1518,7 +1518,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "ktc_Long ${t}_val;"
             preStmts += "ktc_Long_Optional $t;"
-            preStmts += "$t.tag = ktc_str_toLongOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
+            preStmts += "$t.tag = ktc_core_str_toLongOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
         }
@@ -1527,7 +1527,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "ktc_Double ${t}_val;"
             preStmts += "ktc_Double_Optional $t;"
-            preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
+            preStmts += "$t.tag = ktc_core_str_toDoubleOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
         }
@@ -1536,7 +1536,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "ktc_Double ${t}_d;"
             preStmts += "ktc_Float_Optional $t;"
-            preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_d) ? ktc_SOME : ktc_NONE;"
+            preStmts += "$t.tag = ktc_core_str_toDoubleOrNull($recv, &${t}_d) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = (ktc_Float)${t}_d;"
             markOptional(t)
         }
@@ -1544,7 +1544,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "substring" -> if (recvTypeKtc is KtcType.Str) {
             val from = genExpr(args[0].expr)
             val to = if (args.size >= 2) genExpr(args[1].expr) else "$recv.len"
-            return "ktc_string_substring($recv, $from, $to)"
+            return "ktc_core_string_substring($recv, $from, $to)"
         }
 
         "startsWith" -> if (recvTypeKtc is KtcType.Str) {
@@ -1585,22 +1585,22 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             if (recvTypeKtc != null) {
                 return when (recvTypeKtc) {
                     is KtcType.Prim -> when (recvTypeKtc.kind) {
-                        KtcType.PrimKind.Byte -> "ktc_hash_i8($recv)"
-                        KtcType.PrimKind.Short -> "ktc_hash_i16($recv)"
-                        KtcType.PrimKind.Int -> "ktc_hash_i32($recv)"
-                        KtcType.PrimKind.Long -> "ktc_hash_i64($recv)"
-                        KtcType.PrimKind.Float -> "ktc_hash_f32($recv)"
-                        KtcType.PrimKind.Double -> "ktc_hash_f64($recv)"
-                        KtcType.PrimKind.Boolean -> "ktc_hash_bool($recv)"
-                        KtcType.PrimKind.Char -> "ktc_hash_char($recv)"
-                        KtcType.PrimKind.UByte -> "ktc_hash_u8($recv)"
-                        KtcType.PrimKind.UShort -> "ktc_hash_u16($recv)"
-                        KtcType.PrimKind.UInt -> "ktc_hash_u32($recv)"
-                        KtcType.PrimKind.ULong -> "ktc_hash_u64($recv)"
-                        KtcType.PrimKind.Rune -> "ktc_hash_i32($recv)"
+                        KtcType.PrimKind.Byte -> "ktc_core_hash_i8($recv)"
+                        KtcType.PrimKind.Short -> "ktc_core_hash_i16($recv)"
+                        KtcType.PrimKind.Int -> "ktc_core_hash_i32($recv)"
+                        KtcType.PrimKind.Long -> "ktc_core_hash_i64($recv)"
+                        KtcType.PrimKind.Float -> "ktc_core_hash_f32($recv)"
+                        KtcType.PrimKind.Double -> "ktc_core_hash_f64($recv)"
+                        KtcType.PrimKind.Boolean -> "ktc_core_hash_bool($recv)"
+                        KtcType.PrimKind.Char -> "ktc_core_hash_char($recv)"
+                        KtcType.PrimKind.UByte -> "ktc_core_hash_u8($recv)"
+                        KtcType.PrimKind.UShort -> "ktc_core_hash_u16($recv)"
+                        KtcType.PrimKind.UInt -> "ktc_core_hash_u32($recv)"
+                        KtcType.PrimKind.ULong -> "ktc_core_hash_u64($recv)"
+                        KtcType.PrimKind.Rune -> "ktc_core_hash_i32($recv)"
                     }
 
-                    is KtcType.Str -> "ktc_hash_str($recv)"
+                    is KtcType.Str -> "ktc_core_hash_str($recv)"
                     else -> {
                         // @Ptr class pointer → call ClassName_hashCode(pointer)
                         val pointerBase = (recvTypeKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
@@ -2013,7 +2013,7 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
     if (e.name == "size" && recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) return "${recv}\$len"
     if (e.name == "length" && recvTypeKtc is KtcType.Str) return "$recv.len"
-    if (e.name == "runeLen" && recvTypeKtc is KtcType.Str) return "ktc_str_runeLen($recv)"
+    if (e.name == "runeLen" && recvTypeKtc is KtcType.Str) return "ktc_core_str_runeLen($recv)"
     // Enum .ordinal → the int value itself
     val vOrdinalEnumInfo = enumInfoFor(recvTypeCoreKtc)                               // non-null if receiver is an enum (for ordinal/name)
     if (e.name == "ordinal" && vOrdinalEnumInfo != null) return recv
@@ -2505,7 +2505,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);"
-        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_core_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);"
         return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
@@ -2531,7 +2531,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         val buf = tmp()
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);"
-        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_core_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);"
         return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
@@ -2622,35 +2622,35 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
     val maxLen = templateMaxLen(e)
     if (maxLen != null && maxLen <= 512) {
         // Single pass with alloca buffer (alloca = function-frame lifetime, safe when pointer escapes block)
-        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca($maxLen);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_core_alloca($maxLen);"
         preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
         for (p in parts) {
             when {
-                p.lit != null -> preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));"
+                p.lit != null -> preStmts += "ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"${escapeStr(p.lit)}\"));"
                 p.sbAppend != null -> preStmts += p.sbAppend
             }
         }
-        return "ktc_sb_to_string(&${buf}_sb)"
+        return "ktc_core_sb_to_string(&${buf}_sb)"
     }
     // First pass: count length with NULL buffer
     preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
     for (p in parts) {
         when {
-            p.lit != null -> preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));"
+            p.lit != null -> preStmts += "ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"${escapeStr(p.lit)}\"));"
             p.sbAppend != null -> preStmts += p.sbAppend
         }
     }
     // Allocate exact size
-    preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+    preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_core_alloca(${buf}_sb.len + 1);"
     preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
     // Second pass: write to real buffer
     for (p in parts) {
         when {
-            p.lit != null -> preStmts += "ktc_sb_append_str(&${buf}_sb, ktc_str(\"${escapeStr(p.lit)}\"));"
+            p.lit != null -> preStmts += "ktc_core_sb_append_str(&${buf}_sb, ktc_core_str(\"${escapeStr(p.lit)}\"));"
             p.sbAppend != null -> preStmts += p.sbAppend
         }
     }
-    return "ktc_sb_to_string(&${buf}_sb)"
+    return "ktc_core_sb_to_string(&${buf}_sb)"
 }
 
 // ── compile-time toString max length inference ──────────────────
@@ -2665,8 +2665,8 @@ private val toStringPrimitiveMaxLen = mapOf(
     "UInt" to 10,  // "4294967295"
     "Long" to 20,  // "-9223372036854775808"
     "ULong" to 20,  // "18446744073709551615"
-    "Float" to 64,  // %f via ktc_sb_append_double
-    "Double" to 64,  // %f via ktc_sb_append_double
+    "Float" to 64,  // %f via ktc_core_sb_append_double
+    "Double" to 64,  // %f via ktc_core_sb_append_double
     "Char" to 8    // %c format buffer
 )
 
@@ -2742,7 +2742,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             preStmts += "ktc_Char ${buf}[$maxLen];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
             preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
-            return "ktc_sb_to_string(&${buf}_sb)"
+            return "ktc_core_sb_to_string(&${buf}_sb)"
         }
         // Two-pass with alloca (unbounded fields or too large)
         val buf = tmp()
@@ -2750,10 +2750,10 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
-        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_core_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
-        return "ktc_sb_to_string(&${buf}_sb)"
+        return "ktc_core_sb_to_string(&${buf}_sb)"
     }
     return when (type) {
         "Byte" -> {
@@ -2761,8 +2761,8 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 6   // "-128\0" = 5+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_byte(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_byte(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "Short" -> {
@@ -2770,8 +2770,8 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 7   // "-32768\0" = 6+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_short(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_short(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "Int" -> {
@@ -2779,8 +2779,8 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 12   // "-2147483648\0" = 11+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_int(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_int(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "Long" -> {
@@ -2788,8 +2788,8 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 21   // "-9223372036854775808\0" = 20+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_long(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_long(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "UByte" -> {
@@ -2797,8 +2797,8 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 4   // "255\0" = 3+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_ubyte(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_ubyte(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "UShort" -> {
@@ -2806,8 +2806,8 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 6   // "65535\0" = 5+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_ushort(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_ushort(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "UInt" -> {
@@ -2815,8 +2815,8 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 11   // "4294967295\0" = 10+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_uint(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_uint(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "ULong" -> {
@@ -2824,22 +2824,22 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 21   // "18446744073709551615\0" = 20+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
-            preStmts += "ktc_sb_append_ulong(&${buf}_sb, $recv);"
-            "ktc_sb_to_string(&${buf}_sb)"
+            preStmts += "ktc_core_sb_append_ulong(&${buf}_sb, $recv);"
+            "ktc_core_sb_to_string(&${buf}_sb)"
         }
 
         "Float" -> {
             val buf = tmp()
             preStmts += "ktc_Char ${buf}[32];"
             preStmts += "snprintf($buf, 32, \"%g\", (ktc_Double)($recv));"
-            "ktc_str($buf)"
+            "ktc_core_str($buf)"
         }
 
         "Double" -> {
             val buf = tmp()
             preStmts += "ktc_Char ${buf}[32];"
             preStmts += "snprintf($buf, 32, \"%g\", $recv);"
-            "ktc_str($buf)"
+            "ktc_core_str($buf)"
         }
 
         "Boolean" -> {
@@ -2847,14 +2847,14 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val sz = 6   // "false\0" = 5+1
             preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "snprintf($buf, $sz, \"%s\", ($recv) ? \"true\" : \"false\");"
-            "ktc_str($buf)"
+            "ktc_core_str($buf)"
         }
 
         "Char" -> {
             val buf = tmp()
             preStmts += "ktc_Char ${buf}[8];"
             preStmts += "snprintf($buf, 8, \"%c\", (ktc_Char)($recv));"
-            "ktc_str($buf)"
+            "ktc_core_str($buf)"
         }
 
         "String" -> recv
@@ -2871,14 +2871,14 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
                 val selfExpr = if (parseResolvedTypeName(type) is KtcType.Ptr) recv else "&$recv"
                 preStmts += "ktc_Char ${buf}[$sz];"
                 preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
-                "ktc_str($buf)"
+                "ktc_core_str($buf)"
             } else if (hasIface) {
                 val buf = tmp()
                 preStmts += "ktc_Char ${buf}[$sz];"
                 preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode(${ifaceVtableSelf(base, recv)}));"
-                "ktc_str($buf)"
+                "ktc_core_str($buf)"
             } else {
-                "ktc_str(\"<$type>\")"
+                "ktc_core_str(\"<$type>\")"
             }
         }
     }
@@ -2891,23 +2891,23 @@ internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): S
         val vTmp = tmp()
         preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
         preStmts += "${typeFlatName(type)}_toString(&$vTmp, &$sb);"
-        return "ktc_sb_to_string(&$sb)"
+        return "ktc_core_sb_to_string(&$sb)"
     }
     // For primitives and other types, append to the given StrBuf
     when (type) {
-        "Byte" -> preStmts += "ktc_sb_append_byte(&$sb, $recv);"
-        "Short" -> preStmts += "ktc_sb_append_short(&$sb, $recv);"
-        "Int" -> preStmts += "ktc_sb_append_int(&$sb, $recv);"
-        "Long" -> preStmts += "ktc_sb_append_long(&$sb, $recv);"
-        "Float" -> preStmts += "ktc_sb_append_double(&$sb, (ktc_Double)$recv);"
-        "Double" -> preStmts += "ktc_sb_append_double(&$sb, $recv);"
-        "Boolean" -> preStmts += "ktc_sb_append_bool(&$sb, $recv);"
-        "Char" -> preStmts += "ktc_sb_append_char(&$sb, $recv);"
+        "Byte" -> preStmts += "ktc_core_sb_append_byte(&$sb, $recv);"
+        "Short" -> preStmts += "ktc_core_sb_append_short(&$sb, $recv);"
+        "Int" -> preStmts += "ktc_core_sb_append_int(&$sb, $recv);"
+        "Long" -> preStmts += "ktc_core_sb_append_long(&$sb, $recv);"
+        "Float" -> preStmts += "ktc_core_sb_append_float(&$sb, $recv);"
+        "Double" -> preStmts += "ktc_core_sb_append_double(&$sb, $recv);"
+        "Boolean" -> preStmts += "ktc_core_sb_append_bool(&$sb, $recv);"
+        "Char" -> preStmts += "ktc_core_sb_append_char(&$sb, $recv);"
         "String" -> return recv
-        "UByte" -> preStmts += "ktc_sb_append_ubyte(&$sb, $recv);"
-        "UShort" -> preStmts += "ktc_sb_append_ushort(&$sb, $recv);"
-        "UInt" -> preStmts += "ktc_sb_append_uint(&$sb, $recv);"
-        "ULong" -> preStmts += "ktc_sb_append_ulong(&$sb, $recv);"
+        "UByte" -> preStmts += "ktc_core_sb_append_ubyte(&$sb, $recv);"
+        "UShort" -> preStmts += "ktc_core_sb_append_ushort(&$sb, $recv);"
+        "UInt" -> preStmts += "ktc_core_sb_append_uint(&$sb, $recv);"
+        "ULong" -> preStmts += "ktc_core_sb_append_ulong(&$sb, $recv);"
         else -> {
             val base = type.removeSuffix("*").removeSuffix("?")
             val hasHash = classes.containsKey(base) || objects.containsKey(base)
@@ -2918,18 +2918,18 @@ internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): S
                 val buf = tmp()
                 preStmts += "ktc_Char ${buf}[64];"
                 preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
-                preStmts += "ktc_sb_append_cstr(&$sb, $buf);"
+                preStmts += "ktc_core_sb_append_cstr(&$sb, $buf);"
             } else if (hasIface) {
                 val buf = tmp()
                 preStmts += "ktc_Char ${buf}[64];"
                 preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode(${ifaceVtableSelf(base, recv)}));"
-                preStmts += "ktc_sb_append_cstr(&$sb, $buf);"
+                preStmts += "ktc_core_sb_append_cstr(&$sb, $buf);"
             } else {
-                preStmts += "ktc_sb_append_str(&$sb, ktc_str(\"<$type>\"));"
+                preStmts += "ktc_core_sb_append_str(&$sb, ktc_core_str(\"<$type>\"));"
             }
         }
     }
-    return "ktc_sb_to_string(&$sb)"
+    return "ktc_core_sb_to_string(&$sb)"
 }
 
 // ── StrBuf append helper ─────────────────────────────────────────
@@ -2943,32 +2943,32 @@ internal fun CCodeGen.genSbAppendKtc(sbRef: String, expr: String, type: KtcType)
         val base = type.inner
         if (isValueNullableKtc(type)) {
             val inner = genSbAppendKtc(sbRef, "($expr).value", base).removeSuffix(";")
-            return "if (($expr).tag == ktc_SOME) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
+            return "if (($expr).tag == ktc_SOME) { $inner; } else { ktc_core_sb_append_str($sbRef, ktc_core_str(\"null\")); }"
         } else if (base is KtcType.Ptr) {
             val inner = genSbAppendKtc(sbRef, expr, base).removeSuffix(";")
-            return "if ($expr != NULL) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
+            return "if ($expr != NULL) { $inner; } else { ktc_core_sb_append_str($sbRef, ktc_core_str(\"null\")); }"
         } else {
             val inner = genSbAppendKtc(sbRef, expr, base).removeSuffix(";")
-            return "if (${expr}\$has) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
+            return "if (${expr}\$has) { $inner; } else { ktc_core_sb_append_str($sbRef, ktc_core_str(\"null\")); }"
         }
     }
     return when (type) {
         is KtcType.Prim -> when (type.kind) {
-            KtcType.PrimKind.Byte -> "ktc_sb_append_byte($sbRef, $expr);"
-            KtcType.PrimKind.Short -> "ktc_sb_append_short($sbRef, $expr);"
-            KtcType.PrimKind.Int -> "ktc_sb_append_int($sbRef, $expr);"
-            KtcType.PrimKind.Long -> "ktc_sb_append_long($sbRef, $expr);"
-            KtcType.PrimKind.Float -> "ktc_sb_append_double($sbRef, (ktc_Double)$expr);"
-            KtcType.PrimKind.Double -> "ktc_sb_append_double($sbRef, $expr);"
-            KtcType.PrimKind.Boolean -> "ktc_sb_append_bool($sbRef, $expr);"
-            KtcType.PrimKind.Char -> "ktc_sb_append_char($sbRef, $expr);"
-            KtcType.PrimKind.UByte -> "ktc_sb_append_ubyte($sbRef, $expr);"
-            KtcType.PrimKind.UShort -> "ktc_sb_append_ushort($sbRef, $expr);"
-            KtcType.PrimKind.UInt -> "ktc_sb_append_uint($sbRef, $expr);"
-            KtcType.PrimKind.ULong -> "ktc_sb_append_ulong($sbRef, $expr);"
-            KtcType.PrimKind.Rune -> "ktc_sb_append_int($sbRef, $expr);"
+            KtcType.PrimKind.Byte -> "ktc_core_sb_append_byte($sbRef, $expr);"
+            KtcType.PrimKind.Short -> "ktc_core_sb_append_short($sbRef, $expr);"
+            KtcType.PrimKind.Int -> "ktc_core_sb_append_int($sbRef, $expr);"
+            KtcType.PrimKind.Long -> "ktc_core_sb_append_long($sbRef, $expr);"
+            KtcType.PrimKind.Float -> "ktc_core_sb_append_float($sbRef, $expr);"
+            KtcType.PrimKind.Double -> "ktc_core_sb_append_double($sbRef, $expr);"
+            KtcType.PrimKind.Boolean -> "ktc_core_sb_append_bool($sbRef, $expr);"
+            KtcType.PrimKind.Char -> "ktc_core_sb_append_char($sbRef, $expr);"
+            KtcType.PrimKind.UByte -> "ktc_core_sb_append_ubyte($sbRef, $expr);"
+            KtcType.PrimKind.UShort -> "ktc_core_sb_append_ushort($sbRef, $expr);"
+            KtcType.PrimKind.UInt -> "ktc_core_sb_append_uint($sbRef, $expr);"
+            KtcType.PrimKind.ULong -> "ktc_core_sb_append_ulong($sbRef, $expr);"
+            KtcType.PrimKind.Rune -> "ktc_core_sb_append_int($sbRef, $expr);"
         }
-        is KtcType.Str -> "ktc_sb_append_str($sbRef, $expr);"
+        is KtcType.Str -> "ktc_core_sb_append_str($sbRef, $expr);"
         is KtcType.User -> {
             if (type.kind == KtcType.UserKind.DataClass) {
                 val baseName = type.baseName
@@ -2976,7 +2976,7 @@ internal fun CCodeGen.genSbAppendKtc(sbRef: String, expr: String, type: KtcType)
                     val vTmp = tmp()
                     "{ ${type.toCType()} $vTmp = ($expr); ${typeFlatName(baseName)}_toString(&$vTmp, $sbRef); }"
                 } else {
-                    "ktc_sb_append_str($sbRef, ktc_str(\"<${type.toCType()}>\"));"
+                    "ktc_core_sb_append_str($sbRef, ktc_core_str(\"<${type.toCType()}>\"));"
                 }
             } else {
                 val baseName = type.baseName
@@ -2986,14 +2986,14 @@ internal fun CCodeGen.genSbAppendKtc(sbRef: String, expr: String, type: KtcType)
                     val cName = typeFlatName(baseName)
                     preStmts += "ktc_Char ${buf}[64];"
                     preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(baseName)}\", ${cName}_hashCode(&$expr));"
-                    "ktc_sb_append_cstr($sbRef, $buf);"
+                    "ktc_core_sb_append_cstr($sbRef, $buf);"
                 } else if (interfaces.containsKey(baseName)) {
                     val buf = tmp()
                     preStmts += "ktc_Char ${buf}[64];"
                     preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(baseName)}\", $expr.vt->hashCode(${ifaceVtableSelf(baseName, expr)}));"
-                    "ktc_sb_append_cstr($sbRef, $buf);"
+                    "ktc_core_sb_append_cstr($sbRef, $buf);"
                 } else {
-                    "ktc_sb_append_str($sbRef, ktc_str(\"<$typeStr>\"));"
+                    "ktc_core_sb_append_str($sbRef, ktc_core_str(\"<$typeStr>\"));"
                 }
             }
         }
@@ -3009,12 +3009,12 @@ internal fun CCodeGen.genSbAppendKtc(sbRef: String, expr: String, type: KtcType)
                 val cName = typeFlatName(baseStr)
                 preStmts += "ktc_Char ${buf}[64];"
                 preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(baseStr)}\", ${cName}_hashCode($expr));"
-                "ktc_sb_append_cstr($sbRef, $buf);"
+                "ktc_core_sb_append_cstr($sbRef, $buf);"
             } else {
-                "ktc_sb_append_str($sbRef, ktc_str(\"<${baseStr}>\"));"
+                "ktc_core_sb_append_str($sbRef, ktc_core_str(\"<${baseStr}>\"));"
             }
         }
-        else -> "ktc_sb_append_str($sbRef, ktc_str(\"<${type.toCType()}>\"));"
+        else -> "ktc_core_sb_append_str($sbRef, ktc_core_str(\"<${type.toCType()}>\"));"
     }
 }
 
@@ -3065,7 +3065,7 @@ internal fun CCodeGen.genArrayOfExpr(
 internal fun CCodeGen.genNewArray(elemCType: String, args: List<Arg>): String {
     val size = if (args.isNotEmpty()) genExpr(args[0].expr) else "0"
     val t = tmp()
-    preStmts += "$elemCType* $t = ($elemCType*)ktc_alloca(sizeof($elemCType) * (size_t)($size));"
+    preStmts += "$elemCType* $t = ($elemCType*)ktc_core_alloca(sizeof($elemCType) * (size_t)($size));"
     preStmts += "const ktc_Int ${t}\$len = $size;"
     return t
 }
@@ -3076,7 +3076,7 @@ internal fun CCodeGen.genNewArrayWithLambda(elemCType: String, args: List<Arg>):
     val lambda = args[1].expr as LambdaExpr
     val itName = lambda.params.firstOrNull() ?: "it"
     val t = tmp()
-    preStmts += "$elemCType* $t = ($elemCType*)ktc_alloca(sizeof($elemCType) * (size_t)($size));"
+    preStmts += "$elemCType* $t = ($elemCType*)ktc_core_alloca(sizeof($elemCType) * (size_t)($size));"
     preStmts += "const ktc_Int ${t}\$len = $size;"
     preStmts += "for (ktc_Int $itName = 0; $itName < $size; $itName++) {"
     // Lambda body: must be a single expression producing the element value

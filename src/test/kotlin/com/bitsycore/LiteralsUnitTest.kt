@@ -222,12 +222,12 @@ class LiteralsUnitTest : TranspilerTestBase() {
 
     @Test fun stringSimple() {
         val r = transpileMain("val x = \"Hello\"\nprintln(x)")
-        r.sourceContains("ktc_str(\"Hello\")")
+        r.sourceContains("ktc_core_str(\"Hello\")")
     }
 
     @Test fun stringEmpty() {
         val r = transpileMain("val x = \"\"\nprintln(x)")
-        r.sourceContains("ktc_str(\"\")")
+        r.sourceContains("ktc_core_str(\"\")")
     }
 
     @Test fun stringEscape() {
