@@ -572,7 +572,9 @@ class Parser(private val tokens: List<Token>) {
                     parsePrimary()
                 } else {
                     val op = advance().value; skipNL()
-                    PrefixExpr(op, parsePrefixExpr())
+                    // Apply postfix chain (. [] () !!) to the operand first so that
+                    // !foo.bar() parses as !(foo.bar()) rather than (!foo).bar()
+                    PrefixExpr(op, parsePostfixChain(parsePrefixExpr()))
                 }
             }
             at(TokenType.PLUS) -> { advance(); skipNL(); parsePrefixExpr() }   // unary + is no-op

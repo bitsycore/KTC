@@ -439,6 +439,18 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             }
         }
     }
+    // Check: comparing a value-nullable T? directly against a non-nullable value (not null literal)
+    if (e.op in setOf("==", "!=", "<", ">", "<=", ">=")) {
+        val rt = inferExprType(e.right)
+        if (lt != null && lt.endsWith("?") && isValueNullableType(lt) &&
+            rt != null && !rt.endsWith("?") && e.right !is NullLit) {
+            codegenError("Cannot compare nullable '$lt' directly with non-nullable '$rt'; use a null check to unwrap first")
+        }
+        if (rt != null && rt.endsWith("?") && isValueNullableType(rt) &&
+            lt != null && !lt.endsWith("?") && e.left !is NullLit) {
+            codegenError("Cannot compare non-nullable '$lt' directly with nullable '$rt'; use a null check to unwrap first")
+        }
+    }
     // Class == / != → ClassName_equals (all classes, not just data)
     if ((e.op == "==" || e.op == "!=") && lt != null && classes.containsKey(lt)) {
         val eq = "${typeFlatName(lt)}_equals(${genExpr(e.left)}, ${genExpr(e.right)})"
@@ -970,7 +982,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val vFilledArgs = fillDefaults(args, vCtorParamList, vAllParams.associate {
             val vCp = templateDecl?.ctorParams?.find { vP -> vP.name == it.name }  // matching ctor param
             it.name to vCp?.default
-        })
+        }, resolvedName, strict = true)
         val expandedArgs = expandCallArgs(vFilledArgs, vCtorParamList, isCtorCall = true)
         return "${ci.flatName}_primaryConstructor($expandedArgs)"                   // ci.flatName replaces pfx(mangledName)
     }
@@ -985,7 +997,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val vCtorParamList2 = vAllParams2.map { Param(it.name, it.typeRef) } // as Param list
             val vFilledArgs2 = fillDefaults(args, vCtorParamList2, vAllParams2.associate {
                 it.name to null
-            })
+            }, resolvedName, strict = true)
             val expandedArgs = expandCallArgs(vFilledArgs2, vCtorParamList2, isCtorCall = true)
             return "${ci.flatName}_primaryConstructor($expandedArgs)"               // ci.flatName replaces pfx(mangledName)
         }
@@ -1009,7 +1021,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val vCp = (file.decls.filterIsInstance<ClassDecl>().find { c -> c.name == resolvedName })
                 ?.ctorParams?.find { p -> p.name == it.name }                       // matching ctor param
             it.name to vCp?.default
-        })
+        }, resolvedName, strict = true)
         val expandedArgs = expandCallArgs(vFilledArgs3, vCtorParamList3, isCtorCall = true)
         return "${ci.flatName}_primaryConstructor($expandedArgs)"                   // ci.flatName replaces pfx(resolvedName)
     }
@@ -1046,7 +1058,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val t = tmp()
                 preStmts += "$elemCType ${t}[$size];"
                 preStmts += "const ktc_Int ${t}\$len = $size;"
-                val filledArgs = fillDefaults(args, genFun.params, genFun.params.associate { it.name to it.default })
+                val filledArgs = fillDefaults(args, genFun.params, genFun.params.associate { it.name to it.default }, genFun.name, strict = true)
                 val expandedArgs2 = expandCallArgs(filledArgs, genFun.params)
                 val allArgs = if (expandedArgs2.isEmpty()) t else "$expandedArgs2, $t"
                 preStmts += "${funCName(mangledName)}($allArgs);"
@@ -1055,7 +1067,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 return t
             }
             // Fill in default arguments
-            val filledArgs = fillDefaults(args, genFun.params, genFun.params.associate { it.name to it.default })
+            val filledArgs = fillDefaults(args, genFun.params, genFun.params.associate { it.name to it.default }, genFun.name, strict = true)
             val expandedArgs2 = expandCallArgs(filledArgs, genFun.params)
             typeSubst = prevSubst
             return "${funCName(mangledName)}($expandedArgs2)"
@@ -1081,7 +1093,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val overloadedName = methodName(methodDecl, ci!!.methods)
             val fnName = if (methodDecl.isPrivate) "PRIV_$overloadedName" else overloadedName
             // Re-expand args with the method's actual param types (ensures $len is added for @Ptr arrays)
-            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
             val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
             val selfArg = if (selfIsPointer) "\$self" else "&\$self"
             val allArgs = if (expandedArgs2.isEmpty()) selfArg else "$selfArg, $expandedArgs2"
@@ -1106,7 +1118,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             if (methodDecl != null) {
                 val overloadedName = methodName(methodDecl, objects[parentObj]!!.methods)
                 val fnName = if (methodDecl.isPrivate) "PRIV_$overloadedName" else overloadedName
-                val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+                val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
                 val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
                 // @Size(N) return → out-parameter ABI
                 if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
@@ -1144,7 +1156,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         if (methodDecl != null) {
             val overloadedName = methodName(methodDecl, oi.methods)
             val fnName = if (methodDecl.isPrivate) "PRIV_$overloadedName" else overloadedName
-            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
             val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
             // @Size(N) return → out-parameter ABI
             if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
@@ -1188,7 +1200,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     if (topOvr != null && topFuns.count { it.name == name } > 1) {
         val overloadedName = methodName(topOvr, topFuns)
         val fnName = if (topOvr.isPrivate) "PRIV_$overloadedName" else overloadedName
-        val filledArgs = fillDefaults(args, topOvr.params, topOvr.params.associate { it.name to it.default })
+        val filledArgs = fillDefaults(args, topOvr.params, topOvr.params.associate { it.name to it.default }, topOvr.name, strict = true)
         val expandedArgs2 = expandCallArgs(filledArgs, topOvr.params)
         // @Size(N) return → out-parameter ABI
         if (topOvr.returnType != null && isSizedArrayTypeRef(topOvr.returnType)) {
@@ -1693,7 +1705,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         else "&$recv"
         // Use expandCallArgs for proper @Ptr expansion and default arg filling
         val expandedArgs = if (methodDecl != null) {
-            val filled = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default })
+            val filled = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
             expandCallArgs(filled, methodDecl.params)
         } else argStr
         val allArgs = if (expandedArgs.isEmpty()) selfArg else "$selfArg, $expandedArgs"
@@ -1723,7 +1735,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val vObjMethod = findOverload(method, args, vObjInfo.methods)
         val overloadedMethod = vObjMethod?.let { methodName(it, vObjInfo.methods) } ?: method
         val vObjArgs = if (vObjMethod != null) {
-            val filled = fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default })
+            val filled = fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default }, vObjMethod.name, strict = true)
             expandCallArgs(filled, vObjMethod.params)
         } else argStr
         // @Size(N) return → out-parameter ABI
@@ -1748,7 +1760,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val vCompMethod = vCompObjInfo?.let { findOverload(method, args, it.methods) }
         val overloadedComp = vCompMethod?.let { methodName(it, vCompObjInfo!!.methods) } ?: method
         val vCompArgs = if (vCompMethod != null) {
-            val filled = fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default })
+            val filled = fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default }, vCompMethod.name, strict = true)
             expandCallArgs(filled, vCompMethod.params)
         } else argStr
         val vCompCName = vCompObjInfo?.flatName ?: typeFlatName(vCompanionName)       // C name with package prefix
@@ -2130,6 +2142,13 @@ internal fun CCodeGen.genNotNull(e: NotNullExpr): String {
         preStmts += "if ($name.tag == ktc_NONE) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
         // Return the unwrapped value
         return "$name.value"
+    }
+
+    // Check: !! on a type that inference knows is non-nullable — always a bug
+    // Exclude smart-cast variables: they are stored as Optional but narrowed in scope (isOptional guard).
+    val isSmartCastNarrowed = e.expr is NameExpr && isOptional((e.expr as NameExpr).name)
+    if (innerType != null && !innerType.endsWith("?") && !isPtr && !isSmartCastNarrowed) {
+        codegenError("Non-null assertion '!!' has no effect on non-nullable type '$innerType'")
     }
 
     // Fallback: no check (non-nullable expression)
@@ -3045,8 +3064,39 @@ internal fun CCodeGen.genHeapArray(elemCType: String, args: List<Arg>): String {
 
 // ── fill default arguments ───────────────────────────────────────
 
-internal fun CCodeGen.fillDefaults(args: List<Arg>, params: List<Param>, defaults: Map<String, Expr?>): List<Arg> {
+/*
+strict=true: called after overload resolution is already committed to this specific FunDecl.
+strict=false (default): called speculatively (e.g. funSigs pre-check before overload resolution).
+Only strict mode emits the missing-required-args error to avoid false positives during resolution.
+*/
+internal fun CCodeGen.fillDefaults(
+    args: List<Arg>,
+    params: List<Param>,
+    defaults: Map<String, Expr?>,
+    funName: String = "<unknown>",
+    strict: Boolean = false
+): List<Arg> {
+    val hasVararg = params.any { it.isVararg }
+    val nonVarargCount = params.count { !it.isVararg }
+
+    // Check: too many positional arguments (only for non-vararg functions)
+    if (!hasVararg && args.none { it.name != null } && args.size > nonVarargCount) {
+        codegenError("Too many arguments for '$funName': expected $nonVarargCount, got ${args.size}")
+    }
+
     if (args.size >= params.size) return args
+
+    // Check: required arguments missing (no default, not vararg)
+    // Only in strict mode to avoid false positives from the funSigs pre-resolution path.
+    if (strict) {
+        val requiredMissing = params
+            .drop(args.size)
+            .filter { !it.isVararg && defaults[it.name] == null }
+        if (requiredMissing.isNotEmpty()) {
+            codegenError("Missing required argument(s) for '$funName': ${requiredMissing.joinToString(", ") { it.name }}")
+        }
+    }
+
     // Named args: reorder
     val hasNamed = args.any { it.name != null }
     if (hasNamed) {

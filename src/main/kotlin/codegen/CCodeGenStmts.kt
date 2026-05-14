@@ -48,15 +48,29 @@ internal fun CCodeGen.emitStmt(s: Stmt, ind: String, insideMethod: Boolean = fal
         is ExprStmt -> emitExprStmt(s, ind, insideMethod)
         is ForStmt -> emitFor(s, ind, insideMethod)
         is WhileStmt -> {
-            impl.appendLine("${ind}while (${genExpr(s.cond)}) {"); emitBlock(s.body, ind, insideMethod); impl.appendLine("$ind}")
+            loopDepth++
+            impl.appendLine("${ind}while (${genExpr(s.cond)}) {")
+            emitBlock(s.body, ind, insideMethod)
+            impl.appendLine("$ind}")
+            loopDepth--
         }
 
         is DoWhileStmt -> {
-            impl.appendLine("${ind}do {"); emitBlock(s.body, ind, insideMethod); impl.appendLine("$ind} while (${genExpr(s.cond)});")
+            loopDepth++
+            impl.appendLine("${ind}do {")
+            emitBlock(s.body, ind, insideMethod)
+            impl.appendLine("$ind} while (${genExpr(s.cond)});")
+            loopDepth--
         }
 
-        is BreakStmt -> impl.appendLine("${ind}break;")
-        is ContinueStmt -> impl.appendLine("${ind}continue;")
+        is BreakStmt -> {
+            if (loopDepth == 0) codegenError("'break' outside of a loop")
+            impl.appendLine("${ind}break;")
+        }
+        is ContinueStmt -> {
+            if (loopDepth == 0) codegenError("'continue' outside of a loop")
+            impl.appendLine("${ind}continue;")
+        }
         is DeferStmt -> deferStack.add(s.body)
         is CommentStmt -> {
             impl.appendLine("$ind${s.text}")
@@ -1715,6 +1729,7 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
 // ── for ──────────────────────────────────────────────────────────
 
 internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
+    loopDepth++
     val iter = s.iter
     // Unwrap "step" wrapper: (rangeExpr step N)
     val step: String?
@@ -1803,6 +1818,7 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
             }
         }
     }
+    loopDepth--
 }
 
 /**

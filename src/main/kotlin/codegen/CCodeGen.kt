@@ -451,6 +451,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal var currentFnIsMain = false
     internal fun currentFnReturnBaseType(): String = currentFnReturnType.removeSuffix("?")
 
+    internal var loopDepth: Int = 0  // nesting depth of active for/while/do-while loops
+
     // ── Source location tracking for error messages ──────────────────
     internal var currentStmtLine: Int = 0
     /** Mutable source file name for mem-track attribution.
