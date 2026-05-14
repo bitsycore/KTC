@@ -409,7 +409,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         // Arrays use ktc_ArrayTrampoline, not Optional
         if (isArrayType(base)) return false
         // Any is a trampoline, uses data==NULL for null, not Optional
-        if (base == "Any") return false
+        if (parseResolvedTypeName(base) is KtcType.Any) return false
         return true
     }
 

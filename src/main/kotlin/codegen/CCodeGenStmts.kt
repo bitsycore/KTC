@@ -1539,8 +1539,10 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
 
     fun tryThisSmartCast() {
         val type = currentExtRecvType
-        if (type != null && type.endsWith("?")) {
-            casts.add("\$self" to type.dropLast(1))
+        if (type != null) {
+            val typeKtc = parseResolvedTypeName(type)
+            if (typeKtc is KtcType.Nullable)
+                casts.add("\$self" to typeKtc.inner.toInternalStr)
         }
     }
 

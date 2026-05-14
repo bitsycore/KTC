@@ -159,7 +159,7 @@ internal fun CCodeGen.expandParams(inParams: List<Param>): String {
             }
         } else if (vP.type.nullable) {
             val vNullComment =
-                if ((vKtc as? KtcType.User)?.baseName == "Any") " /** nullable */" else "" // null comment
+                if (vKtc is KtcType.Any) " /** nullable */" else "" // null comment
             vParts += "${optCTypeName(vKtc.toInternalStr)} ${vP.name}$vNullComment"
         } else {
             vParts += "${cTypeStr(vKtc)} ${vP.name}"
@@ -291,17 +291,21 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
     return t.name
 }
 
-internal fun CCodeGen.defaultVal(t: String): String = when {
-    t == "Int" || t == "Long" -> "0"
-    t == "Float" -> "0.0f"
-    t == "Double" -> "0.0"
-    t == "Boolean" -> "false"
-    t == "Char" -> "'\\0'"
-    t == "String" -> "ktc_str(\"\")"
-    t.endsWith("*") || t.endsWith("*?") -> "NULL"
+internal fun CCodeGen.defaultVal(t: String): String = defaultValKtc(parseResolvedTypeName(t))
+
+internal fun CCodeGen.defaultValKtc(t: KtcType): String = when {
+    t is KtcType.Prim -> when (t.kind) {
+        KtcType.PrimKind.Int, KtcType.PrimKind.Long -> "0"
+        KtcType.PrimKind.Float -> "0.0f"
+        KtcType.PrimKind.Double -> "0.0"
+        KtcType.PrimKind.Boolean -> "false"
+        KtcType.PrimKind.Char -> "'\\0'"
+        else -> "0"
+    }
+    t is KtcType.Str -> "ktc_str(\"\")"
+    t is KtcType.Ptr -> "NULL"
     else -> {
-        // Struct default — needs cast for validity as function argument
-        val ct = cTypeStr(t.removeSuffix("?"))
+        val ct = cTypeStr(t.toInternalStr.removeSuffix("?"))
         "($ct){0}"
     }
 }

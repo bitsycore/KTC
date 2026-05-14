@@ -297,14 +297,14 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
                 val subst = genFun.typeParams.zip(typeArgNames).toMap()
                 val saved = typeSubst
                 typeSubst = subst
-                val result = resolveTypeName(genFun.returnType).toInternalStr
+                val result = resolveTypeName(genFun.returnType)
                 typeSubst = saved
-                return if (genFun.returnType.nullable && !result.endsWith("?")) "${result}?" else result
+                return if (genFun.returnType.nullable) KtcType.Nullable(result).toInternalStr else result.toInternalStr
             }
         }
         funSigs[name]?.returnType?.let {
-            val base = resolveTypeName(it).toInternalStr
-            return if (it.nullable && !base.endsWith("?")) "${base}?" else base
+            val base = resolveTypeName(it)
+            return if (it.nullable) KtcType.Nullable(base).toInternalStr else base.toInternalStr
         }
         // Bare call to interface method inside extension function on that interface
         if (currentExtRecvType != null && interfaces.containsKey(currentExtRecvType)) {
@@ -312,8 +312,8 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
             val vIfaceMethod = vIfaceInfo.methods.find { it.name == name }
                 ?: collectAllIfaceMethods(vIfaceInfo).find { it.name == name }
             if (vIfaceMethod?.returnType != null) {
-                val base = resolveTypeName(vIfaceMethod.returnType).toInternalStr
-                return if (vIfaceMethod.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+                val baseKtc = resolveTypeName(vIfaceMethod.returnType)
+                return if (vIfaceMethod.returnType.nullable) KtcType.Nullable(baseKtc).toInternalStr else baseKtc.toInternalStr
             }
         }
     }
@@ -321,7 +321,8 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
     if (e.callee is SafeDotExpr) {
         val retType = inferMethodReturnType(DotExpr(e.callee.obj, e.callee.name), e.args) ?: return null
         if (retType == "Unit") return retType
-        return if (retType.endsWith("?")) retType else "${retType}?"
+        val retKtc = if (retType != null) parseResolvedTypeName(retType) else null
+        return if (retKtc is KtcType.Nullable) retType else "${retType}?"
     }
     return null
 }
@@ -330,16 +331,16 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
 internal fun CCodeGen.resolveMethodReturnType(className: String, returnType: TypeRef?): String {
     if (returnType == null) return "Unit"
     val bindings = genericTypeBindings[className]
-    val base = if (bindings != null) {
+    val ktc = if (bindings != null) {
         val saved = typeSubst
         typeSubst = bindings
-        val result = resolveTypeName(returnType).toInternalStr
+        val result = resolveTypeName(returnType)
         typeSubst = saved
         result
     } else {
-        resolveTypeName(returnType).toInternalStr
+        resolveTypeName(returnType)
     }
-    return if (returnType.nullable && !base.endsWith("?")) "${base}?" else base
+    return if (returnType.nullable) KtcType.Nullable(ktc).toInternalStr else ktc.toInternalStr
 }
 
 internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): String? {
@@ -351,8 +352,8 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     if (vCompanionName != null) {
         val vMethod = objects[vCompanionName]?.methods?.find { it.name == dot.name }
         if (vMethod != null && vMethod.returnType != null) {
-            val base = resolveTypeName(vMethod.returnType).toInternalStr
-            return if (vMethod.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+            val baseKtc = resolveTypeName(vMethod.returnType)
+            return if (vMethod.returnType.nullable) KtcType.Nullable(baseKtc).toInternalStr else baseKtc.toInternalStr
         }
         return null
     }
@@ -482,15 +483,15 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
     if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return e.obj.name
     if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
         val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
-        val baseObj = if (prop != null) resolveTypeName(prop.second).toInternalStr else null
-        return if (baseObj != null && prop!!.second.nullable && !baseObj.endsWith("?")) "${baseObj}?" else baseObj
+        val baseObj = if (prop != null) resolveTypeName(prop.second) else null
+        return if (baseObj != null && prop!!.second.nullable) KtcType.Nullable(baseObj).toInternalStr else baseObj?.toInternalStr
     }
     // Companion object property: Foo.bar → look up in companion's ObjInfo
     if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
         val vCompanionName = classCompanions[e.obj.name]!!
         val vProp = objects[vCompanionName]?.props?.find { it.first == e.name }
-        val baseComp = if (vProp != null) resolveTypeName(vProp.second).toInternalStr else null
-        return if (baseComp != null && vProp!!.second.nullable && !baseComp.endsWith("?")) "${baseComp}?" else baseComp
+        val baseComp = if (vProp != null) resolveTypeName(vProp.second) else null
+        return if (baseComp != null && vProp!!.second.nullable) KtcType.Nullable(baseComp).toInternalStr else baseComp?.toInternalStr
     }
     val recvType = inferExprType(e.obj) ?: return null
     // StringBuffer field types
@@ -527,18 +528,19 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
     if (indirectBase != null) {
         val ci = classes[indirectBase] ?: return null
         val prop = ci.props.find { it.first == e.name }
-        val baseIndirect = if (prop != null) resolveTypeName(prop.second).toInternalStr else null
-        return if (baseIndirect != null && prop!!.second.nullable && !baseIndirect.endsWith("?")) "${baseIndirect}?" else baseIndirect
+        val baseIndirect = if (prop != null) resolveTypeName(prop.second) else null
+        return if (baseIndirect != null && prop!!.second.nullable) KtcType.Nullable(baseIndirect).toInternalStr else baseIndirect?.toInternalStr
     }
     val ci = classes[recvType] ?: return null
     val prop = ci.props.find { it.first == e.name }
-    val baseDirect = if (prop != null) resolveTypeName(prop.second).toInternalStr else null
-    return if (baseDirect != null && prop!!.second.nullable && !baseDirect.endsWith("?")) "${baseDirect}?" else baseDirect
+    val baseDirect = if (prop != null) resolveTypeName(prop.second) else null
+    return if (baseDirect != null && prop!!.second.nullable) KtcType.Nullable(baseDirect).toInternalStr else baseDirect?.toInternalStr
 }
 
 internal fun CCodeGen.inferDotTypeSafe(e: SafeDotExpr): String? {
     val base = inferDotType(DotExpr(e.obj, e.name)) ?: return null
-    return if (base.endsWith("?")) base else "${base}?"
+    val baseKtc = if (base != null) parseResolvedTypeName(base) else null
+    return if (baseKtc is KtcType.Nullable) base else "${base}?"
 }
 internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
     val tRaw = inferExprType(e.obj) ?: return null
