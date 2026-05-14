@@ -321,7 +321,7 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
     if (e.callee is SafeDotExpr) {
         val retType = inferMethodReturnType(DotExpr(e.callee.obj, e.callee.name), e.args) ?: return null
         if (retType == "Unit") return retType
-        val retKtc = if (retType != null) parseResolvedTypeName(retType) else null
+        val retKtc = parseResolvedTypeName(retType)
         return if (retKtc is KtcType.Nullable) retType else "${retType}?"
     }
     return null
@@ -479,21 +479,23 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     return null
 }
 
-internal fun CCodeGen.inferDotType(e: DotExpr): String? {
+internal fun CCodeGen.inferDotType(e: DotExpr): String? = inferDotTypeKtc(e)?.toInternalStr
+
+internal fun CCodeGen.inferDotTypeKtc(e: DotExpr): KtcType? {
     // C package: can't infer type of C constants/macros
     if (e.obj is NameExpr && e.obj.name == "c" && lookupVar("c") == null) return null
-    if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return e.obj.name
+    if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return parseResolvedTypeName(e.obj.name)
     if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
         val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
         val baseObj = if (prop != null) resolveTypeName(prop.second) else null
-        return if (baseObj != null && prop!!.second.nullable) KtcType.Nullable(baseObj).toInternalStr else baseObj?.toInternalStr
+        return if (baseObj != null && prop!!.second.nullable) KtcType.Nullable(baseObj) else baseObj
     }
     // Companion object property: Foo.bar → look up in companion's ObjInfo
     if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
         val vCompanionName = classCompanions[e.obj.name]!!
         val vProp = objects[vCompanionName]?.props?.find { it.first == e.name }
         val baseComp = if (vProp != null) resolveTypeName(vProp.second) else null
-        return if (baseComp != null && vProp!!.second.nullable) KtcType.Nullable(baseComp).toInternalStr else baseComp?.toInternalStr
+        return if (baseComp != null && vProp!!.second.nullable) KtcType.Nullable(baseComp) else baseComp
     }
     val recvType = inferExprType(e.obj) ?: return null
     val recvTypeKtc = inferExprTypeKtc(e.obj)
@@ -501,49 +503,48 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
     // StringBuffer field types
     if (recvType == "ktc_StrBuf" || recvType == "StringBuffer") {
         return when (e.name) {
-            "buffer" -> "CharArray*?"  // nullable pointer to char array
-            "len" -> "Int"
+            "buffer" -> parseResolvedTypeName("CharArray*?")  // nullable pointer to char array
+            "len" -> KtcType.Prim(KtcType.PrimKind.Int)
             else -> null
         }
     }
-    if (e.name == "size" && recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) return "Int"
+    if (e.name == "size" && recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) return KtcType.Prim(KtcType.PrimKind.Int)
     if (e.name == "ptr") {
         if (recvType.endsWith("Array")) {
             val elem = recvType.removeSuffix("Array")
             val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
-            return "${internal}*"
+            return parseResolvedTypeName("${internal}*")
         }
-        if (recvTypeCoreKtc is KtcType.Ptr && recvTypeCoreKtc.inner is KtcType.Arr) return recvType
-        return if (recvTypeCoreKtc is KtcType.Ptr) recvType else "${recvType}*"
+        if (recvTypeCoreKtc is KtcType.Ptr && recvTypeCoreKtc.inner is KtcType.Arr) return parseResolvedTypeName(recvType)
+        return if (recvTypeCoreKtc is KtcType.Ptr) parseResolvedTypeName(recvType) else parseResolvedTypeName("${recvType}*")
     }
     if (e.name == "toHeap" && recvType.endsWith("Array")) {
         val elem = recvType.removeSuffix("Array")
         val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
-        return "${internal}*"
+        return parseResolvedTypeName("${internal}*")
     }
-    if (e.name == "length" && recvTypeCoreKtc is KtcType.Str) return "Int"
-    if (e.name == "runeLen" && recvTypeCoreKtc is KtcType.Str) return "Int"
+    if (e.name == "length" && recvTypeCoreKtc is KtcType.Str) return KtcType.Prim(KtcType.PrimKind.Int)
+    if (e.name == "runeLen" && recvTypeCoreKtc is KtcType.Str) return KtcType.Prim(KtcType.PrimKind.Int)
     // Enum value .name / .ordinal
-    if (e.name == "name" && recvTypeCoreKtc is KtcType.User && (recvTypeCoreKtc as KtcType.User).kind == KtcType.UserKind.Enum) return "String"
-    if (e.name == "ordinal" && recvTypeCoreKtc is KtcType.User && (recvTypeCoreKtc as KtcType.User).kind == KtcType.UserKind.Enum) return "Int"
+    if (e.name == "name" && recvTypeCoreKtc is KtcType.User && recvTypeCoreKtc.kind == KtcType.UserKind.Enum) return KtcType.Str
+    if (e.name == "ordinal" && recvTypeCoreKtc is KtcType.User && recvTypeCoreKtc.kind == KtcType.UserKind.Enum) return KtcType.Prim(KtcType.PrimKind.Int)
     // Heap/Ptr/Value pointer field access → look up in base class
     val indirectBase = (recvTypeCoreKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (indirectBase != null) {
         val ci = classes[indirectBase] ?: return null
         val prop = ci.props.find { it.first == e.name }
         val baseIndirect = if (prop != null) resolveTypeName(prop.second) else null
-        return if (baseIndirect != null && prop!!.second.nullable) KtcType.Nullable(baseIndirect).toInternalStr else baseIndirect?.toInternalStr
+        return if (baseIndirect != null && prop!!.second.nullable) KtcType.Nullable(baseIndirect) else baseIndirect
     }
     val ci = classes[recvType] ?: return null
     val prop = ci.props.find { it.first == e.name }
     val baseDirect = if (prop != null) resolveTypeName(prop.second) else null
-    return if (baseDirect != null && prop!!.second.nullable) KtcType.Nullable(baseDirect).toInternalStr else baseDirect?.toInternalStr
+    return if (baseDirect != null && prop!!.second.nullable) KtcType.Nullable(baseDirect) else baseDirect
 }
 
 internal fun CCodeGen.inferDotTypeSafe(e: SafeDotExpr): String? {
-    val base = inferDotType(DotExpr(e.obj, e.name)) ?: return null
-    val baseKtc = if (base != null) parseResolvedTypeName(base) else null
-    return if (baseKtc is KtcType.Nullable) base else "${base}?"
+    val base = inferDotTypeKtc(DotExpr(e.obj, e.name)) ?: return null
+    return if (base is KtcType.Nullable) base.toInternalStr else KtcType.Nullable(base).toInternalStr
 }
 internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
     val tRaw = inferExprType(e.obj) ?: return null
@@ -560,7 +561,7 @@ internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
             return resolveMethodReturnType(t, methodDecl.returnType)
         }
     }
-    // Heap<T>/Ptr<T>/Value<T> wrapping a class with operator get()
+    // wrapping a class with operator get()
     val indirectBase = (tKtcCore as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (indirectBase != null && classes.containsKey(indirectBase)) {
         val methodDecl = classes[indirectBase]?.methods?.find { it.name == "get" && it.isOperator }
@@ -578,7 +579,7 @@ internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
         }
     }
     // Typed pointer: Ptr<UserClass> → base name. Exclude typed arrays (Ptr<Arr<T>>).
-    if (tKtcCore is KtcType.Ptr && (tKtcCore as KtcType.Ptr).inner !is KtcType.Arr) {
+    if (tKtcCore is KtcType.Ptr && tKtcCore.inner !is KtcType.Arr) {
         val base = t.dropLast(1)
         return if (isArrayType(base)) arrayElementKtType(base) else base
     }

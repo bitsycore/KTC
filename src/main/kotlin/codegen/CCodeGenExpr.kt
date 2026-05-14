@@ -44,9 +44,9 @@ import com.bitsycore.ktc.types.KtcType
  *   classArrayTypes, classCompanions, preStmts, hdr, impl
  *
  * ## Dependencies:
- *   Calls into [CCodeGenStmts] (emitStmt, emitInlineCall, emitBlock)
- *   Calls into [CCodeGenInfer] (inferExprType, inferMethodReturnType, ...)
- *   Calls into [CCodeGenCTypes] (cType, cTypeStr, resolveTypeName, optNone, optSome, ...)
+ *   Calls into CCodeGenStmts.kt (emitStmt, emitInlineCall, emitBlock)
+ *   Calls into CCodeGenInfer.kt (inferExprType, inferMethodReturnType, ...)
+ *   Calls into CCodeGenCTypes.kt (cType, cTypeStr, resolveTypeName, optNone, optSome, ...)
  */
 
 // ═══════════════════════════ Expression codegen ═══════════════════
@@ -109,8 +109,8 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
                 "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
             }
         } else if (objTypeCoreKtc is KtcType.Ptr) {
-            // Heap<T>/Ptr<T>/Value<T> with operator get() → pointer-based dispatch
-            val baseClass = (objTypeCoreKtc as KtcType.Ptr).inner
+            // Ptr<T>/Value<T> with operator get() → pointer-based dispatch
+            val baseClass = objTypeCoreKtc.inner
             val baseName = (baseClass as? KtcType.User)?.baseName ?: baseClass.toInternalStr
             val methodDecl = classes[baseName]?.methods?.find { it.name == "get" && it.isOperator }
             if (methodDecl != null) {
@@ -211,7 +211,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             if (exprKtcCore != null && !isSourceAny && exprKtcCore !is KtcType.Ptr) {
                 if (exprKtcCore.toInternalStr == target) {
                     // Nullable source: check non-null (tag check for value Optional, != NULL for pointers)
-                    if (isSourceNullable && isValueNullableKtc(exprKtc!!)) "(${inner}.tag == ktc_SOME)"
+                    if (isSourceNullable && isValueNullableKtc(exprKtc)) "(${inner}.tag == ktc_SOME)"
                     else if (isSourceNullable) "(${inner} != NULL)"
                     else "true"
                 } else "false"
@@ -257,7 +257,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             } else if (srcType != null && interfaces.containsKey(srcType) && classes.containsKey(target)) {
                 // Source is an interface, target is a concrete class — extract from tagged union
                 ifaceUnionAccess(srcType, target, inner)
-            } else if (srcKtc is KtcType.Any || (srcKtcCore is KtcType.Ptr && (srcKtcCore as KtcType.Ptr).inner is KtcType.Any)) {
+            } else if (srcKtc is KtcType.Any || (srcKtcCore is KtcType.Ptr && srcKtcCore.inner is KtcType.Any)) {
                 "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
             } else {
                 "(${cTypeStr(target)})($inner)"
@@ -273,7 +273,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
         } else if (srcType != null && interfaces.containsKey(srcType) && classes.containsKey(target)) {
             // Source is an interface, target is a concrete class — extract from tagged union
             ifaceUnionAccess(srcType, target, inner)
-        } else if (srcKtc is KtcType.Any || (srcKtcCore is KtcType.Ptr && (srcKtcCore as KtcType.Ptr).inner is KtcType.Any)) {
+        } else if (srcKtc is KtcType.Any || (srcKtcCore is KtcType.Ptr && srcKtcCore.inner is KtcType.Any)) {
             val memOp = if (isPtr) "->" else "."
             "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
         } else {
@@ -321,7 +321,7 @@ internal fun CCodeGen.genName(e: NameExpr): String {
             return "${typeFlatName(parentObj)}.$fn"
         }
         // Trampolined array param: redirect to local stack copy
-        if (e.name in trampolinedParams) return "local\$${e.name}"
+        if (e.name in trampolinedParams) return "local$${e.name}"
         // Any trampoline smart-cast: narrowed from Any, dereference .data
         if (curKtc !is KtcType.Any && isAnySmartCastVar(e.name)) {
             val ct = cTypeStr(curType)
@@ -431,7 +431,7 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         val varKtc = if (varName != null) lookupVarKtc(varName) else null
         if (varKtc != null) {
             // @Ptr T? → compare pointer to NULL (exclude typed array pointers like IntArray)
-            if (varKtc is KtcType.Nullable && varKtc.inner is KtcType.Ptr && (varKtc.inner as KtcType.Ptr).inner !is KtcType.Arr) {
+            if (varKtc is KtcType.Nullable && varKtc.inner is KtcType.Ptr && varKtc.inner.inner !is KtcType.Arr) {
                 return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
             }
             // Any? nullable → compare data pointer to NULL
@@ -444,7 +444,7 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             }
             // Trampolined array param: null is data == NULL — use local copy for consistency
             if (varName in trampolinedParams) {
-                return if (e.op == "==") "local\$$varName == NULL" else "local\$$varName != NULL"
+                return if (e.op == "==") "local$$varName == NULL" else "local$$varName != NULL"
             }
             // Fallback for other nullable
             if (varKtc is KtcType.Nullable) {
@@ -460,7 +460,6 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     }
     // Nullable T? vs non-null value: generate Optional-aware comparison
     if (e.op in setOf("==", "!=", "<", ">", "<=", ">=")) {
-        val rt = inferExprType(e.right)
         val ltKtc = inferExprTypeKtc(e.left)
         val rtKtc = inferExprTypeKtc(e.right)
         // Left is nullable value type, right is non-null → wrap in tag check
@@ -490,12 +489,13 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     // Also handles @Ptr types by resolving to base class and dereferencing
     val ltKtc2 = inferExprTypeKtc(e.left)
     var isPtr = false
-    val classKeyFromKtc: String? = when {
-        ltKtc2 is KtcType.Ptr -> { isPtr = true; (ltKtc2.inner as? KtcType.User)?.baseName }
-        ltKtc2 is KtcType.Nullable && ltKtc2.inner is KtcType.Ptr -> {
-            isPtr = true; ((ltKtc2.inner as KtcType.Ptr).inner as? KtcType.User)?.baseName
+    val classKeyFromKtc: String? = when (ltKtc2) {
+        is KtcType.Ptr -> { isPtr = true; (ltKtc2.inner as? KtcType.User)?.baseName }
+        is KtcType.Nullable if ltKtc2.inner is KtcType.Ptr -> {
+            isPtr = true
+            (ltKtc2.inner.inner as? KtcType.User)?.baseName
         }
-        ltKtc2 is KtcType.User -> ltKtc2.baseName.takeIf { classes.containsKey(it) }
+        is KtcType.User -> ltKtc2.baseName.takeIf { classes.containsKey(it) }
         else -> null
     }
     val classKey = classKeyFromKtc ?: lt?.takeIf { classes.containsKey(it) }
@@ -590,7 +590,7 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         return "(((ktc_UInt)$l) >> $r)"
     }
     // Check: division or modulo by constant zero
-    if ((e.op == "/" || e.op == "%") && e.right is IntLit && (e.right as IntLit).value == 0L) {
+    if ((e.op == "/" || e.op == "%") && e.right is IntLit && e.right.value == 0L) {
         codegenError("Division by zero: constant 0 used as divisor in '${e.op}' expression")
     }
     return "(${genExpr(e.left)} ${e.op} ${genExpr(e.right)})"
@@ -602,7 +602,7 @@ and argument types at a call site. Handles only direct type-parameter references
 when the receiver type IS a type param (e.g. receiver = "A") or when a param type
 IS a type param (e.g. param type = "B"). Nested generics require Phase-1 scanner work.
 */
-internal fun CCodeGen.inferInlineFunSubst(
+internal fun inferInlineFunSubst(
     inDecl: FunDecl,
     inReceiverType: String?,
     inArgTypes: List<String?>
@@ -657,7 +657,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         }
         // C package passthrough: c.printf(...) → printf(...)
         // String literals are emitted as raw C strings (not ktc_str wrapped)
-        if (e.callee.obj is NameExpr && (e.callee.obj as NameExpr).name == "c" && lookupVar((e.callee.obj as NameExpr).name) == null) {
+        if (e.callee.obj is NameExpr && e.callee.obj.name == "c" && lookupVar(e.callee.obj.name) == null) {
             val cFnName = e.callee.name
             val argStr = e.args.joinToString(", ") { genCArg(it.expr) }
             return "$cFnName($argStr)"
@@ -666,10 +666,10 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         fun flattenDotCallee(callee: Expr): String? {
             if (callee is NameExpr) return callee.name
             if (callee is DotExpr && callee.obj is NameExpr)
-                return "${callee.obj.name}\$${callee.name}"
+                return "${callee.obj.name}$${callee.name}"
             if (callee is DotExpr) {
                 val left = flattenDotCallee(callee.obj)
-                if (left != null) return "$left\$${callee.name}"
+                if (left != null) return "$left$${callee.name}"
             }
             return null
         }
@@ -684,7 +684,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val recvKtc = inferExprTypeKtc(e.callee.obj)
         if (recvKtc is KtcType.Nullable) {
             val innerKtc = recvKtc.inner
-            val isIndirectArray = innerKtc is KtcType.Ptr && (innerKtc as KtcType.Ptr).inner is KtcType.Arr
+            val isIndirectArray = innerKtc is KtcType.Ptr && innerKtc.inner is KtcType.Arr
             if (!hasNullableReceiverExt(innerKtc.toInternalStr, e.callee.name) && !isIndirectArray && innerKtc !is KtcType.Arr) {
                 val recvSrc = (e.callee.obj as? NameExpr)?.name ?: e.callee.obj.toString()
                 val recvType = recvKtc.toInternalStr
@@ -973,7 +973,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             if (e.typeArgs.isNotEmpty()) {
                 val elemC = cTypeStr(resolveTypeName(e.typeArgs[0]))  // KtcType for element C type
                 if (args.size >= 2 && args[1].expr is LambdaExpr) {
-                    return genNewArrayWithLambda(elemC, e, args)
+                    return genNewArrayWithLambda(elemC, args)
                 }
                 return genNewArray(elemC, args)
             }
@@ -986,15 +986,15 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     ) {
         val ptrExpr = genExpr(args[0].expr)
         val lenExpr = genExpr(args[1].expr)
-        val capExpr = when {
-            args[0].expr is NullLit -> "0"
+        val capExpr = when (args[0].expr) {
+            is NullLit -> "0"
             // array.ptr() — .ptr() is a DotExpr called as method with no extra args
-            args[0].expr is DotExpr && (args[0].expr as DotExpr).name == "ptr" -> {
+            is DotExpr if (args[0].expr as DotExpr).name == "ptr" -> {
                 val arrExpr = genExpr((args[0].expr as DotExpr).obj)
                 "$arrExpr\$len"
             }
             // array.ptr() — wrapped in CallExpr from method-call syntax
-            args[0].expr is CallExpr && (args[0].expr as CallExpr).callee is DotExpr
+            is CallExpr if (args[0].expr as CallExpr).callee is DotExpr
                     && ((args[0].expr as CallExpr).callee as DotExpr).name == "ptr" -> {
                 val dot = (args[0].expr as CallExpr).callee as DotExpr
                 val arrExpr = genExpr(dot.obj)
@@ -1003,7 +1003,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 
             else -> {
                 val ptrKtc = inferExprTypeKtc(args[0].expr)
-                if (ptrKtc is KtcType.Ptr && (ptrKtc as KtcType.Ptr).inner is KtcType.Arr)
+                if (ptrKtc is KtcType.Ptr && ptrKtc.inner is KtcType.Arr)
                     "${ptrExpr}\$len"
                 else
                     "0x7FFFFFFF"
@@ -1025,7 +1025,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     if (!classes.containsKey(name)) {
         val parent = currentObject ?: currentClass
         if (parent != null) {
-            val nested = "$parent\$${name}"
+            val nested = "$parent$${name}"
             if (classes.containsKey(nested)) resolvedName = nested
         }
     }
@@ -1150,7 +1150,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val ci = classes[currentClass]
         val methodDecl = ci?.let { findOverload(name, args, it.methods) }
         if (methodDecl != null) {
-            val overloadedName = methodName(methodDecl, ci!!.methods)
+            val overloadedName = methodName(methodDecl, ci.methods)
             val fnName = if (methodDecl.isPrivate) "PRIV_$overloadedName" else overloadedName
             // Re-expand args with the method's actual param types (ensures $len is added for @Ptr arrays)
             val filledArgs = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
@@ -1332,7 +1332,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
             val expr = genExpr(arg.expr)
             val hasAtPtr = param.type.annotations.any { it.name == "Ptr" }
             // User-class pointer (e.g. @Ptr Vec2 → Vec2*), NOT a typed array pointer (IntArray → Ptr<Arr<Int>>)
-            val isPtrOrArrayPtr = paramTypeKtc is KtcType.Ptr && (paramTypeKtc as KtcType.Ptr).inner !is KtcType.Arr
+            val isPtrOrArrayPtr = paramTypeKtc is KtcType.Ptr && paramTypeKtc.inner !is KtcType.Arr
             if (hasAtPtr || isPtrOrArrayPtr) {
                 // @Ptr-annotated type — pass raw pointer (NULL for null)
                 if (arg.expr is NullLit) {
@@ -1361,8 +1361,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     if (isArrayType(paramType)) {
                         // Check if argument is a @Size array (fixed-size, no $len member)
                         val sizeFromAnn = getSizedArrayFieldSize(arg.expr)
-                        if (sizeFromAnn != null) parts += sizeFromAnn.toString()
-                        else parts += "${expr}\$len"
+                        parts += sizeFromAnn?.toString() ?: "${expr}\$len"
                     }
                 }
             } else if (isArrayType(paramType)) {
@@ -1391,14 +1390,14 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                 } else {
                     val argVarName = (arg.expr as? NameExpr)?.name
                     val argVarKtc = if (argVarName != null) lookupVarKtc(argVarName) else null
-                    if (argVarKtc is KtcType.Nullable && isValueNullableKtc(argVarKtc)
+                    parts += if (argVarKtc is KtcType.Nullable && isValueNullableKtc(argVarKtc)
                         && (argVarName != null && isOptional(argVarName))
                     ) {
                         // Already an Optional var — pass through (genName returned the Optional var name)
-                        parts += expr
+                        expr
                     } else {
                         // Non-nullable value — wrap in Some
-                        parts += optSome(optType, expr)
+                        optSome(optType, expr)
                     }
                 }
             } else if (interfaces.containsKey(paramType)) {
@@ -1407,14 +1406,14 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                 val baseArgType = argKtcCore?.let {
                     if (it is KtcType.User) it.baseName else it.toInternalStr
                 }
-                if (baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true) {
+                parts += if (baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true) {
                     if (argKtcCore is KtcType.Ptr) {
-                        parts += "${typeFlatName(baseArgType)}_as_$paramType($expr)"
+                        "${typeFlatName(baseArgType)}_as_$paramType($expr)"
                     } else {
-                        parts += "${typeFlatName(baseArgType)}_as_$paramType(&$expr)"
+                        "${typeFlatName(baseArgType)}_as_$paramType(&$expr)"
                     }
                 } else {
-                    parts += expr
+                    expr
                 }
             } else if (paramTypeKtc is KtcType.Any) {
                 if (arg.expr is NullLit) {
@@ -1466,7 +1465,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "trimIndent" -> {
             // Fold at transpile time if called on a string literal
             if (dot.obj is StrLit) {
-                val str = (dot.obj as StrLit).value
+                val str = dot.obj.value
                 val trimmed = trimIndentImpl(str)
                 return "ktc_str(\"${escapeStr(trimmed)}\")"
             }
@@ -1477,7 +1476,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "trimMargin" -> {
             // Fold at transpile time if called on a string literal
             if (dot.obj is StrLit) {
-                val str = (dot.obj as StrLit).value
+                val str = dot.obj.value
                 val marginPrefix = if (args.isNotEmpty()) {
                     (args[0].expr as? StrLit)?.value ?: "|"
                 } else "|"
@@ -1532,9 +1531,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "toUInt" -> return "((ktc_UInt)($recv))"
         "toULong" -> return "((ktc_ULong)($recv))"
         "toChar" -> return "((ktc_Char)($recv))"
-        "inv" -> {
-            return "(~($recv))"
-        }
+        "inv" -> return "(~($recv))"
         // Nullable string-to-number: toIntOrNull, toLongOrNull, toFloatOrNull, toDoubleOrNull
         "toIntOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
@@ -1543,7 +1540,6 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             preStmts += "$t.tag = ktc_str_toIntOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
-            t
         }
 
         "toLongOrNull" -> if (recvTypeKtc is KtcType.Str) {
@@ -1553,7 +1549,6 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             preStmts += "$t.tag = ktc_str_toLongOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
-            t
         }
 
         "toDoubleOrNull" -> if (recvTypeKtc is KtcType.Str) {
@@ -1563,7 +1558,6 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
-            t
         }
 
         "toFloatOrNull" -> if (recvTypeKtc is KtcType.Str) {
@@ -1573,7 +1567,6 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             preStmts += "$t.tag = ktc_str_toDoubleOrNull($recv, &${t}_d) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = (ktc_Float)${t}_d;"
             markOptional(t)
-            t
         }
 
         "substring" -> if (recvTypeKtc is KtcType.Str) {
@@ -1617,10 +1610,9 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
 
         "hashCode" -> {
-            val ktc = recvTypeKtc
-            if (ktc != null) {
-                return when {
-                    ktc is KtcType.Prim -> when (ktc.kind) {
+            if (recvTypeKtc != null) {
+                return when (recvTypeKtc) {
+                    is KtcType.Prim -> when (recvTypeKtc.kind) {
                         KtcType.PrimKind.Byte -> "ktc_hash_i8($recv)"
                         KtcType.PrimKind.Short -> "ktc_hash_i16($recv)"
                         KtcType.PrimKind.Int -> "ktc_hash_i32($recv)"
@@ -1635,7 +1627,8 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                         KtcType.PrimKind.ULong -> "ktc_hash_u64($recv)"
                         KtcType.PrimKind.Rune -> "ktc_hash_i32($recv)"
                     }
-                    ktc is KtcType.Str -> "ktc_hash_str($recv)"
+
+                    is KtcType.Str -> "ktc_hash_str($recv)"
                     else -> {
                         // @Ptr class pointer → call ClassName_hashCode(pointer)
                         val pointerBase = (recvTypeKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
@@ -1664,7 +1657,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     if (method == "toHeap" && recvTypeKtc != null && recvTypeKtc.isArrayLike) {
         val elemC = arrayElementCType(recvType)
         val lenExpr = when {
-            dot.obj is NameExpr && (dot.obj as NameExpr).name in trampolinedParams -> "${(dot.obj as NameExpr).name}.size"
+            dot.obj is NameExpr && dot.obj.name in trampolinedParams -> "${dot.obj.name}.size"
             else -> "${recv}\$len"
         }
         val t = tmp()
@@ -1778,7 +1771,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                 isExtFun -> optSome(optSelfType, recv)
                 else -> optSome(optSelfType, "&$recv")
             }
-        } else if (isExtFun) "$recv"
+        } else if (isExtFun) recv
         else "&$recv"
         // Use expandCallArgs for proper @Ptr expansion and default arg filling
         val expandedArgs = if (methodDecl != null) {
@@ -1835,7 +1828,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val vCompanionName = classCompanions[vDotObjName]!!
         val vCompObjInfo = objects[vCompanionName]                                    // ObjInfo for the companion (may differ from recvTypeKtc path)
         val vCompMethod = vCompObjInfo?.let { findOverload(method, args, it.methods) }
-        val overloadedComp = vCompMethod?.let { methodName(it, vCompObjInfo!!.methods) } ?: method
+        val overloadedComp = vCompMethod?.let { methodName(it, vCompObjInfo.methods) } ?: method
         val vCompArgs = if (vCompMethod != null) {
             val filled = fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default }, vCompMethod.name, strict = true)
             expandCallArgs(filled, vCompMethod.params)
@@ -1901,14 +1894,6 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                 }
             } else recv
             // Use the receiver's actual interface type for the call
-            val callRecvType = if (classes.containsKey(recvType) && extFun.receiver != null) {
-                // Extension is on an interface — wrap in interface vtable
-                val ifaceName = extFun.receiver.name
-                if (ifaceName in (classInterfaces[recvType] ?: emptyList())) {
-                    // recvType implements this interface — use direct call for now
-                    recvType
-                } else recvType
-            } else recvType
             val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
             return "${typeFlatName(recvType)}_$method($allArgs)"
         }
@@ -2001,7 +1986,7 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
         return t
     }
     if (dot.name == "ptr" && recvType != null && recvName != null) {
-        val cleanType = recvType!!.removeSuffix("?")
+        val cleanType = recvType.removeSuffix("?")
         if (recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) {
             val t = tmp()
             val guard = if (recvTypeKtc is KtcType.Nullable) "${recvName}\$has" else "true"
@@ -2028,7 +2013,7 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
         return "($guard ? ($call, 0) : 0)"
     }
     // Pointer return (@Ptr): use NULL for null, no Optional wrapping
-    val retKtc = if (retType != null) parseResolvedTypeName(retType) else null
+    val retKtc = parseResolvedTypeName(retType)
     if (retKtc is KtcType.Ptr) {
         val t = tmp()
         preStmts += "${cTypeStr(retType)} $t = $guard ? $call : NULL;"
@@ -2099,7 +2084,7 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     // Enum .name → lookup in names array
     if (e.name == "name" && vOrdinalEnumInfo != null) return "${vOrdinalEnumInfo.flatName}_names[($recv)]"
 
-    // Heap<T> / Ptr<T> / Value<T>: p->field (auto-deref through pointer)
+    // p->field (auto-deref through pointer)
     if (recvTypeCoreKtc is KtcType.Ptr) {
         val fieldName = if (currentClass != null && e.obj is ThisExpr) {
             val ci = classes[currentClass]!!
@@ -2189,10 +2174,8 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
     }
 
     // Infer field type for proper default and C type
-    val fieldType = inferDotType(DotExpr(e.obj, e.name))
-    val fieldKtc = if (fieldType != null) parseResolvedTypeName(fieldType) else null
-    val ct = if (fieldType != null) cTypeStr(fieldType) else "ktc_Int"
-    val defVal = if (fieldKtc != null) defaultVal(fieldKtc) else "0"
+    val fieldKtc = inferDotTypeKtc(DotExpr(e.obj, e.name))
+    val fieldType = fieldKtc?.toInternalStr
 
     // Emit temp as Optional for value-nullable field results
     val t = tmp()
@@ -2201,10 +2184,9 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
         val optType = optCTypeName(fieldType!!)
         preStmts += "$optType $t = $guard ? $fieldAccess : ${optNone(optType)};"
         markOptional(t)
-        defineVar(t, fieldType!!)
+        defineVar(t, fieldType)
     } else {
         val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int_Optional"
-        val fieldCType = if (fieldType != null) cTypeStr(fieldType) else "ktc_Int"
         preStmts += "$optType $t = $guard ? ($optType){ktc_SOME, $fieldAccess} : ${optNone(optType)};"
         markOptional(t)
         defineVar(t, "${fieldType ?: "Int"}?")
@@ -2243,7 +2225,7 @@ internal fun CCodeGen.genNotNull(e: NotNullExpr): String {
 
     // Value-nullable variable: check Optional tag
     if (innerKtc is KtcType.Nullable && isValueNullableKtc(innerKtc) && e.expr is NameExpr) {
-        val name = (e.expr as NameExpr).name
+        val name = e.expr.name
         preStmts += "if ($name.tag == ktc_NONE) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
         // Return the unwrapped value
         return "$name.value"
@@ -2251,8 +2233,8 @@ internal fun CCodeGen.genNotNull(e: NotNullExpr): String {
 
     // Check: !! on a type that inference knows is non-nullable — always a bug
     // Exclude smart-cast variables: they are stored as Optional but narrowed in scope (isOptional guard).
-    val isSmartCastNarrowed = e.expr is NameExpr && isOptional((e.expr as NameExpr).name)
-    if (innerKtc != null && innerKtc !is KtcType.Nullable && !isPtr && !isSmartCastNarrowed) {
+    val isSmartCastNarrowed = e.expr is NameExpr && isOptional(e.expr.name)
+    if (innerKtc != null && innerKtc !is KtcType.Nullable && !isSmartCastNarrowed) {
         codegenError("Non-null assertion '!!' has no effect on non-nullable type '$innerType'")
     }
 
@@ -2345,7 +2327,7 @@ internal fun CCodeGen.genIfExpr(e: IfExpr): String {
 }
 
 /** Try to extract a single expression from a block (last stmt as expr). */
-internal fun CCodeGen.blockAsSingleExpr(b: Block): Expr? {
+internal fun blockAsSingleExpr(b: Block): Expr? {
     if (b.stmts.size == 1) {
         val s = b.stmts[0]
         if (s is ExprStmt) return s.expr
@@ -2417,7 +2399,7 @@ internal fun CCodeGen.inferBlockType(b: Block): String? {
 internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
     // ThisExpr subject maps to $self; NameExpr subject maps to its variable name
     val subjName = when (e.subject) {
-        is NameExpr -> (e.subject as NameExpr).name
+        is NameExpr -> e.subject.name
         is ThisExpr -> "\$self"
         else -> null
     }
@@ -2428,8 +2410,7 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
         var common: Set<String>? = null
         for (t in distinctTypes) {
             val ifaces = classInterfaces[t]?.toSet() ?: break
-            if (common == null) common = ifaces
-            else common = common.intersect(ifaces)
+            common = common?.intersect(ifaces) ?: ifaces
             if (common.isEmpty()) break
         }
         common?.firstOrNull()
@@ -2534,11 +2515,10 @@ internal fun CCodeGen.inferWhenExprType(e: WhenExpr): String? {
         var common: Set<String>? = null
         for (t in types) {
             val ifaces = classInterfaces[t]?.toSet() ?: break
-            if (common == null) common = ifaces
-            else common = common.intersect(ifaces)
+            common = common?.intersect(ifaces) ?: ifaces
             if (common.isEmpty()) break
         }
-        if (common != null && common.isNotEmpty()) return common.first()
+        if (!common.isNullOrEmpty()) return common.first()
     }
     return types.first()
 }
@@ -2580,7 +2560,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         } else expr
         val isPtrNull = tKtc.inner is KtcType.Ptr && !isValueNullableKtc(tKtc)
         val hasExpr = if (isPtrNull) "$safeExpr != NULL" else if (isValueNullableKtc(tKtc)) "$safeExpr.tag == ktc_SOME" else "${safeExpr}\$has"
-        val fmt = printfFmt(tKtcCore ?: KtcType.Prim(KtcType.PrimKind.Int)) + nl
+        val fmt = printfFmt(tKtcCore) + nl
         val a = printfArg(safeExpr, tKtcCore)
         return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
     }
@@ -2602,7 +2582,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);"
-        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);"
         return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
@@ -2628,7 +2608,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         val buf = tmp()
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);"
-        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);"
         return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
@@ -2644,7 +2624,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); preStmts += "$cName $vTmp = ($expr);"; vTmp } else expr
         return "printf(\"%.*s$nl\", (ktc_Int)${cName}_names[$safeExpr].len, ${cName}_names[$safeExpr].ptr)"
     }
-    val fmt = printfFmt(tKtcCore!!) + nl
+    val fmt = printfFmt(tKtcCore) + nl
     val a = printfArg(expr, tKtcCore)
     return "printf(\"$fmt\", $a)"
 }
@@ -2656,21 +2636,30 @@ internal fun CCodeGen.genPrintfFromTemplate(tmpl: StrTemplateExpr, nl: String): 
         when (part) {
             is LitPart -> fmt.append(escapeStr(part.text))
             is ExprPart -> {
-                val t = inferExprType(part.expr) ?: "Int"
                 val tKtc = inferExprTypeKtc(part.expr) ?: KtcType.Prim(KtcType.PrimKind.Int)
                 val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
                 fmt.append(printfFmt(tKtcCore))
                 val exprStr = genExpr(part.expr)
                 // String / enum: materialize if complex to avoid double-evaluation
-                if (tKtcCore is KtcType.Str) {
-                    val s = if (!isSimpleCExpr(exprStr)) { val v = tmp(); preStmts += "ktc_String $v = ($exprStr);"; v } else exprStr
-                    argsList += "(ktc_Int)($s).len, ($s).ptr"
-                } else if (tKtcCore is KtcType.User && (tKtcCore as KtcType.User).kind == KtcType.UserKind.Enum) {
-                    val cName = typeFlatName((tKtcCore as KtcType.User).baseName)
-                    val s = if (!isSimpleCExpr(exprStr)) { val v = tmp(); preStmts += "$cName $v = ($exprStr);"; v } else exprStr
-                    argsList += "(ktc_Int)${cName}_names[$s].len, ${cName}_names[$s].ptr"
-                } else {
-                    argsList += printfArg(exprStr, tKtcCore)
+                when (tKtcCore) {
+                    is KtcType.Str -> {
+                        val s = if (!isSimpleCExpr(exprStr)) {
+                            val v = tmp(); preStmts += "ktc_String $v = ($exprStr);"; v
+                        } else exprStr
+                        argsList += "(ktc_Int)($s).len, ($s).ptr"
+                    }
+
+                    is KtcType.User if tKtcCore.kind == KtcType.UserKind.Enum -> {
+                        val cName = typeFlatName(tKtcCore.baseName)
+                        val s = if (!isSimpleCExpr(exprStr)) {
+                            val v = tmp(); preStmts += "$cName $v = ($exprStr);"; v
+                        } else exprStr
+                        argsList += "(ktc_Int)${cName}_names[$s].len, ${cName}_names[$s].ptr"
+                    }
+
+                    else -> {
+                        argsList += printfArg(exprStr, tKtcCore)
+                    }
                 }
             }
         }
@@ -2710,7 +2699,7 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
     val maxLen = templateMaxLen(e)
     if (maxLen != null && maxLen <= 512) {
         // Single pass with alloca buffer (alloca = function-frame lifetime, safe when pointer escapes block)
-        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca($maxLen);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca($maxLen);"
         preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
         for (p in parts) {
             when {
@@ -2729,7 +2718,7 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
         }
     }
     // Allocate exact size
-    preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+    preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
     preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
     // Second pass: write to real buffer
     for (p in parts) {
@@ -2838,7 +2827,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
-        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* $buf = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
         return "ktc_sb_to_string(&${buf}_sb)"
@@ -3159,7 +3148,7 @@ internal fun CCodeGen.genNewArray(elemCType: String, args: List<Arg>): String {
 }
 
 /** Array<T>(size) { init } — stack-allocated with inline lambda init loop. */
-internal fun CCodeGen.genNewArrayWithLambda(elemCType: String, e: CallExpr, args: List<Arg>): String {
+internal fun CCodeGen.genNewArrayWithLambda(elemCType: String, args: List<Arg>): String {
     val size = genExpr(args[0].expr)
     val lambda = args[1].expr as LambdaExpr
     val itName = lambda.params.firstOrNull() ?: "it"
@@ -3171,7 +3160,7 @@ internal fun CCodeGen.genNewArrayWithLambda(elemCType: String, e: CallExpr, args
     val bodyExpr = when {
         lambda.body.size == 1 && lambda.body[0] is ExprStmt -> (lambda.body[0] as ExprStmt).expr
         else -> {
-            codegenError("Array init lambda must be a single expression"); return t
+            codegenError("Array init lambda must be a single expression")
         }
     }
     preStmts += "    $t[$itName] = ${genExpr(bodyExpr)};"
@@ -3191,15 +3180,6 @@ internal fun CCodeGen.genHeapArrayOfExpr(args: List<Arg>, inTypeArg: TypeRef? = 
     val vals = args.mapIndexed { i, arg -> "$t[$i] = ${genExpr(arg.expr)};" }.joinToString(" ")
     if (vals.isNotEmpty()) preStmts += vals
     preStmts += "const ktc_Int ${t}\$len = $n;"
-    return t
-}
-
-/** Heap-allocated array via calloc — safe to return from functions. */
-internal fun CCodeGen.genHeapArray(elemCType: String, args: List<Arg>): String {
-    val size = if (args.isNotEmpty()) genExpr(args[0].expr) else "0"
-    val t = tmp()
-    preStmts += "$elemCType* $t = ($elemCType*)${tCalloc("(size_t)($size)", "sizeof($elemCType)")};"
-    preStmts += "const ktc_Int ${t}\$len = $size;"
     return t
 }
 
@@ -3280,7 +3260,6 @@ internal fun CCodeGen.genLValue(e: Expr, method: Boolean): String {
                 val vCompanionName = classCompanions[e.obj.name]!!
                 "${typeFlatName(vCompanionName)}.${e.name}"
             } else {
-                val recvType = inferExprType(e.obj)
                 val recvKtc = inferExprTypeKtc(e.obj)
                 val recvKtcCore = (recvKtc as? KtcType.Nullable)?.inner ?: recvKtc
                 val op = if (recvKtcCore is KtcType.Ptr) "->" else "."

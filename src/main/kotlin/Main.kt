@@ -136,7 +136,7 @@ fun main(args: Array<String>) {
     if (dumpAst) {
         for (ps in parsedFiles) {
             println("=== AST: ${ps.ast.sourceFile.ifEmpty { ps.file.name }} ===")
-            println(dumpAst(ps.ast, 0))
+            println(dumpAst(ps.ast))
         }
         return
     }
@@ -146,7 +146,7 @@ fun main(args: Array<String>) {
         val allAsts = parsedFiles.map { it.ast }
         for (ps in parsedFiles) {
             println("=== AST: ${ps.ast.sourceFile.ifEmpty { ps.file.name }} ===")
-            println(dumpAst(ps.ast, 0))
+            println(dumpAst(ps.ast))
         }
         val lastPs = parsedFiles.last()
         try {
@@ -245,12 +245,11 @@ fun main(args: Array<String>) {
 
 private fun indent(n: Int) = "  ".repeat(n)
 
-private fun dumpAst(file: KtFile, depth: Int): String {
+private fun dumpAst(file: KtFile): String {
     val sb = StringBuilder()
-    val d = depth
-    if (file.pkg != null) sb.appendLine("${indent(d)}package ${file.pkg}")
-    for (imp in file.imports) sb.appendLine("${indent(d)}import $imp")
-    for (decl in file.decls) sb.append(dumpDecl(decl, d))
+    if (file.pkg != null) sb.appendLine("${indent(0)}package ${file.pkg}")
+    for (imp in file.imports) sb.appendLine("${indent(0)}import $imp")
+    for (decl in file.decls) sb.append(dumpDecl(decl, 0))
     return sb.toString()
 }
 
@@ -330,10 +329,8 @@ private fun dumpTypeRef(t: TypeRef): String {
         t.annotations.joinToString(" ") {
             "@${it.name}${
                 if (it.args.isNotEmpty()) "(${
-                    it.args.joinToString(", ") {
-                        dumpExpr(
-                            it
-                        )
+                    it.args.joinToString(", ") { argsStr ->
+                        dumpExpr(argsStr)
                     }
                 })" else ""
             }"

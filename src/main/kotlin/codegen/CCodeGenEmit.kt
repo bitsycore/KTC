@@ -31,10 +31,10 @@ import com.bitsycore.ktc.types.KtcType
  *   prefix, pfx(), deferredHdrLines, classCompanions, objectsWithDispose
  *
  * ## Dependencies:
- *   Calls into [CCodeGenExpr]  (genExpr, genSbAppend)
- *   Calls into [CCodeGenStmts] (emitStmt)
- *   Calls into [CCodeGenInfer] (inferBlockType)
- *   Calls into [CCodeGenCTypes] (cType, cTypeStr, resolveTypeName, expandParams, ...)
+ *   Calls into CCodeGenExpr.kt  (genExpr, genSbAppend)
+ *   Calls into CCodeGenStmts.kt (emitStmt)
+ *   Calls into CCodeGenInfer.kt (inferBlockType)
+ *   Calls into CCodeGenCTypes.kt (cType, cTypeStr, resolveTypeName, expandParams, ...)
  */
 
 // ═══════════════════════════ Emit declarations ════════════════════
@@ -246,9 +246,7 @@ internal fun CCodeGen.secondaryCtorName(inCClass: String, inParams: List<Param>)
 /** Emit a secondary constructor that delegates to the primary constructor. */
 internal fun CCodeGen.emitSecondaryCtor(className: String, cClass: String, sctor: SecondaryCtor) {
     val ctorName = secondaryCtorName(cClass, sctor.params)
-    val retResolved = cClass.takeWhile { it != '_' || cClass.indexOf('_') < 0 }.let { "" }  // just use void-like return
     val extraParams = expandParams(sctor.params)
-    val allP = if (extraParams.isNotEmpty()) "$cClass* \$self, $extraParams" else "$cClass* \$self"
 
     hdr.appendLine("$cClass $ctorName($extraParams);")
     impl.appendLine("$cClass $ctorName($extraParams) {")
@@ -775,7 +773,7 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         val baseParams = expandParams(f.params)
         // Prepend receiver as $self parameter for generic extensions
         val hasReceiver = f.receiver != null
-        val selfParam = if (hasReceiver) "${cType(f.receiver!!)} \$self" else null
+        val selfParam = if (hasReceiver) "${cType(f.receiver)} \$self" else null
         val params = when {
             returnsSizedArray -> {
                 val elemCType = cTypeStr(vRetKtcGen!!.asArr!!.elem)
@@ -1169,9 +1167,13 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         if (nested.typeParams.isEmpty()) {
             impl.appendLine()
             hdr.appendLine()
-            emitClass(ClassDecl("${d.name}\$${nested.name}", nested.isData,
-                nested.ctorParams, nested.members, nested.initBlocks,
-                nested.superInterfaces, nested.typeParams, nested.secondaryCtors))
+            emitClass(
+                ClassDecl(
+                    "${d.name}$${nested.name}", nested.isData,
+                    nested.ctorParams, nested.members, nested.initBlocks,
+                    nested.superInterfaces, nested.typeParams, nested.secondaryCtors
+                )
+            )
         }
     }
 
@@ -1342,12 +1344,6 @@ internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
     hdr.appendLine()
 }
 
-/** Legacy: emit both vtable and tagged-union struct. Used for monomorphized interfaces. */
-internal fun CCodeGen.emitIfaceInfoFull(info: IfaceInfo) {
-    emitInterfaceVtable(info)
-    emitIfaceInfo(info)
-}
-
 /** Collect all methods for an interface, including inherited from super interfaces (depth-first). */
 internal fun CCodeGen.collectAllIfaceMethods(info: IfaceInfo): List<FunDecl> {
     val result = mutableListOf<FunDecl>()
@@ -1387,16 +1383,13 @@ internal fun CCodeGen.collectAllIfaceProperties(info: IfaceInfo): List<PropDecl>
 /** Data member name for a class inside a tagged union or single-field interface struct. */
 internal fun CCodeGen.ifaceDataName(className: String): String = "${typeFlatName(className)}_data"
 
-/** Return the ktc_hash_* expression for a resolved field type and value expression. */
-internal fun CCodeGen.hashFieldExpr(resolvedType: String, valueExpr: String): String = hashFieldExprKtc(parseResolvedTypeName(resolvedType), valueExpr)
-
 /** KtcType-based overload. */
-internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String = when {
-    // Nullable value types: hash tag + value (or 0 if null)
-    ktc is KtcType.Nullable && isValueNullableKtc(ktc) -> {
+internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String = when (ktc) { // Nullable value types: hash tag + value (or 0 if null)
+    is KtcType.Nullable if isValueNullableKtc(ktc) -> {
         "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(ktc.inner, "${valueExpr}.value")} : 0)"
     }
-    ktc is KtcType.Prim -> when (ktc.kind) {
+
+    is KtcType.Prim -> when (ktc.kind) {
         KtcType.PrimKind.Byte -> "ktc_hash_i8($valueExpr)"
         KtcType.PrimKind.Short -> "ktc_hash_i16($valueExpr)"
         KtcType.PrimKind.Int -> "ktc_hash_i32($valueExpr)"
@@ -1411,9 +1404,10 @@ internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String 
         KtcType.PrimKind.ULong -> "ktc_hash_u64($valueExpr)"
         KtcType.PrimKind.Rune -> "ktc_hash_i32($valueExpr)"
     }
-    ktc is KtcType.Str -> "ktc_hash_str($valueExpr)"
-    ktc is KtcType.Ptr -> "((ktc_Int)(uintptr_t)($valueExpr))"
-    ktc is KtcType.User || ktc is KtcType.Arr || ktc is KtcType.Nullable -> "($valueExpr).__type_id"
+
+    is KtcType.Str -> "ktc_hash_str($valueExpr)"
+    is KtcType.Ptr -> "((ktc_Int)(uintptr_t)($valueExpr))"
+    is KtcType.User, is KtcType.Arr, is KtcType.Nullable -> "($valueExpr).__type_id"
     else -> "($valueExpr).__type_id"
 }
 
@@ -1429,21 +1423,10 @@ internal fun CCodeGen.ifaceAsInit(cIface: String, cClass: String, className: Str
     val dataName = ifaceDataName(className)
     val typeIdField = ".__type_id = ${cClass}_TYPE_ID"
     return when {
-        impls == null || impls.isEmpty() -> "($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt}"
+        impls.isNullOrEmpty() -> "($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt}"
         impls.size == 1 -> "($cIface){$typeIdField, .$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
         else -> "($cIface){$typeIdField, .data.$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
     }
-}
-
-/**
- * For each interface a class implements, emit:
- *   1. Property getter wrappers (for interface properties backed by class fields)
- *   2. A static const vtable instance with the class's method/property pointers
- *   3. A wrapping function:  ClassName_as_IfaceName(ClassName* $self) → IfaceName
- */
-internal fun CCodeGen.emitClassInterfaceVtables(d: ClassDecl) {
-    val className = d.name
-    emitInterfaceVtablesForClass(className, d.superInterfaces)
 }
 
 /**
@@ -1532,7 +1515,7 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
         // E.g., ArrayList_Int implements MutableList_Int which extends List_Int
         // → emit ArrayList_Int_as_List_Int too
         if (!declsOnly) {
-            emitTransitiveInterfaceVtables(className, cClass, iface, allProps, allMethods)
+            emitTransitiveInterfaceVtables(className, cClass, iface)
         }
     }
 }
@@ -1542,10 +1525,7 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
  * E.g., if ArrayList_Int implements MutableList_Int which extends List_Int,
  * emit ArrayList_Int_as_List_Int with the List_Int subset of the vtable.
  */
-internal fun CCodeGen.emitTransitiveInterfaceVtables(
-    className: String, cClass: String, iface: IfaceInfo,
-    childProps: List<PropDecl>, childMethods: List<FunDecl>
-) {
+internal fun CCodeGen.emitTransitiveInterfaceVtables(className: String, cClass: String, iface: IfaceInfo) {
     for (superRef in iface.superInterfaces) {
         val superName = resolveIfaceName(superRef)
         val superIface = interfaces[superName] ?: continue
@@ -1604,7 +1584,7 @@ internal fun CCodeGen.emitTransitiveInterfaceVtables(
         impl.appendLine()
 
         // Recurse for deeper inheritance
-        emitTransitiveInterfaceVtables(className, cClass, superIface, superProps, superMethods)
+        emitTransitiveInterfaceVtables(className, cClass, superIface)
     }
 }
 

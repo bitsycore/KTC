@@ -64,8 +64,6 @@ internal sealed class KtcType {
             PrimKind.Char -> "ktc_Char"
             PrimKind.Rune -> "ktc_Rune"
         }
-
-        val ktName: String get() = kind.name
     }
 
     enum class PrimKind { Byte, Short, Int, Long, UByte, UShort, UInt, ULong, Float, Double, Boolean, Char, Rune }
@@ -100,9 +98,8 @@ internal sealed class KtcType {
         val typeArgs: List<KtcType> = emptyList()  // concrete type arguments
     ) : KtcType() {
         val baseName: String get() = decl.baseName
-        val kind: KtcType.UserKind get() = decl.kind
+        val kind: UserKind get() = decl.kind
         val pkg: String get() = decl.pkg
-        val flatName: String get() = decl.flatName
         override fun toCType(): String = decl.flatName
     }
 
@@ -153,13 +150,6 @@ internal sealed class KtcType {
 
     // ── Queries (replace string checks) ──────────────────────────────
 
-    val isArray: Boolean get() = this is Arr
-    val isPointer: Boolean get() = this is Ptr
-    val isSizedArray: Boolean get() = this is Arr && sized != null
-    val isPrimitive: Boolean get() = this is Prim
-    val isString: Boolean get() = this is Str
-    val isVoid: Boolean get() = this is Void
-
     /* True for both Arr and Ptr(Arr): covers typed arrays (IntArray) and @Ptr Array<T>.
     This replaces the string-based `isArrayType()` check. */
     val isArrayLike: Boolean get() = this is Arr || (this is Ptr && inner is Arr)
@@ -171,15 +161,6 @@ internal sealed class KtcType {
             is Ptr -> inner as? Arr
             else -> null
         }
-
-    val elementType: KtcType?
-        get() = when (this) {
-            is Arr -> elem
-            is Ptr -> inner
-            is Nullable -> inner
-            else -> null
-        }
-
 
     /*
     Convert to the internal scope string format used by string-based type tracking.

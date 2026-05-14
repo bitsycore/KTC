@@ -41,7 +41,7 @@ import com.bitsycore.ktc.types.TypeDef
  *   (helpers) [isArrayType], [isRawArrayTypeRef], [isSizedArrayTypeRef],
  *             [arrayElementCType], [com.bitsycore.ktc.codegen.mapping.arrayElementKtType],
  *             [com.bitsycore.ktc.codegen.CCodeGen.optCTypeName], [com.bitsycore.ktc.codegen.CCodeGen.optNone], [com.bitsycore.ktc.codegen.CCodeGen.optSome],
- *             [com.bitsycore.ktc.codegen.CCodeGen.isValueNullableType], [com.bitsycore.ktc.codegen.CCodeGen.isFuncType], [com.bitsycore.ktc.codegen.CCodeGen.parseFuncType], [com.bitsycore.ktc.codegen.CCodeGen.cFuncPtrDecl],
+ *             [com.bitsycore.ktc.codegen.CCodeGen.isFuncType], [com.bitsycore.ktc.codegen.CCodeGen.parseFuncType], [com.bitsycore.ktc.codegen.CCodeGen.cFuncPtrDecl],
  *             [defaultVal], [hasSizeAnnotation], [getSizeAnnotation]
  *
  *   (printf) [printfFmt], [printfArg], [escapeC], [escapeStr]
@@ -291,8 +291,8 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
     return t.name
 }
 
-internal fun CCodeGen.defaultVal(t: KtcType): String = when {
-    t is KtcType.Prim -> when (t.kind) {
+internal fun CCodeGen.defaultVal(t: KtcType): String = when (t) {
+    is KtcType.Prim -> when (t.kind) {
         KtcType.PrimKind.Int, KtcType.PrimKind.Long -> "0"
         KtcType.PrimKind.Float -> "0.0f"
         KtcType.PrimKind.Double -> "0.0"
@@ -300,8 +300,9 @@ internal fun CCodeGen.defaultVal(t: KtcType): String = when {
         KtcType.PrimKind.Char -> "'\\0'"
         else -> "0"
     }
-    t is KtcType.Str -> "ktc_str(\"\")"
-    t is KtcType.Ptr -> "NULL"
+
+    is KtcType.Str -> "ktc_str(\"\")"
+    is KtcType.Ptr -> "NULL"
     else -> {
         val ct = cTypeStr(t.toInternalStr.removeSuffix("?"))
         "($ct){0}"
@@ -402,13 +403,14 @@ internal fun CCodeGen.printfFmt(ktc: KtcType): String = when (ktc) {
     else -> "%.*s"
 }
 
-internal fun CCodeGen.printfArg(expr: String, ktc: KtcType): String = when {
-    ktc is KtcType.Prim && ktc.kind == KtcType.PrimKind.Boolean -> "($expr) ? \"true\" : \"false\""
-    ktc is KtcType.Str -> "(ktc_Int)($expr).len, ($expr).ptr"
-    ktc is KtcType.User && ktc.kind == KtcType.UserKind.Enum -> {
+internal fun CCodeGen.printfArg(expr: String, ktc: KtcType): String = when (ktc) {
+    is KtcType.Prim if ktc.kind == KtcType.PrimKind.Boolean -> "($expr) ? \"true\" : \"false\""
+    is KtcType.Str -> "(ktc_Int)($expr).len, ($expr).ptr"
+    is KtcType.User if ktc.kind == KtcType.UserKind.Enum -> {
         val cName = typeFlatName(ktc.baseName)
         "(ktc_Int)${cName}_names[($expr)].len, ${cName}_names[($expr)].ptr"
     }
+
     else -> expr
 }
 

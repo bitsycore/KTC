@@ -5,22 +5,22 @@ import com.bitsycore.ktc.types.KtcType
 import com.bitsycore.ktc.types.TypeDef
 
 /**
-Symbol Table Data Classes
-
-Data structures used throughout the transpiler pipeline to represent
-Kotlin declarations during code generation. All are internal to the
-com.bitsycore package.
-
-Types:
-PropertyDef   — a unified property descriptor (ctor prop, body prop, or iface prop)
-ClassInfo     — aggregated class metadata (props, methods, type params)
-EnumInfo      — enum name + entry list
-ObjInfo       — object properties + methods
-FunSig        — function parameter types + return type
-IfaceInfo     — interface methods + properties + super-interfaces
-ActiveLambda  — lambda expression being expanded inside an inline call
-IteratorInfo  — result of findOperatorIterator() lookup
-COutput       — result of code generation (.h + .c string pair)
+ * Symbol Table Data Classes
+ *
+ * Data structures used throughout the transpiler pipeline to represent
+ * Kotlin declarations during code generation. All are internal to the
+ * com.bitsycore package.
+ *
+ * Types:
+ * PropertyDef   — a unified property descriptor (ctor prop, body prop, or iface prop)
+ * ClassInfo     — aggregated class metadata (props, methods, type params)
+ * EnumInfo      — enum name + entry list
+ * ObjInfo       — object properties + methods
+ * FunSig        — function parameter types + return type
+ * IfaceInfo     — interface methods + properties + super-interfaces
+ * ActiveLambda  — lambda expression being expanded inside an inline call
+ * IteratorInfo  — result of findOperatorIterator() lookup
+ * COutput       — result of code generation (.h + .c string pair)
  */
 
 // ═══════════════════════════════════════════════════════════════════
@@ -129,14 +129,9 @@ internal data class IfaceInfo(
     override val properties: List<PropertyDef> get() = emptyList()
 }
 
-internal data class ActiveLambda(val expr: LambdaExpr, val paramTypes: List<String>) // active inline lambda
-
-internal data class IteratorInfo(
-    val iterClass: String,
-    val iterCType: String,
-    val elemKtType: String,
-    val isPointer: Boolean
-) // iterator dispatch info
-
+/** active inline lambda */
+internal data class ActiveLambda(val expr: LambdaExpr, val paramTypes: List<String>)
+/** iterator dispatch info */
+internal data class IteratorInfo(val iterClass: String, val iterCType: String, val elemKtType: String, val isPointer: Boolean)
 /** Output of code generation: C header (.h) and source (.c) strings. */
 data class COutput(val header: String, val source: String)
