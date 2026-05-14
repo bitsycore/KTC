@@ -318,6 +318,53 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         return false
         }
 
+    /*
+    Returns the original interface type if this variable (or $self) was smart-cast
+    from an interface to a concrete class. Used to redirect field accesses through
+    the tagged union: recv.data.ConcreteClass_data.field.
+    */
+    internal fun isIfaceSmartCastVar(inName: String): String?
+        {
+        val vCur = lookupVar(inName) ?: return null     // current narrowed type
+        if (interfaces.containsKey(vCur)) return null   // still typed as interface, not narrowed
+        // Walk scope stack outward to find the original interface type
+        for (i in scopes.size - 2 downTo 0)
+            {
+            val vOuter = scopes[i][inName]?.toInternalStr ?: continue
+            return if (interfaces.containsKey(vOuter)) vOuter else null
+            }
+        // $self in extension function: outer scope never defines $self, use currentExtRecvType
+        if (inName == "\$self" && currentExtRecvType != null && interfaces.containsKey(currentExtRecvType))
+            return currentExtRecvType
+        return null
+        }
+
+    /* Generates the C expression to access the union data field for a narrowed interface variable. */
+    internal fun ifaceUnionAccess(inIfaceName: String, inNarrowedClass: String, inRecv: String): String
+        {
+        val vImpls = interfaceImplementors[inIfaceName]             // list of implementors for this interface
+        val vDataName = "${typeFlatName(inNarrowedClass)}_data"     // e.g. "IsAsTest_Circle_data"
+        return if (vImpls != null && vImpls.size == 1) "$inRecv.$vDataName" else "$inRecv.data.$vDataName"
+        }
+
+    /*
+    Generates the (void*) argument to pass as $self in a vtable method call for an interface receiver.
+    Vtable methods expect a pointer to the concrete struct data, NOT to the interface wrapper.
+    For multi-implementor: pass &recv.data (start of union = start of first member = concrete struct start)
+    For single-implementor: pass &recv.ConcreteClass_data
+    For zero-implementor (fallback): pass recv.obj (old void* design)
+    */
+    internal fun ifaceVtableSelf(inIfaceName: String, inRecv: String): String
+        {
+        val vImpls = interfaceImplementors[inIfaceName]
+        return when
+            {
+            vImpls == null || vImpls.isEmpty() -> "$inRecv.obj"                                     // fallback: void* obj
+            vImpls.size == 1 -> "(void*)&$inRecv.${typeFlatName(vImpls[0])}_data"                   // single impl: &recv.Class_data
+            else -> "(void*)&$inRecv.data"                                                           // multi impl: &recv.data (= union start)
+            }
+        }
+
     /** True if type is a function pointer type: "Fun(P1,P2)->R" */
     internal fun isFuncType(t: String): Boolean = t.startsWith("Fun(")
 

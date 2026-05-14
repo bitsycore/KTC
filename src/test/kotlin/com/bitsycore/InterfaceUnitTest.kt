@@ -50,8 +50,8 @@ class InterfaceUnitTest : TranspilerTestBase() {
                 printShape(c)
             }
         """)
-        // Virtual dispatch: s.vt->area((void*)&s)
-        r.sourceContains("s.vt->area((void*)&s)")
+        // Virtual dispatch: s.vt->area((void*)&s.data) — multi-impl interface uses union .data
+        r.sourceContains("s.vt->area((void*)&s.data)")
     }
 
     // ── Auto-wrap class → interface ──────────────────────────────────

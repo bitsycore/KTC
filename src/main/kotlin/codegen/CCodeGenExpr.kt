@@ -129,16 +129,17 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             if (ifaceMethod != null) {
                 val recv = genExpr(e.obj)
                 val idx = genExpr(e.index)
+                val vIdxSelfArg = ifaceVtableSelf(vIdxIfaceInfo.name, recv)
                 if (ifaceMethod.returnType?.nullable == true) {
                     val retBase = resolveMethodReturnType(vIdxIfaceInfo.baseName, ifaceMethod.returnType).removeSuffix("?")
                     val optType = optCTypeName("${retBase}?")
                     val t = tmp()
-                    preStmts += "$optType $t = $recv.vt->get((void*)&$recv, $idx);"
+                    preStmts += "$optType $t = $recv.vt->get($vIdxSelfArg, $idx);"
                     markOptional(t)
                     defineVar(t, "${retBase}?")
                     t
                 } else {
-                    "$recv.vt->get((void*)&$recv, $idx)"
+                    "$recv.vt->get($vIdxSelfArg, $idx)"
                 }
             } else {
                 "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"
@@ -203,8 +204,14 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             }
         } else if (isBuiltinType(target)) {
             val exprBase = exprType?.removeSuffix("?")
+            val isSourceNullable = exprType?.endsWith("?") == true
             if (exprBase != null && exprBase != "Any" && !exprBase.endsWith("*")) {
-                if (exprBase == target) "true" else "false"
+                if (exprBase == target) {
+                    // Nullable source: check non-null (tag check for value Optional, != NULL for pointers)
+                    if (isSourceNullable && isValueNullableType(exprType!!)) "(${inner}.tag == ktc_SOME)"
+                    else if (isSourceNullable) "(${inner} != NULL)"
+                    else "true"
+                } else "false"
             } else {
                 val typeId = getTypeId(target)
                 "(${inner}${memOp}__type_id == $typeId)"
@@ -239,7 +246,12 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
                 "true"
             }
             val castVal = if (vCastIfaceInfo != null) {
-                "${vCastIfaceInfo.flatName}_as_${vCastIfaceInfo.baseName}(&($inner))"
+                val srcFlatName2 = if (srcType != null && (classes.containsKey(srcType) || interfaces.containsKey(srcType))) typeFlatName(srcType) else vCastIfaceInfo.flatName
+                val addrExpr2 = if ('(' in inner) { val vT = tmp(); preStmts += "${cTypeStr(srcType ?: "")} $vT = ($inner);"; "&$vT" } else "&($inner)"
+                "${srcFlatName2}_as_${vCastIfaceInfo.baseName}($addrExpr2)"
+            } else if (srcType != null && interfaces.containsKey(srcType) && classes.containsKey(target)) {
+                // Source is an interface, target is a concrete class — extract from tagged union
+                ifaceUnionAccess(srcType, target, inner)
             } else if (srcType == "Any" || srcType == "Any*") {
                 "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
             } else {
@@ -247,7 +259,15 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             }
             "($check) ? ${optSome(optCType, castVal)} : ${optNone(optCType)}"
         } else if (vCastIfaceInfo != null) {
-            "${vCastIfaceInfo.flatName}_as_${vCastIfaceInfo.baseName}(&($inner))"
+            val srcFlatName = if (srcType != null && (classes.containsKey(srcType) || interfaces.containsKey(srcType))) typeFlatName(srcType) else vCastIfaceInfo.flatName
+            // Rvalue (e.g. constructor call) needs a temp to take its address
+            val addrExpr = if ('(' in inner) {
+                val vTmp = tmp(); preStmts += "${cTypeStr(srcType ?: "")} $vTmp = ($inner);"; "&$vTmp"
+            } else "&($inner)"
+            "${srcFlatName}_as_${vCastIfaceInfo.baseName}($addrExpr)"
+        } else if (srcType != null && interfaces.containsKey(srcType) && classes.containsKey(target)) {
+            // Source is an interface, target is a concrete class — extract from tagged union
+            ifaceUnionAccess(srcType, target, inner)
         } else if (srcType == "Any" || srcType == "Any*") {
             val memOp = if (isPtr) "->" else "."
             "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
@@ -316,6 +336,16 @@ internal fun CCodeGen.genName(e: NameExpr): String {
         if (objInfo?.props?.any { it.first == e.name } == true) {
             val fn = if (e.name in objInfo.privateProps) "PRIV_${e.name}" else e.name
             return "${typeFlatName(parentObj2)}.$fn"
+        }
+    }
+    // Bare field access when $self has been narrowed from interface in extension function
+    if (currentExtRecvType != null && interfaces.containsKey(currentExtRecvType)) {
+        val vNarrowedSelf = lookupVar("\$self")
+        if (vNarrowedSelf != null && classes.containsKey(vNarrowedSelf)) {
+            val vCi = classes[vNarrowedSelf]!!
+            if (vCi.props.any { it.first == e.name }) {
+                return "${ifaceUnionAccess(currentExtRecvType!!, vNarrowedSelf, "\$self")}.${e.name}"
+            }
         }
     }
     return e.name
@@ -462,7 +492,7 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             if (containsMethod != null) {
                 val recv = genExpr(e.right)
                 val elem = genExpr(e.left)
-                val call = "$recv.vt->${containsMethod.name}((void*)&$recv, $elem)"
+                val call = "$recv.vt->${containsMethod.name}(${ifaceVtableSelf(vContIfaceInfo.name, recv)}, $elem)"
                 return if (negated) "!$call" else call
             }
         }
@@ -1095,6 +1125,18 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         }
     }
 
+    // Inside an extension on an interface: bare method call → vtable dispatch on $self
+    if (currentExtRecvType != null && interfaces.containsKey(currentExtRecvType)) {
+        val extIfaceInfo = interfaces[currentExtRecvType]!!
+        val ifaceMethod = extIfaceInfo.methods.find { it.name == name }
+            ?: collectAllIfaceMethods(extIfaceInfo).find { it.name == name }
+        if (ifaceMethod != null) {
+            val vSelfVtArg = ifaceVtableSelf(extIfaceInfo.name, "\$self")              // pointer to concrete data inside $self
+            val allArgs = if (expandedArgs.isEmpty()) vSelfVtArg else "$vSelfVtArg, $expandedArgs"
+            return "\$self.vt->$name($allArgs)"
+        }
+    }
+
     // Inside an object method: bare method call resolves to object's method
     if (currentObject != null) {
         val oi = objects[currentObject]
@@ -1584,10 +1626,18 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         return "${typeFlatName(pointerBase)}_$method($allArgs)"
     }
 
-    // Interface method dispatch → d.vt->method((void*)&d, args)
+    // Interface method dispatch → d.vt->method(data_ptr, args)
     val vIfaceInfo = ifaceInfoFor(recvTypeKtc)                                        // non-null if receiver is a known interface
     if (vIfaceInfo != null) {
-        val allArgs = if (argStr.isEmpty()) "(void*)&$recv" else "(void*)&$recv, $argStr"
+        // Extension functions on the interface are static — call directly, not through vtable
+        val extFunOnIface = extensionFuns[vIfaceInfo.baseName]?.find { it.name == method }
+            ?: extensionFuns[vIfaceInfo.flatName]?.find { it.name == method }
+        if (extFunOnIface != null) {
+            val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+            return "${vIfaceInfo.flatName}_$method($allArgs)"
+        }
+        val vSelfArg = ifaceVtableSelf(vIfaceInfo.name, recv)                         // pointer to concrete data inside interface
+        val allArgs = if (argStr.isEmpty()) vSelfArg else "$vSelfArg, $argStr"
         // Check if this interface method returns nullable
         val ifaceMethod = vIfaceInfo.methods.find { it.name == method }
             ?: collectAllIfaceMethods(vIfaceInfo).find { it.name == method }
@@ -1951,12 +2001,12 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
         return "$recv->${fieldName}"
     }
 
-    // Interface property access via vtable: list.size → list.vt->size(list.obj)
+    // Interface property access via vtable: list.size → list.vt->size(data_ptr)
     val vIfaceDotInfo = ifaceInfoFor(recvTypeCoreKtc)                                 // non-null if receiver is a known interface
     if (vIfaceDotInfo != null) {
         val allProps = collectAllIfaceProperties(vIfaceDotInfo)
         if (allProps.any { it.name == e.name }) {
-            return "$recv.vt->${e.name}((void*)&$recv)"
+            return "$recv.vt->${e.name}(${ifaceVtableSelf(vIfaceDotInfo.name, recv)})"
         }
     }
 
@@ -1970,6 +2020,23 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
         val ci = classes[currentClass]!!
         if (e.name in ci.privateProps) "PRIV_${e.name}" else e.name
     } else e.name
+
+    // Smart-cast from interface to class: redirect field access through union data
+    if (e.obj is NameExpr) {
+        val vOrigIface = isIfaceSmartCastVar(e.obj.name)
+        if (vOrigIface != null) {
+            val vNarrowedType = lookupVar(e.obj.name)!!
+            return "${ifaceUnionAccess(vOrigIface, vNarrowedType, e.obj.name)}.$fieldName"
+        }
+    }
+    // $self narrowed from interface in extension (this.field)
+    if (e.obj is ThisExpr && currentExtRecvType != null && interfaces.containsKey(currentExtRecvType)) {
+        val vNarrowedSelf = lookupVar("\$self")
+        if (vNarrowedSelf != null && classes.containsKey(vNarrowedSelf)) {
+            return "${ifaceUnionAccess(currentExtRecvType!!, vNarrowedSelf, "\$self")}.$fieldName"
+        }
+    }
+
     return "$recv.${fieldName}"
 }
 
@@ -2224,7 +2291,12 @@ internal fun CCodeGen.inferBlockType(b: Block): String? {
 // ── when expression (nested ternary or temp) ──────────────────────
 
 internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
-    val subjName = (e.subject as? NameExpr)?.name
+    // ThisExpr subject maps to $self; NameExpr subject maps to its variable name
+    val subjName = when (e.subject) {
+        is NameExpr -> (e.subject as NameExpr).name
+        is ThisExpr -> "\$self"
+        else -> null
+    }
     // Check if branches need interface coercion (different types sharing a common interface)
     val branchTypes = e.branches.map { inferBlockType(it.body) }
     val distinctTypes = branchTypes.filterNotNull().distinct()
@@ -2269,8 +2341,10 @@ internal fun CCodeGen.genWhenExpr(e: WhenExpr): String {
         return t
     }
 
-    // Check if all branches are single-expression → nested ternary
-    val allSimple = e.branches.all { blockAsSingleExpr(it.body) != null }
+    // If any branch needs is-narrowing, avoid ternary: accessing wrong union member is UB
+    val hasNarrowingBranch = e.branches.any { narrowSubjectForBranch(it, subjName) != null }
+    // Check if all branches are single-expression → nested ternary (only when no narrowing needed)
+    val allSimple = !hasNarrowingBranch && e.branches.all { blockAsSingleExpr(it.body) != null }
     if (allSimple) {
         val sb = StringBuilder()
         for (br in e.branches) {
@@ -2320,7 +2394,9 @@ internal fun CCodeGen.narrowSubjectForBranch(br: WhenBranch, subjName: String?):
     if (br.conds == null || subjName == null || isMutable(subjName)) return null
     val isCond = br.conds.find { it is IsCond && !it.negated } as? IsCond ?: return null
     val target = resolveTypeName(isCond.type).toInternalStr
-    val current = lookupVar(subjName) ?: return null
+    // $self in extension function: use currentExtRecvType as the base type when not in scope
+    val current = if (subjName == "\$self") (lookupVar("\$self") ?: currentExtRecvType) ?: return null
+                  else lookupVar(subjName) ?: return null
     // Don't narrow pointer types (Any* etc.) — they need original type for ->data dereference
     if (current.endsWith("*")) return null
     return if (current != target) target else null
@@ -2341,6 +2417,9 @@ internal fun CCodeGen.inferWhenExprType(e: WhenExpr): String? {
     }
     return types.first()
 }
+
+/* Returns true when expr contains no function calls — safe to evaluate multiple times without side effects. */
+internal fun isSimpleCExpr(inExpr: String) = '(' !in inExpr
 
 // ── println / print (expression context — rare) ──────────────────
 
@@ -2369,9 +2448,13 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
     // Nullable → ternary: $has ? printf(value) : printf("null")
     if (t.endsWith("?")) {
         val baseT = t.removeSuffix("?")
-        val hasExpr = "${expr}\$has"
+        // Materialize only when complex to avoid repeated evaluation
+        val safeExpr = if (!isSimpleCExpr(expr)) {
+            val vTmp = tmp(); preStmts += "${cTypeStr(t)} $vTmp = ($expr);"; vTmp
+        } else expr
+        val hasExpr = "${safeExpr}\$has"
         val fmt = printfFmt(baseT) + nl
-        val a = printfArg(expr, baseT)
+        val a = printfArg(safeExpr, baseT)
         return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
     }
 
@@ -2424,6 +2507,16 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
     }
 
+    // String / enum: printfArg expands expr twice (.len + .ptr or names[x] twice) — materialize if complex
+    if (t == "String") {
+        val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); preStmts += "ktc_String $vTmp = ($expr);"; vTmp } else expr
+        return "printf(\"%.*s$nl\", (ktc_Int)($safeExpr).len, ($safeExpr).ptr)"
+    }
+    if (t in enums) {
+        val cName = typeFlatName(t)
+        val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); preStmts += "$cName $vTmp = ($expr);"; vTmp } else expr
+        return "printf(\"%.*s$nl\", (ktc_Int)${cName}_names[$safeExpr].len, ${cName}_names[$safeExpr].ptr)"
+    }
     val fmt = printfFmt(t) + nl
     val a = printfArg(expr, t)
     return "printf(\"$fmt\", $a)"
@@ -2438,7 +2531,18 @@ internal fun CCodeGen.genPrintfFromTemplate(tmpl: StrTemplateExpr, nl: String): 
             is ExprPart -> {
                 val t = inferExprType(part.expr) ?: "Int"
                 fmt.append(printfFmt(t))
-                argsList += printfArg(genExpr(part.expr), t)
+                val exprStr = genExpr(part.expr)
+                // String / enum: materialize if complex to avoid double-evaluation
+                if (t == "String") {
+                    val s = if (!isSimpleCExpr(exprStr)) { val v = tmp(); preStmts += "ktc_String $v = ($exprStr);"; v } else exprStr
+                    argsList += "(ktc_Int)($s).len, ($s).ptr"
+                } else if (t in enums) {
+                    val cName = typeFlatName(t)
+                    val s = if (!isSimpleCExpr(exprStr)) { val v = tmp(); preStmts += "$cName $v = ($exprStr);"; v } else exprStr
+                    argsList += "(ktc_Int)${cName}_names[$s].len, ${cName}_names[$s].ptr"
+                } else {
+                    argsList += printfArg(exprStr, t)
+                }
             }
         }
     }
@@ -2476,8 +2580,8 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
     }
     val maxLen = templateMaxLen(e)
     if (maxLen != null && maxLen <= 512) {
-        // Single pass with fixed stack buffer
-        preStmts += "ktc_Char ${buf}[$maxLen];"
+        // Single pass with alloca buffer (alloca = function-frame lifetime, safe when pointer escapes block)
+        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca($maxLen);"
         preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
         for (p in parts) {
             when {
@@ -2728,7 +2832,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             } else if (hasIface) {
                 val buf = tmp()
                 preStmts += "ktc_Char ${buf}[$sz];"
-                preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
+                preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode(${ifaceVtableSelf(base, recv)}));"
                 "ktc_str($buf)"
             } else {
                 "ktc_str(\"<$type>\")"
@@ -2775,7 +2879,7 @@ internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): S
             } else if (hasIface) {
                 val buf = tmp()
                 preStmts += "ktc_Char ${buf}[64];"
-                preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
+                preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode(${ifaceVtableSelf(base, recv)}));"
                 preStmts += "ktc_sb_append_cstr(&$sb, $buf);"
             } else {
                 preStmts += "ktc_sb_append_str(&$sb, ktc_str(\"<$type>\"));"
@@ -2831,7 +2935,7 @@ internal fun CCodeGen.genSbAppend(sbRef: String, expr: String, type: String): St
                 } else if (interfaces.containsKey(base)) {
                     val buf = tmp()
                     preStmts += "ktc_Char ${buf}[64];"
-                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $expr.vt->hashCode((void*)&$expr));"
+                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $expr.vt->hashCode(${ifaceVtableSelf(base, expr)}));"
                     "ktc_sb_append_cstr($sbRef, $buf);"
                 } else {
                     "ktc_sb_append_str($sbRef, ktc_str(\"<$type>\"));"

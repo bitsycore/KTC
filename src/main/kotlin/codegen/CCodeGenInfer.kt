@@ -62,14 +62,23 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
         if (enums.containsKey(e.name)) e.name
         else if (objects.containsKey(e.name)) e.name
         else {
-            // Parent object field inside nested class
-            val parentObj = currentClass?.substringBefore('$')
-            if (parentObj != null && currentObject == null) {
-                val oi = objects[parentObj]
-                if (oi?.props?.any { it.first == e.name } == true)
-                    resolveTypeName(oi.props.find { it.first == e.name }!!.second).toInternalStr
-                else null
-            } else null
+            // Bare field access when $self is narrowed from interface in extension function
+            val vNarrowedSelf = if (currentExtRecvType != null && interfaces.containsKey(currentExtRecvType))
+                lookupVar("\$self") else null
+            if (vNarrowedSelf != null && classes.containsKey(vNarrowedSelf)) {
+                val vCi = classes[vNarrowedSelf]!!
+                val vProp = vCi.props.find { it.first == e.name }
+                if (vProp != null) resolveTypeName(vProp.second).toInternalStr else null
+            } else {
+                // Parent object field inside nested class
+                val parentObj = currentClass?.substringBefore('$')
+                if (parentObj != null && currentObject == null) {
+                    val oi = objects[parentObj]
+                    if (oi?.props?.any { it.first == e.name } == true)
+                        resolveTypeName(oi.props.find { it.first == e.name }!!.second).toInternalStr
+                    else null
+                } else null
+            }
         }
     }
     is BinExpr  -> {
@@ -329,6 +338,16 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         funSigs[name]?.returnType?.let {
             val base = resolveTypeName(it).toInternalStr
             return if (it.nullable && !base.endsWith("?")) "${base}?" else base
+        }
+        // Bare call to interface method inside extension function on that interface
+        if (currentExtRecvType != null && interfaces.containsKey(currentExtRecvType)) {
+            val vIfaceInfo = interfaces[currentExtRecvType]!!
+            val vIfaceMethod = vIfaceInfo.methods.find { it.name == name }
+                ?: collectAllIfaceMethods(vIfaceInfo).find { it.name == name }
+            if (vIfaceMethod?.returnType != null) {
+                val base = resolveTypeName(vIfaceMethod.returnType).toInternalStr
+                return if (vIfaceMethod.returnType.nullable && !base.endsWith("?")) "${base}?" else base
+            }
         }
     }
     if (e.callee is DotExpr) return inferMethodReturnType(e.callee, e.args)

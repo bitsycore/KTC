@@ -1324,10 +1324,12 @@ internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
         // Fallback: no known implementors — keep void* obj
         hdr.appendLine("    void* obj;")
     } else if (impls.size == 1) {
-        // Single implementor: no union needed, use plain field
+        // Single implementor: no union needed, use plain field; __type_id read through the concrete struct
+        hdr.appendLine("    ktc_Int __type_id;")
         hdr.appendLine("    ${typeFlatName(impls[0])} ${ifaceDataName(impls[0])};")
     } else {
-        // Multiple implementors: tagged union
+        // Multiple implementors: tagged union — __type_id mirrors the concrete struct's first field
+        hdr.appendLine("    ktc_Int __type_id;")
         hdr.appendLine("    union {")
         for (className in impls) {
             hdr.appendLine("        ${typeFlatName(className)} ${ifaceDataName(className)};")
@@ -1420,10 +1422,11 @@ internal fun CCodeGen.hashFieldExpr(resolvedType: String, valueExpr: String): St
 internal fun CCodeGen.ifaceAsInit(cIface: String, cClass: String, className: String, ifaceName: String): String {
     val impls = interfaceImplementors[ifaceName]
     val dataName = ifaceDataName(className)
+    val typeIdField = ".__type_id = ${cClass}_TYPE_ID"
     return when {
         impls == null || impls.isEmpty() -> "($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt}"
-        impls.size == 1 -> "($cIface){.$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
-        else -> "($cIface){.data.$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
+        impls.size == 1 -> "($cIface){$typeIdField, .$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
+        else -> "($cIface){$typeIdField, .data.$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"
     }
 }
 

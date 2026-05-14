@@ -747,7 +747,7 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
                 val idx = genExpr(s.target.index)
                 val value = genExpr(s.value)
                 flushPreStmts(ind)
-                impl.appendLine("$ind$recv.vt->set((void*)&$recv, $idx, $value);")
+                impl.appendLine("$ind$recv.vt->set(${ifaceVtableSelf(vSetIfaceInfo.name, recv)}, $idx, $value);")
                 return
             }
         }
@@ -1268,7 +1268,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     }
 
     val t = inferExprType(arg) ?: "Int"
-    val expr = genExpr(arg)
+    var expr = genExpr(arg)
     flushPreStmts(ind)
 
     // Nullable → if (tag == ktc_SOME) print(value) else print("null")
@@ -1276,6 +1276,12 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         val baseT = t.removeSuffix("?")
         val isValNull = isValueNullableType(t)
         val isPtrNull = !isValNull && t.endsWith("*?")
+        // Materialize only when complex to avoid repeated evaluation
+        if (!isSimpleCExpr(expr)) {
+            val vTmp = tmp()
+            impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+            expr = vTmp
+        }
         val hasExpr = when {
             isValNull -> "$expr.tag == ktc_SOME"
             isPtrNull -> "$expr != NULL"
@@ -1367,6 +1373,18 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         return
     }
 
+    // String / enum: printfArg expands expr twice (.len + .ptr or names[x] twice) — materialize if complex
+    if (t == "String") {
+        val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); impl.appendLine("${ind}ktc_String $vTmp = ($expr);"); vTmp } else expr
+        impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)($safeExpr).len, ($safeExpr).ptr);")
+        return
+    }
+    if (t in enums) {
+        val cName = typeFlatName(t)
+        val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); impl.appendLine("${ind}$cName $vTmp = ($expr);"); vTmp } else expr
+        impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${cName}_names[$safeExpr].len, ${cName}_names[$safeExpr].ptr);")
+        return
+    }
     val fmt = printfFmt(t) + nl
     val a = printfArg(expr, t)
     impl.appendLine("${ind}printf(\"$fmt\", $a);")
@@ -1611,7 +1629,12 @@ internal fun CCodeGen.emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
 // ── when (as statement) ──────────────────────────────────────────
 
 internal fun CCodeGen.emitWhenStmt(e: WhenExpr, ind: String, method: Boolean) {
-    val subjName = (e.subject as? NameExpr)?.name
+    // ThisExpr subject maps to $self; NameExpr subject maps to its variable name
+    val subjName = when (e.subject) {
+        is NameExpr -> (e.subject as NameExpr).name
+        is ThisExpr -> "\$self"
+        else -> null
+    }
     for ((bi, br) in e.branches.withIndex()) {
         if (br.conds == null) {
             // else branch
@@ -1670,8 +1693,13 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
                 }
             } else if (isBuiltinType(target)) {
                 val exprBase = exprType?.removeSuffix("?")
+                val isSourceNullable = exprType?.endsWith("?") == true
                 if (exprBase != null && exprBase != "Any" && !exprBase.endsWith("*")) {
-                    if (exprBase == target) "true" else "false"
+                    if (exprBase == target) {
+                        if (isSourceNullable && isValueNullableType(exprType!!)) "($subj.tag == ktc_SOME)"
+                        else if (isSourceNullable) "($subj != NULL)"
+                        else "true"
+                    } else "false"
                 } else {
                     val typeId = getTypeId(target)
                     "($subj${memOp}__type_id == $typeId)"
@@ -1739,16 +1767,16 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
                 val selfArg = if (isPointer) arrExpr else "&$arrExpr"
                 // For interface types, dispatch through vtable
                 if (arrType != null && interfaces.containsKey(arrType)) {
-                    impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator((void*)&$arrExpr);")
+                    impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator(${ifaceVtableSelf(arrType, arrExpr)});")
                 } else {
                     val baseClass = if (isPointer) anyIndirectClassName(arrType)!! else arrType!!
                     impl.appendLine("$ind$iterCType $iterVar = ${typeFlatName(baseClass)}_iterator($selfArg);")
                 }
                 val isIfaceIter = interfaces.containsKey(iterClass)
                 if (isIfaceIter) {
-                    impl.appendLine("${ind}while (${iterVar}.vt->hasNext((void*)&${iterVar})) {")
+                    impl.appendLine("${ind}while (${iterVar}.vt->hasNext(${ifaceVtableSelf(iterClass, iterVar)})) {")
                     val elemCType = cTypeStr(elemKtType)
-                    impl.appendLine("$ind    $elemCType ${s.varName} = ${iterVar}.vt->next((void*)&${iterVar});")
+                    impl.appendLine("$ind    $elemCType ${s.varName} = ${iterVar}.vt->next(${ifaceVtableSelf(iterClass, iterVar)});")
                 } else {
                     impl.appendLine("${ind}while (${typeFlatName(iterClass)}_hasNext(&$iterVar)) {")
                     val elemCType = cTypeStr(elemKtType)
