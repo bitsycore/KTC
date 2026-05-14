@@ -434,7 +434,7 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
         }
     }
     // String methods
-    if (recvType == "String") {
+    if (recvType.removeSuffix("?") == "String") {
         return when (method) {
             "substring" -> "String"
             "startsWith", "endsWith", "contains", "isEmpty", "isNotEmpty" -> "Boolean"
@@ -548,8 +548,8 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
         val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
         return "${internal}*"
     }
-    if (e.name == "length" && recvType == "String") return "Int"
-    if (e.name == "runeLen" && recvType == "String") return "Int"
+    if (e.name == "length" && recvType.removeSuffix("?") == "String") return "Int"
+    if (e.name == "runeLen" && recvType.removeSuffix("?") == "String") return "Int"
     // Enum value .name / .ordinal
     if (e.name == "name" && recvType in enums) return "String"
     if (e.name == "ordinal" && recvType in enums) return "Int"
