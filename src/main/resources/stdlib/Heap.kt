@@ -8,7 +8,7 @@ Usage:
     val arr = HeapAlloc<Array<T>>(n)
     val raw = HeapAlloc<RawArray<T>>(n)
 */
-fun <T> HeapAlloc(vararg inArgs: Any): @Ptr T = error("Transpiler intrinsic"))
+fun <T> HeapAlloc(vararg inArgs: Any): @Ptr T = error("Transpiler intrinsic")
 
 /**
 Alloc a zero-initialised heap array of n elements.
