@@ -2,15 +2,8 @@
 package ktc.std
 
 /**
-Built-in type annotations understood by the transpiler.
-These annotations are not real Kotlin annotations at runtime — they are
-compiler directives that influence C code generation.
-*/
-
-/**
-Mark an Array<T> parameter, property, or return type as a raw C pointer.
-A @Ptr Array<T> is emitted as `T*` with no companion $len field.
-A @Ptr T (non-array) is emitted as `T*` (pointer to single value).
+Mark a type parameter, type property, or return type as a raw C pointer.
+A @Ptr T is emitted as `T*` (pointer to single value).
 Nullable @Ptr T? is emitted as `T*` and compares to NULL instead of wrapping in an Optional.
 
 Usage:
@@ -44,15 +37,3 @@ Usage:
     var threadId: Int = 0
 */
 annotation class Tls
-
-/**
-Opaque fat-pointer built-in type used for type-erased references.
-Any can hold a pointer to any value together with a type identifier.
-Passing Any by value is only allowed as @Ptr Any.
-
-Usage:
-    fun store(inValue: @Ptr Any)
-    fun load(): @Ptr Any
-
-Note: Any is a built-in transpiler type and does not need a class declaration.
-*/
