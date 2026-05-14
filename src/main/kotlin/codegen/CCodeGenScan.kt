@@ -426,7 +426,18 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                     for (a in e.args) scanExpr(a.expr)
                     scanExpr(e.callee)
                 }
-                is BinExpr -> { scanExpr(e.left); scanExpr(e.right) }
+                is BinExpr -> {
+                    // Infix call: `a myOp b` → treat like a.myOp(b) for generic instantiation
+                    val vInfixDecl = inlineExtFunDecls[e.op]
+                    if (vInfixDecl != null && vInfixDecl.typeParams.isNotEmpty()) {
+                        val vRecvType = inferExprType(e.left)
+                        if (vRecvType != null) {
+                            val vArgs = inferTypeArgsFromReceiver(vInfixDecl, vRecvType, listOf(Arg(expr = e.right)), emptyList())
+                            if (vArgs != null) genericFunInstantiations.getOrPut(e.op) { mutableSetOf() }.add(vArgs)
+                        }
+                    }
+                    scanExpr(e.left); scanExpr(e.right)
+                }
                 is DotExpr -> scanExpr(e.obj)
                 is SafeDotExpr -> scanExpr(e.obj)
                 is IndexExpr -> { scanExpr(e.obj); scanExpr(e.index) }
@@ -602,12 +613,33 @@ internal fun CCodeGen.scanExprWithSubst(e: Expr?, subst: Map<String, String>): B
         is CallExpr -> {
             var found = false
             val name = (e.callee as? NameExpr)?.name
-            // Constructor call to generic class: ArrayList<T>(...) → with T=Int → ArrayList_Int
+            // Constructor call to generic class WITH explicit type args: ArrayList<T>(...) → ArrayList_Int
             if (name != null && classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
                 val resolvedArgs = e.typeArgs.map { subst[it.name] ?: it.name }
                 if (resolvedArgs.none { it in allGenericTypeParamNames }) {
                     if (genericInstantiations[name]?.contains(resolvedArgs) != true) {
                         recordGenericInstantiation(name, resolvedArgs)
+                        found = true
+                    }
+                }
+            }
+            // Constructor call to generic class WITHOUT explicit type args: StdPair(this, that)
+            // Infer type args from ctor param type names via current subst (e.g. A→"Int", B→"String")
+            if (name != null && genericClassDecls.containsKey(name) && e.typeArgs.isEmpty()) {
+                val vClassDecl = genericClassDecls[name]!! // generic class template declaration
+                val vTypeParamSet = vClassDecl.typeParams.toSet() // type param names
+                val vInferred = mutableMapOf<String, String>() // type param → resolved concrete type
+                for (vCtorParam in vClassDecl.ctorParams) {
+                    val vPTypeName = vCtorParam.type.name // param's type name (may be a type param)
+                    if (vPTypeName in vTypeParamSet) {
+                        val vResolved = subst[vPTypeName] // resolve via current substitution
+                        if (vResolved != null && vResolved !in allGenericTypeParamNames) vInferred[vPTypeName] = vResolved
+                    }
+                }
+                if (vInferred.size == vClassDecl.typeParams.size) {
+                    val vArgs = vClassDecl.typeParams.map { vInferred[it]!! } // ordered resolved args
+                    if (genericInstantiations[name]?.contains(vArgs) != true) {
+                        recordGenericInstantiation(name, vArgs)
                         found = true
                     }
                 }

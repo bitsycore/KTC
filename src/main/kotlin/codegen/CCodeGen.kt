@@ -960,6 +960,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 // Skip extensions on generic types (expanded per class by emitStarExtFunInstantiations)
                 if (d.receiver != null && d.receiver.typeArgs.isNotEmpty()
                     && (genericIfaceDecls.containsKey(d.receiver.name) || genericClassDecls.containsKey(d.receiver.name))) continue
+                // Skip inline/infix extension functions — expanded at call sites only, not emitted as C functions
+                if (d.receiver != null && (d.isInline || d.isInfix)) continue
                 if (d.receiver != null) emitExtensionFun(d) else emitFun(d)
             }
             is PropDecl -> emitTopProp(d)

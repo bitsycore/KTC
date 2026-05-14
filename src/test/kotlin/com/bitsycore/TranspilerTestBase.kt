@@ -94,6 +94,7 @@ open class TranspilerTestBase {
      */
     protected fun transpile(@Language("kotlin") src: String): TranspileResult {
         val source = src.trimIndent()
+        prescanInfix(source) // register infix function names before parsing
         val tokens = Lexer(source).tokenize()
         val ast = Parser(tokens).parseFile()
         val allAsts = listOf(ast)
@@ -107,9 +108,15 @@ open class TranspilerTestBase {
         return result
     }
 
+    /* Pre-scan source text for infix function names and add them to Parser.INFIX_IDS. */
+    private val vInfixNameRx = Regex("""\binfix\s+fun\b[^(.]+\.(\w+)\s*\(""")
+    private fun prescanInfix(inSource: String) {
+        vInfixNameRx.findAll(inSource).forEach { vMatch -> Parser.INFIX_IDS.add(vMatch.groupValues[1]) }
+    }
+
     /*
     Loads and parses all stdlib .kt files by scanning the /stdlib/ resource directory.
-    Returns a list of ASTs ready to be passed as allAsts to CCodeGen.
+    Also prescans each file for infix function names. Returns ASTs for CCodeGen context.
     */
     protected fun loadStdlibAsts(): List<KtFile> {
         val cls = this.javaClass
@@ -127,9 +134,13 @@ open class TranspilerTestBase {
                 ?.map { it.name } ?: emptyList()
             else -> emptyList()
         }
-        return names.sorted().mapNotNull { name ->
+        val vSources = names.sorted().mapNotNull { name ->
             val res = cls.getResourceAsStream("/stdlib/$name") ?: return@mapNotNull null
-            val src = res.bufferedReader().readText()
+            name to res.bufferedReader().readText()
+        }
+        // Prescan all stdlib sources for infix names before any parsing
+        vSources.forEach { (_, src) -> prescanInfix(src) }
+        return vSources.mapNotNull { (name, src) ->
             val tokens = Lexer(src).tokenize()
             Parser(tokens).parseFile().copy(sourceFile = name)
         }
@@ -139,12 +150,16 @@ open class TranspilerTestBase {
     Transpiles [src] with the full stdlib included in the allAsts context,
     so stdlib types (Random, ArrayList, etc.) are visible to the codegen.
     The generated output is for the primary file only.
+    Stdlib is loaded (and prescanned for infix names) BEFORE parsing the user source
+    so stdlib infix operators like toStd are recognized during parsing.
     */
     protected fun transpileWithStdlib(src: String): TranspileResult {
         val vSource = src.trimIndent()
+        val vStdlibAsts = loadStdlibAsts()  // prescans stdlib infix names into Parser.INFIX_IDS
+        prescanInfix(vSource)                // also prescan user source for any user-defined infix
         val vTokens = Lexer(vSource).tokenize()
         val vAst = Parser(vTokens).parseFile()
-        val vAllAsts = loadStdlibAsts() + vAst
+        val vAllAsts = vStdlibAsts + vAst
         val vOutput = CCodeGen(vAst, vAllAsts, vSource.lines()).generate()
         val result = TranspileResult(
             header = vOutput.header,

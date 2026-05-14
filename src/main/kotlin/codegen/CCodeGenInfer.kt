@@ -83,7 +83,23 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
             pairTypeComponents["Pair_${a}_${b}"] = Pair(a, b)
             "Pair_${a}_${b}"
         }
-        else inferExprType(e.left)  // arithmetic inherits left type
+        else {
+            /* User-defined infix operator: look up in inlineExtFunDecls, resolve return type with type substitution. */
+            val vInfixDecl = inlineExtFunDecls[e.op] // infix function declaration, or null if not user-defined infix
+            if (vInfixDecl != null && vInfixDecl.returnType != null) {
+                val vRecvType = inferExprType(e.left)  // receiver type (e.g. "Int")
+                val vArgType  = inferExprType(e.right) // argument type (e.g. "String")
+                val vSavedSubst = typeSubst            // save outer substitution
+                if (vInfixDecl.typeParams.isNotEmpty()) {
+                    typeSubst = inferInlineFunSubst(vInfixDecl, vRecvType, listOf(vArgType))
+                }
+                val vResult = resolveTypeName(vInfixDecl.returnType).toInternalStr // concrete return type string
+                typeSubst = vSavedSubst
+                vResult
+            } else {
+                inferExprType(e.left)  // arithmetic inherits left type
+            }
+        }
     }
     is PrefixExpr -> if (e.op == "!") "Boolean" else inferExprType(e.expr)
     is PostfixExpr -> inferExprType(e.expr)
@@ -462,7 +478,18 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     }
     // Extension function on non-class type
     val extFun = extensionFuns[recvType]?.find { it.name == method }
-    if (extFun != null) return if (extFun.returnType != null) resolveTypeName(extFun.returnType).toInternalStr else "Unit"
+    if (extFun != null) {
+        /* Generic extension: infer concrete return type by substituting type params from receiver + args. */
+        if (extFun.typeParams.isNotEmpty() && extFun.returnType != null) {
+            val vArgTypes    = args.map { inferExprType(it.expr) } // concrete argument types
+            val vSavedSubst  = typeSubst                           // save outer substitution
+            typeSubst        = inferInlineFunSubst(extFun, recvType, vArgTypes)
+            val vResult      = resolveTypeName(extFun.returnType).toInternalStr
+            typeSubst        = vSavedSubst
+            return vResult
+        }
+        return if (extFun.returnType != null) resolveTypeName(extFun.returnType).toInternalStr else "Unit"
+    }
     // Enum static methods
     if (recvType in enums) {
         when (method) {

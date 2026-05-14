@@ -747,6 +747,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
  * Instantiations are found by scanning call sites in the AST.
  */
 internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
+    if (f.isInline || f.isInfix) return  // inline/infix: expanded at call sites only, not emitted as C functions
     val instantiations = genericFunInstantiations[f.name] ?: return
     // Switch source file attribution for mem-track if this function came from another file
     val prevSourceFile = currentSourceFile
