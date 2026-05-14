@@ -53,13 +53,9 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
     hdr.appendLine("// ══ $kind ${d.name} ($currentSourceFile) ══")
     hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[d.name]!!}")
     hdr.appendLine("typedef struct {")
-    // DUPLICATE START HERE ID1
     emitStructFields(ci)
-    // DUPLICATE END HERE ID1
     hdr.appendLine("} $cName;")
-    // DUPLICATE START HERE ID2
     emitConstructorBody(cName, ci)
-    // DUPLICATE END HERE ID2
     // --- class extras: equals (all classes), toString (data only) ---
     emitClassEquals(cName, ci)
     if (d.isData) {
@@ -159,13 +155,9 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
     hdr.appendLine("// ══ $kind ${templateDecl.name}<$concreteTypes> ($currentSourceFile) ══")
     hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[ci.name]!!}")
     hdr.appendLine("struct $cName {")
-    // DUPLICATE START HERE ID1
     emitStructFields(ci)
-    // DUPLICATE END HERE ID1
     hdr.appendLine("};")
-    // DUPLICATE START HERE ID2
     emitConstructorBody(cName, ci)
-    // DUPLICATE END HERE ID2
     // --- methods (from template AST, but with typeSubst active) ---
     currentClass = mangledName
     selfIsPointer = true
@@ -283,14 +275,7 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     }
     impl.appendLine("$cRet ${cClass}_${methodName}($allParams) {")
 
-    val prevReturnsNullable = currentFnReturnsNullable
-    val prevReturnsArray = currentFnReturnsArray
-    val prevReturnsSizedArray = currentFnReturnsSizedArray
-    val prevSizedArraySize = currentFnSizedArraySize
-    val prevSizedArrayElemType = currentFnSizedArrayElemType
-    val prevReturnType = currentFnReturnType
-    val prevReturnKtc = currentFnReturnKtcType
-    val prevOptRetCTypeName = currentFnOptReturnCTypeName
+    val prevState = saveFunState()
     currentFnReturnsNullable = returnsNullable
     currentFnReturnsArray = false
     currentFnReturnsSizedArray = returnsSizedArray
@@ -330,14 +315,7 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined1)
     popScope()
 
-    currentFnReturnsNullable = prevReturnsNullable
-    currentFnReturnsArray = prevReturnsArray
-    currentFnReturnsSizedArray = prevReturnsSizedArray
-    currentFnSizedArraySize = prevSizedArraySize
-    currentFnSizedArrayElemType = prevSizedArrayElemType
-    currentFnReturnType = prevReturnType
-    currentFnReturnKtcType = prevReturnKtc
-    currentFnOptReturnCTypeName = prevOptRetCTypeName
+    restoreFunState(prevState)
 
     impl.appendLine("}")
     impl.appendLine()
@@ -385,16 +363,8 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     hdr.appendLine("$cRet $cFnName($allParams);")
     impl.appendLine("$cRet $cFnName($allParams) {")
 
-    val prevClass = currentClass
-    val prevSelfIsPointer = selfIsPointer
-    val prevExtRecvType = currentExtRecvType
-    val prevReturnsSizedArray = currentFnReturnsSizedArray
-    val prevSizedArraySize = currentFnSizedArraySize
-    val prevSizedArrayElemType = currentFnSizedArrayElemType
-    val prevReturnsNullable = currentFnReturnsNullable
-    val prevOptRetCTypeName = currentFnOptReturnCTypeName
+    val prevState = saveFunState()
     currentFnReturnsSizedArray = returnsSizedArray
-    currentFnReturnsNullable = returnsNullable
     currentFnOptReturnCTypeName = optRetCType
     if (returnsSizedArray) {
         currentFnSizedArraySize = getSizeAnnotation(f.returnType)!!
@@ -446,14 +416,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
     trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined2)
     popScope()
 
-    currentClass = prevClass
-    selfIsPointer = prevSelfIsPointer
-    currentExtRecvType = prevExtRecvType
-    currentFnReturnsSizedArray = prevReturnsSizedArray
-    currentFnSizedArraySize = prevSizedArraySize
-    currentFnSizedArrayElemType = prevSizedArrayElemType
-    currentFnReturnsNullable = prevReturnsNullable
-    currentFnOptReturnCTypeName = prevOptRetCTypeName
+    restoreFunState(prevState)
 
     impl.appendLine("}")
     impl.appendLine()
@@ -517,11 +480,7 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         hdr.appendLine("$cRet $cName($params);")
         impl.appendLine("$cRet $cName($params) {")
 
-        val prevReturnsArray = currentFnReturnsArray
-        val prevReturnsSizedArray = currentFnReturnsSizedArray
-        val prevSizedArraySize = currentFnSizedArraySize
-        val prevSizedArrayElemType = currentFnSizedArrayElemType
-        val prevReturnType = currentFnReturnType
+        val prevState = saveFunState()
         currentFnReturnsArray = returnsArray
         currentFnReturnsSizedArray = returnsSizedArray
         if (returnsSizedArray) {
@@ -555,11 +514,7 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined3)
         popScope()
 
-        currentFnReturnsArray = prevReturnsArray
-        currentFnReturnsSizedArray = prevReturnsSizedArray
-        currentFnSizedArraySize = prevSizedArraySize
-        currentFnSizedArrayElemType = prevSizedArrayElemType
-        currentFnReturnType = prevReturnType
+        restoreFunState(prevState)
         impl.appendLine("}")
         impl.appendLine()
 
@@ -936,12 +891,8 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         }
         impl.appendLine("$cRet ${cName}_$fnName($params) {")
         impl.appendLine("    ${cName}_\$ensure_init();")
+        val prevState = saveFunState()
         val prevObjectM = currentObject
-        val prevReturnsArray = currentFnReturnsArray
-        val prevReturnsSizedArray = currentFnReturnsSizedArray
-        val prevSizedArraySize = currentFnSizedArraySize
-        val prevSizedArrayElemType = currentFnSizedArrayElemType
-        val prevReturnType = currentFnReturnType
         currentFnReturnsArray = returnsArray
         currentFnReturnsSizedArray = returnsSizedArray
     currentFnReturnType = retResolved
@@ -964,11 +915,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         deferStack.clear(); deferStack.addAll(savedDefers3)
         trampolinedParams.clear(); trampolinedParams.addAll(savedTrampolined6)
         popScope()
-        currentFnReturnsArray = prevReturnsArray
-        currentFnReturnsSizedArray = prevReturnsSizedArray
-        currentFnSizedArraySize = prevSizedArraySize
-        currentFnSizedArrayElemType = prevSizedArrayElemType
-        currentFnReturnType = prevReturnType
+        restoreFunState(prevState)
         currentObject = prevObjectM
         impl.appendLine("}")
         impl.appendLine()
@@ -1348,9 +1295,7 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
         // static vtable instance
         if (!implsOnly) hdr.appendLine("extern const ${cIface}_vt ${cClass}_${ifaceName}_vt;")
         if (!declsOnly) {
-            // DUPLICATE START HERE ID3
             emitVtable(cClass, cIface, ifaceName, className, allProps, allMethods)
-            // DUPLICATE END HERE ID3
         }
 
         // wrapping function: ClassName_as_IfaceName
@@ -1408,9 +1353,7 @@ internal fun CCodeGen.emitTransitiveInterfaceVtables(className: String, cClass: 
 
         // static vtable instance (same class methods, but only the parent's slots)
         hdr.appendLine("extern const ${cSuper}_vt ${cClass}_${superName}_vt;")
-        // DUPLICATE START HERE ID3
         emitVtable(cClass, cSuper, superName, className, superProps, superMethods)
-        // DUPLICATE END HERE ID3
         // wrapping function
         hdr.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self);")
         impl.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self) {")
@@ -1479,14 +1422,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
         impl.appendLine("    ktc_mainInit();")
     }
 
-    val prevReturnsNullable = currentFnReturnsNullable
-    val prevReturnsArray = currentFnReturnsArray
-    val prevReturnsSizedArray = currentFnReturnsSizedArray
-    val prevSizedArraySize = currentFnSizedArraySize
-    val prevSizedArrayElemType = currentFnSizedArrayElemType
-    val prevReturnType = currentFnReturnType
-    val prevReturnKtc = currentFnReturnKtcType
-    val prevOptRetCTypeName = currentFnOptReturnCTypeName
+    val prevState = saveFunState()
     val prevIsMain = currentFnIsMain
     currentFnReturnsNullable = returnsNullable
     currentFnReturnsArray = returnsArray
@@ -1553,14 +1489,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
 
     deferStack.clear()
     deferStack.addAll(savedDefers)
-    currentFnReturnsNullable = prevReturnsNullable
-    currentFnReturnsArray = prevReturnsArray
-    currentFnReturnsSizedArray = prevReturnsSizedArray
-    currentFnSizedArraySize = prevSizedArraySize
-    currentFnSizedArrayElemType = prevSizedArrayElemType
-    currentFnReturnType = prevReturnType
-    currentFnReturnKtcType = prevReturnKtc
-    currentFnOptReturnCTypeName = prevOptRetCTypeName
+    restoreFunState(prevState)
     currentFnIsMain = prevIsMain
     impl.appendLine("}")
     impl.appendLine()

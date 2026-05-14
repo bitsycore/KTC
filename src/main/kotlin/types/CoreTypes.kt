@@ -83,8 +83,6 @@ internal sealed class KtcType {
     // ── Any (top type) ─────────────────────────────────────────────────
     // At runtime, Any is ktc_Any (a type-id + data pointer trampoline).
     // Narrowed / guaranteed subtype is tracked via scopes, not stored here.
-    // TODO: consider `class Any(val narrowed: KtcType?)` to carry the guaranteed type.
-
     object Any : KtcType() {
         override fun toCType() = "ktc_Any"
     }

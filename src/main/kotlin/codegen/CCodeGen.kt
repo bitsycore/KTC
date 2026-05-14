@@ -245,9 +245,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal fun ifaceInfoFor(inType: KtcType?): IfaceInfo? =    // IfaceInfo if type is a user-defined interface
         (inType as? KtcType.User)?.decl as? IfaceInfo
 
-    internal fun objInfoFor(inType: KtcType?): ObjInfo? =        // ObjInfo if type is a singleton object
-        (inType as? KtcType.User)?.decl as? ObjInfo
-
     internal fun enumInfoFor(inType: KtcType?): EnumInfo? =      // EnumInfo if type is an enum class
         (inType as? KtcType.User)?.decl as? EnumInfo
 
@@ -268,12 +265,12 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     }
 
     /** Shared null-guard expression for safe-call dispatch. */
-    internal fun nullGuardExpr(recvKtc: KtcType, recvExpr: String, recvName: String, isThis: Boolean): String = when {
-        recvKtc is KtcType.Nullable && recvKtc.inner is KtcType.Ptr -> "$recvName != NULL"
-        recvKtc is KtcType.Nullable && isValueNullableKtc(recvKtc) ->
+    internal fun nullGuardExpr(recvKtc: KtcType, recvExpr: String, recvName: String, isThis: Boolean): String = when (recvKtc) {
+        is KtcType.Nullable if recvKtc.inner is KtcType.Ptr -> "$recvName != NULL"
+        is KtcType.Nullable if isValueNullableKtc(recvKtc) ->
             if (isThis) "\$self.tag == ktc_SOME" else "$recvName.tag == ktc_SOME"
-        recvKtc is KtcType.Nullable ->
-            if (isThis) "\$self\$has" else "${recvName}\$has"
+
+        is KtcType.Nullable -> if (isThis) "\$self\$has" else "${recvName}\$has"
         else -> "${recvExpr}\$has"
     }
 
@@ -450,6 +447,40 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal var currentFnOptReturnCTypeName: String = ""  // Optional C type for nullable returns
     internal var currentFnIsMain = false
     internal fun currentFnReturnBaseType(): String = currentFnReturnType.removeSuffix("?")
+
+    /** Snapshot of current function state for save/restore across emit functions. */
+    internal data class FunState(
+        var returnsNullable: Boolean,
+        var returnsArray: Boolean,
+        var returnsSizedArray: Boolean,
+        var sizedArraySize: Int,
+        var sizedArrayElemType: String,
+        var returnType: String,
+        var returnKtcType: KtcType?,
+        var optReturnCTypeName: String,
+        var klass: String?,
+        var selfPtr: Boolean,
+        var extRecvType: String?,
+    )
+    internal fun saveFunState() = FunState(
+        currentFnReturnsNullable, currentFnReturnsArray, currentFnReturnsSizedArray,
+        currentFnSizedArraySize, currentFnSizedArrayElemType,
+        currentFnReturnType, currentFnReturnKtcType, currentFnOptReturnCTypeName,
+        currentClass, selfIsPointer, currentExtRecvType
+    )
+    internal fun restoreFunState(s: FunState) {
+        currentFnReturnsNullable = s.returnsNullable
+        currentFnReturnsArray = s.returnsArray
+        currentFnReturnsSizedArray = s.returnsSizedArray
+        currentFnSizedArraySize = s.sizedArraySize
+        currentFnSizedArrayElemType = s.sizedArrayElemType
+        currentFnReturnType = s.returnType
+        currentFnReturnKtcType = s.returnKtcType
+        currentFnOptReturnCTypeName = s.optReturnCTypeName
+        currentClass = s.klass
+        selfIsPointer = s.selfPtr
+        currentExtRecvType = s.extRecvType
+    }
 
     internal var loopDepth: Int = 0  // nesting depth of active for/while/do-while loops
 

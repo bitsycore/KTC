@@ -1,25 +1,35 @@
 # CLEANUP_PLAN.md — Deduplication & Stronger Typing
 
-## Status: Phases 1-5 complete. ~150 lines eliminated.
+## Status: COMPLETE. ~500 lines eliminated.
 
 All 32 integration + 541 unit tests pass.
 
 ## Completed
 
-- [x] **Phase 1: Object/Companion Fusion** — 4 sites via `resolveDotObjInfo` + `resolveDotObjCName`
-- [x] **Phase 2: Array/RawArray Unification** — HeapAlloc + HeapArrayZero unified
-- [x] **Phase 3: Null-Guard Fusion** — `nullGuardExpr()` helper, 3 of 4 sites
-- [x] **Phase 5: hashCode Extraction** — `emitImplicitHashCode()` helper
-- [x] **Phase 6: Constructor Extraction** — `emitConstructorBody()` helper (ID2)
-- [x] **Phase 6b: Struct field emission** — `emitStructFields()` helper (ID1)
-- [x] **Phase 6c: Vtable emission** — `emitVtable()` helper (ID3)
-- [x] **Phase 7: Stronger Typing** — `isBuiltinType` + `builtinTypes` deleted
-- [x] **Functions deleted:** `pointerClassName`, `anyIndirectClassName`, `isValueNullableType`, `isBuiltinType`, `printfFmt(String)`, `printfArg(String)`, `defaultVal(String)`
+- [x] **Phase 1:** Object/Companion Fusion — `resolveDotObjInfo` + `resolveDotObjCName`
+- [x] **Phase 2:** Array/RawArray Unification — HeapAlloc + HeapArrayZero
+- [x] **Phase 3:** Null-Guard Fusion — `nullGuardExpr()` helper
+- [x] **ID1:** Struct fields — `emitStructFields()`
+- [x] **ID2:** Constructor body — `emitConstructorBody()`
+- [x] **ID3:** Vtable emission — `emitVtable()`
+- [x] **Phase 4:** Save/Restore FunContext — `saveFunState()`/`restoreFunState()` across 5 emit functions
+- [x] **Phase 5:** hashCode — `emitImplicitHashCode()`
+- [x] **Phase 7:** Stronger Typing — `isBuiltinType` deleted
+- [x] **Functions deleted (0 callers remaining):**
+  - `pointerClassName`, `anyIndirectClassName`
+  - `isValueNullableType`, `isBuiltinType`
+  - `printfFmt(String)`, `printfArg(String)`, `defaultVal(String)`
+- [x] **DUPLICATE START/END comments** removed
 
-Total: **~400 lines eliminated** across all phases.
+## Helpers added
 
-## Remaining
-
-- [ ] **Phase 4: Save/Restore FunContext** (~200 lines) — 5 functions with 70% identical save/restore boilerplate. Needs Context data class.
-- [ ] **Phase 6: Constructor Extraction** (~80 lines) — emitClass/emitGenericClass constructor bodies share `heapAllocTargetType` side effects. Complex extraction.
-- [x] **Phase 7: Stronger Typing** — `isBuiltinType` deleted (4 callers → KtcType), `builtinTypes` set removed.
+| Helper | File | Lines saved |
+|--------|------|-------------|
+| `resolveDotObjInfo` | CCodeGen.kt | ~60 |
+| `resolveDotObjCName` | CCodeGen.kt | |
+| `nullGuardExpr` | CCodeGen.kt | ~25 |
+| `emitStructFields` | CCodeGenEmit.kt | ~80 |
+| `emitConstructorBody` | CCodeGenEmit.kt | ~160 |
+| `emitVtable` | CCodeGenEmit.kt | ~60 |
+| `emitImplicitHashCode` | CCodeGenEmit.kt | ~50 |
+| `saveFunState`/`restoreFunState` | CCodeGen.kt | ~80 |
