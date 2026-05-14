@@ -2,6 +2,7 @@ package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
 import com.bitsycore.ktc.types.KtcType
+import com.bitsycore.ktc.utils.wrapYellow
 
 /**
  * Translates a parsed KtFile AST into C11 source code.
@@ -491,17 +492,26 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal fun codegenWarning(msg: String) {
         val line = currentStmtLine
         val sb = StringBuilder()
-        sb.append("warning: $msg")
+
+        sb.append("warning".wrapYellow())
+        sb.append(": $msg")
+
         if (line > 0 && sourceLines.isNotEmpty()) {
             sb.appendLine()
+
             val from = maxOf(0, line - 3)
             val to = minOf(sourceLines.size, line + 2)
+
             for (i in from until to) {
                 val lineNum = i + 1
-                val marker = if (lineNum == line) ">>>" else "   "
-                sb.appendLine("$marker %4d | %s".format(lineNum, sourceLines[i]))
+                val marker = if (lineNum == line) ">>>".wrapYellow() else "   "
+
+                sb.appendLine(
+                    "$marker %4d | %s".format(lineNum, sourceLines[i])
+                )
             }
         }
+
         System.err.print(sb.toString().trimEnd() + "\n")
         diagnosticWarningCount++
     }
