@@ -6,7 +6,20 @@ The KtcType hierarchy (`src/main/kotlin/types/CoreTypes.kt`) is well-designed bu
 used as a thin bridge layer.  The core codegen still operates mostly on raw strings.
 This file tracks remaining work to complete the migration.
 
-Currently: **~60% migrated**.  ~125 string checks eliminated so far.
+Currently: **~65% migrated**.  ~145 string checks eliminated so far.
+
+## Latest batch (this session)
+- `genMethodCall`: `isValueNull` string check → KtcType
+- `genMethodCall` nullable receiver dispatch: `recvVarType2.endsWith("?")` → `recvVarKtc2 is Nullable`
+- Extension fun nullable receiver: `recvVarType.endsWith("?")` → `recvVarKtc is Nullable`
+- `genSafeMethodCall`: warning check `!endsWith("?") && !endsWith("*")` → KtcType
+- `genSafeMethodCall`: `isValueNullRecv` string check → KtcType
+- `genSafeMethodCall`: `guard` when branch `endsWith("*?")` → KtcType
+- `genSafeMethodCall`: array ptr check `isArrayType` → `recvTypeCoreKtc.isArrayLike`
+- `genSafeMethodCall`: nullable guard `endsWith("?")` → `recvTypeKtc is Nullable`
+- `genExpr` ThisExpr: `!selfType.endsWith("?")` → `selfKtc !is Nullable`
+- `genToStringKtc` thin wrapper added (delegates to string version)
+- `genMethodCall` star-projection selfExpr: pointer check remains (requires broader refactor)
 
 ## Completed (this session)
 

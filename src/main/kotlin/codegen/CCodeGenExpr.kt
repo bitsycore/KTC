@@ -72,8 +72,8 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
     is ThisExpr -> {
         val inlineThis = lambdaParamSubst["\$this"]
         if (inlineThis != null) return inlineThis
-        val selfType = lookupVar("\$self")
-        if (selfType != null && isOptional("\$self") && !selfType.endsWith("?")) {
+        val selfKtc = lookupVarKtc("\$self")
+        if (selfKtc != null && isOptional("\$self") && selfKtc !is KtcType.Nullable) {
             "\$self.value"
         } else if (selfIsPointer) "(*\$self)" else "\$self"
     }
@@ -1447,7 +1447,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     val rawRecv = genExpr(dot.obj)
     val method = dot.name
     val hasNullRecv = hasNullableReceiverExt(recvType ?: "", method)
-    val isValueNull = rawRecvType != null && rawRecvType.endsWith("?") && isValueNullableType(rawRecvType) && !hasNullRecv
+    val isValueNull = rawRecvTypeKtc is KtcType.Nullable && isValueNullableKtc(rawRecvTypeKtc) && !hasNullRecv
     val recv = if (isValueNull) "$rawRecv.value" else rawRecv
     val argStr = args.joinToString(", ") { genExpr(it.expr) }
 
@@ -1758,11 +1758,11 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val nullableRecv = hasNullableReceiverExt(recvType ?: "", method)
         val selfArg = if (nullableRecv) {
             val recvName = (dot.obj as? NameExpr)?.name
-            val recvVarType2 = if (recvName != null) lookupVar(recvName) else null
+            val recvVarKtc2 = if (recvName != null) lookupVarKtc(recvName) else null
             val optSelfType = optCTypeName("${recvType}?")
             when {
                 dot.obj is ThisExpr -> "\$self"
-                recvVarType2 != null && recvVarType2.endsWith("?") && isValueNullableType(recvVarType2)
+                recvVarKtc2 is KtcType.Nullable && isValueNullableKtc(recvVarKtc2)
                         && recvName != null && isOptional(recvName) -> recv
 
                 isExtFun -> optSome(optSelfType, recv)
@@ -1880,11 +1880,11 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val nullableRecv = extFun.receiver?.nullable == true
             val recvArg = if (nullableRecv) {
                 val recvName = (dot.obj as? NameExpr)?.name
-                val recvVarType = if (recvName != null) lookupVar(recvName) else null
+                val recvVarKtc = if (recvName != null) lookupVarKtc(recvName) else null
                 val optSelfType = optCTypeName("${recvType}?")
                 when {
                     dot.obj is ThisExpr -> "\$self"
-                    recvVarType != null && recvVarType.endsWith("?") && isValueNullableType(recvVarType)
+                    recvVarKtc != null && recvVarKtc is KtcType.Nullable && isValueNullableKtc(recvVarKtc)
                             && recvName != null && isOptional(recvName) -> recv
 
                     else -> optSome(optSelfType, recv)
@@ -1970,18 +1970,20 @@ internal fun CCodeGen.genDataClassCopy(recv: String, className: String, args: Li
 
 internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): String {
     val recvName = (dot.obj as? NameExpr)?.name
-    val recvType = if (recvName != null) lookupVar(recvName) else inferExprType(dot.obj)
-    // Warn: ?. method call on a non-nullable receiver
-    if (recvType != null && !recvType.endsWith("?") && !recvType.endsWith("*")) {
+    val recvTypeKtc = if (recvName != null) lookupVarKtc(recvName) else inferExprTypeKtc(dot.obj)
+    val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc
+    val recvType = recvTypeKtc?.toInternalStr
+    // Warn: ?. method call on a non-nullable receiver (and not a pointer)
+    if (recvTypeKtc != null && recvTypeKtc !is KtcType.Nullable && recvTypeCoreKtc !is KtcType.Ptr) {
         val vSrc = recvName ?: "expression"
         codegenWarning("Safe call '?.' on non-nullable '$recvType' ($vSrc.${dot.name}) is redundant; use '.' instead")
     }
-    val isValueNullRecv = recvType != null && recvType.endsWith("?") && isValueNullableType(recvType)
+    val isValueNullRecv = recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)
     val dotExpr = DotExpr(dot.obj, dot.name)
 
     // Handle .ptr() safe-call: guard first, then take address
     if (dot.name == "ptr" && isValueNullRecv && recvName != null) {
-        val baseClass = recvType.removeSuffix("?")
+        val baseClass = recvType!!.removeSuffix("?")
         val cName = typeFlatName(baseClass)
         val t = tmp()
         preStmts += "$cName* $t = ($recvName.tag == ktc_SOME ? &${recvName}.value : NULL);"
@@ -1989,10 +1991,10 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
         return t
     }
     if (dot.name == "ptr" && recvType != null && recvName != null) {
-        val cleanType = recvType.removeSuffix("?")
-        if (isArrayType(cleanType)) {
+        val cleanType = recvType!!.removeSuffix("?")
+        if (recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) {
             val t = tmp()
-            val guard = if (recvType.endsWith("?")) "${recvName}\$has" else "true"
+            val guard = if (recvTypeKtc is KtcType.Nullable) "${recvName}\$has" else "true"
             val arrCType = cTypeStr(cleanType)
             preStmts += "$arrCType $t = $guard ? $recvName : NULL;"
             preStmts += "ktc_Int ${t}\$len = $guard ? ${recvName}\$len : 0;"
@@ -2004,7 +2006,7 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
     val call = genMethodCall(dotExpr, args)
     // Determine the null guard expression
     val guard = when {
-        recvType != null && recvType.endsWith("*?") ->
+        recvTypeKtc is KtcType.Nullable && recvTypeKtc.inner is KtcType.Ptr ->
             "$recvName != NULL"
 
         isValueNullRecv -> "$recvName.tag == ktc_SOME"
@@ -2795,6 +2797,8 @@ internal fun CCodeGen.templateMaxLen(tmpl: StrTemplateExpr): Int? {
 }
 
 // ── toString dispatch ────────────────────────────────────────────
+
+internal fun CCodeGen.genToStringKtc(recv: String, type: KtcType): String = genToString(recv, type.toInternalStr)
 
 internal fun CCodeGen.genToString(recv: String, type: String): String {
     if (classes.containsKey(type) && classes[type]!!.isData) {
