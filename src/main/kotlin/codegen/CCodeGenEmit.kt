@@ -53,125 +53,13 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
     hdr.appendLine("// ══ $kind ${d.name} ($currentSourceFile) ══")
     hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[d.name]!!}")
     hdr.appendLine("typedef struct {")
-    hdr.appendLine("    ktc_Int __type_id;")
-    for ((name, type) in ci.props) {
-        val vFieldName = if (name in ci.privateProps) "PRIV_$name" else name  // C field name
-        // RawArray<T> field → T* (raw pointer, no $len)
-        val vKtcField = if (type.name == "RawArray" && type.typeArgs.isNotEmpty())
-            KtcType.Ptr(resolveTypeName(type.typeArgs[0]))  // raw pointer
-        else resolveTypeName(type)                           // normal KtcType
-        val vMutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "  // mutability comment
-        if (vKtcField is KtcType.Func)
-            {
-            hdr.appendLine("    $vMutComment${cFuncPtrDecl(vKtcField, vFieldName)};")
-            }
-        else if (vKtcField.isArrayLike)
-            {
-            val vSizeAnn = getSizeAnnotation(type)  // @Size annotation value if present
-            if (vSizeAnn != null)
-                {
-                val vElemCt = cTypeStr(vKtcField.asArr!!.elem)  // element C type
-                hdr.appendLine("    $vMutComment$vElemCt $vFieldName[${vSizeAnn}];")
-                }
-            else
-                {
-                hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
-                hdr.appendLine("    ktc_Int ${vFieldName}\$len;")
-                }
-            }
-        else if (type.nullable)
-            {
-            hdr.appendLine("    $vMutComment${optCTypeName(vKtcField.toInternalStr)} $vFieldName;")
-            }
-        else
-            {
-            hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;${ptrNullComment(vKtcField)}")
-            }
-        }
+    // DUPLICATE START HERE ID1
+    emitStructFields(ci)
+    // DUPLICATE END HERE ID1
     hdr.appendLine("} $cName;")
-    hdr.appendLine("KTC_OPTIONAL($cName);")
-    hdr.appendLine()
-
-    // --- constructor (only takes ctor params, initializes all fields) ---
-	val vAllCtorParams = ci.ctorProps + ci.ctorPlainParams  // all primary constructor parameters
-	val vParamStr = expandCtorParams(vAllCtorParams)        // expanded C parameter list
-	val vParamDecl = vParamStr.ifEmpty { "void" }           // C parameter declaration
-	hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl);")
-	impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl) {")
-	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { resolveTypeName(it.typeRef).isArrayLike || it.typeRef.nullable })
-		{
-		impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
-		}
-	else
-		{
-        impl.appendLine("    $cName \$self = {0};")
-        impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
-		for (vProp in ci.ctorProps)
-			{
-			val vName      = vProp.name                                              // prop name
-			val vType      = vProp.typeRef                                           // prop type
-			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName // C field name
-			val vKtcProp   = resolveTypeName(vType)                                  // KtcType for array checks
-			val vSizeAnn   = getSizeAnnotation(vType)                                // @Size annotation
-			if (vSizeAnn != null)
-				{
-				val vElemType = cTypeStr(vKtcProp.asArr!!.elem)                      // element C type
-				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($vElemType));")
-				}
-			else if (vKtcProp.isArrayLike)
-				{
-				impl.appendLine("    \$self.$vFieldName = $vName;")
-				impl.appendLine("    \$self.${vFieldName}\$len = ${vName}\$len;")
-				}
-			else if (vType.nullable)
-				{
-				impl.appendLine("    \$self.$vFieldName = $vName;")
-				}
-			else
-				{
-				impl.appendLine("    \$self.$vFieldName = $vName;")
-				}
-			}
-		for (vBp in ci.bodyProps)
-			{
-			if (vBp.initExpr != null)
-				{
-				if (vBp.line > 0) currentStmtLine = vBp.line
-				heapAllocTargetType = vBp.typeRef
-				val vBodyFieldName = if (vBp.isPrivate) "PRIV_${vBp.name}" else vBp.name  // C field name
-				val vSizeAnn = getSizeAnnotation(vBp.typeRef)  // @Size annotation value
-				if (vSizeAnn != null && isSizedArrayTypeRef(vBp.typeRef))
-					{
-					val vIsZeroInit = vBp.initExpr is CallExpr && (vBp.initExpr.callee as? NameExpr)?.name?.endsWith("Array") == true &&
-						vBp.initExpr.args.size == 1 && vBp.initExpr.args[0].expr !is LambdaExpr
-					if (!vIsZeroInit)
-						{
-						val vExpr = genExpr(vBp.initExpr)
-						heapAllocTargetType = null
-						flushPreStmts("    ")
-						val vElemType = cTypeStr(resolveTypeName(vBp.typeRef).asArr!!.elem) // element C type
-						impl.appendLine("    memcpy(\$self.$vBodyFieldName, $vExpr, $vSizeAnn * sizeof($vElemType));")
-						}
-					else
-						{
-						heapAllocTargetType = null
-						}
-					}
-				else
-					{
-					val vExpr = genExpr(vBp.initExpr)
-					heapAllocTargetType = null
-					flushPreStmts("    ")
-					impl.appendLine("    \$self.$vBodyFieldName = $vExpr;")
-					}
-				emitBodyPropLenIfArray(vBp)
-				}
-			}
-        impl.appendLine("    return \$self;")
-    }
-    impl.appendLine("}")
-    impl.appendLine()
-
+    // DUPLICATE START HERE ID2
+    emitConstructorBody(cName, ci)
+    // DUPLICATE END HERE ID2
     // --- class extras: equals (all classes), toString (data only) ---
     emitClassEquals(cName, ci)
     if (d.isData) {
@@ -203,30 +91,7 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
         hdr.appendLine("#define ${cName}_dispose(self) ((void)(self))")
     }
     // Implicit hashCode — default returns __type_id, data classes hash all fields
-    if (d.members.none { it is FunDecl && it.name == "hashCode" }) {
-        hdr.appendLine("ktc_Int ${cName}_hashCode($cName* \$self);")
-        impl.appendLine("ktc_Int ${cName}_hashCode($cName* \$self) {")
-        if (d.isData && ci.props.isNotEmpty()) {
-            impl.appendLine("    ktc_Int h = 0;")
-            for ((name, type) in ci.props) {
-                val vKtcHash  = resolveTypeName(type)                                   // KtcType for hash dispatch
-                val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                val hashExpr = if (type.nullable && vKtcHash !is KtcType.Ptr) {
-                    val valueExpr = "\$self->$fieldName"
-                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(vKtcHash, "${valueExpr}.value")} : 0)"
-                } else {
-                    hashFieldExprKtc(vKtcHash, "\$self->$fieldName")
-                }
-                impl.appendLine("    h = h * 31 + $hashExpr;")
-            }
-            impl.appendLine("    return h;")
-        } else {
-            impl.appendLine("    uintptr_t x = (uintptr_t)\$self;")
-            impl.appendLine("    return (ktc_Int)(x ^ (x >> 32));")
-        }
-        impl.appendLine("}")
-        impl.appendLine()
-    }
+    emitImplicitHashCode(cName, ci, d.isData, isGenericClass = false, d.members)
     popScope()
     currentClass = null
 
@@ -294,125 +159,13 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
     hdr.appendLine("// ══ $kind ${templateDecl.name}<$concreteTypes> ($currentSourceFile) ══")
     hdr.appendLine("#define ${cName}_TYPE_ID ${typeIds[ci.name]!!}")
     hdr.appendLine("struct $cName {")
-    hdr.appendLine("    ktc_Int __type_id;")
-    for ((name, type) in ci.props)
-        {
-        val vFieldName = if (name in ci.privateProps) "PRIV_$name" else name  // C field name
-        val vKtcField = if (type.name == "RawArray" && type.typeArgs.isNotEmpty())
-            KtcType.Ptr(resolveTypeName(type.typeArgs[0]))
-        else resolveTypeName(type)
-        val vMutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
-        if (vKtcField is KtcType.Func)
-            {
-            hdr.appendLine("    $vMutComment${cFuncPtrDecl(vKtcField, vFieldName)};")
-            }
-        else if (vKtcField.isArrayLike)
-            {
-            val vSizeAnn = getSizeAnnotation(type)
-            if (vSizeAnn != null)
-                {
-                val vElemCt = cTypeStr(vKtcField.asArr!!.elem)
-                hdr.appendLine("    $vMutComment$vElemCt $vFieldName[${vSizeAnn}];")
-                }
-            else
-                {
-                hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
-                hdr.appendLine("    ktc_Int ${vFieldName}\$len;")
-                }
-            }
-        else if (type.nullable)
-            {
-            hdr.appendLine("    $vMutComment${optCTypeName(vKtcField.toInternalStr)} $vFieldName;")
-            }
-        else
-            {
-            hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;${ptrNullComment(vKtcField)}")
-            }
-        }
+    // DUPLICATE START HERE ID1
+    emitStructFields(ci)
+    // DUPLICATE END HERE ID1
     hdr.appendLine("};")
-    hdr.appendLine("KTC_OPTIONAL($cName);")
-    hdr.appendLine()
-
-    // --- constructor ---
-	val vAllCtorParams2 = ci.ctorProps + ci.ctorPlainParams  // all primary constructor parameters
-	val vParamStr2 = expandCtorParams(vAllCtorParams2)       // expanded C parameter list
-	val vParamDecl2 = vParamStr2.ifEmpty { "void" }          // C parameter declaration
-	hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl2);")
-	impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl2) {")
-	if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { resolveTypeName(it.typeRef).isArrayLike || it.typeRef.nullable })
-		{
-		impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
-		}
-	else
-		{
-        impl.appendLine("    $cName \$self = {0};")
-        impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
-		for (vProp in ci.ctorProps)
-			{
-			val vName      = vProp.name                                              // prop name
-			val vType      = vProp.typeRef                                           // prop type
-			val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName // C field name
-			val vKtcProp2  = resolveTypeName(vType)                                  // KtcType for array checks
-			val vSizeAnn   = getSizeAnnotation(vType)                                // @Size annotation
-			if (vSizeAnn != null)
-				{
-				val vElemType = cTypeStr(vKtcProp2.asArr!!.elem)                     // element C type
-				impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($vElemType));")
-				}
-			else if (vKtcProp2.isArrayLike)
-				{
-				impl.appendLine("    \$self.$vFieldName = $vName;")
-				impl.appendLine("    \$self.${vFieldName}\$len = ${vName}\$len;")
-				}
-			else if (vType.nullable)
-				{
-				impl.appendLine("    \$self.$vFieldName = $vName;")
-				}
-			else
-				{
-				impl.appendLine("    \$self.$vFieldName = $vName;")
-				}
-			}
-		for (vBp in ci.bodyProps)
-			{
-			if (vBp.initExpr != null)
-				{
-				if (vBp.line > 0) currentStmtLine = vBp.line
-				heapAllocTargetType = vBp.typeRef
-				val vBodyFieldName = if (vBp.isPrivate) "PRIV_${vBp.name}" else vBp.name  // C field name
-				val vSizeAnn = getSizeAnnotation(vBp.typeRef)  // @Size annotation value
-				if (vSizeAnn != null && isSizedArrayTypeRef(vBp.typeRef))
-					{
-					val vIsZeroInit = vBp.initExpr is CallExpr && (vBp.initExpr.callee as? NameExpr)?.name?.endsWith("Array") == true &&
-						vBp.initExpr.args.size == 1 && vBp.initExpr.args[0].expr !is LambdaExpr
-					if (!vIsZeroInit)
-						{
-						val vExpr = genExpr(vBp.initExpr)
-						heapAllocTargetType = null
-						flushPreStmts("    ")
-						val vElemType = cTypeStr(resolveTypeName(vBp.typeRef).asArr!!.elem) // element C type
-						impl.appendLine("    memcpy(\$self.$vBodyFieldName, $vExpr, $vSizeAnn * sizeof($vElemType));")
-						}
-					else
-						{
-						heapAllocTargetType = null
-						}
-					}
-				else
-					{
-					val vExpr = genExpr(vBp.initExpr)
-					heapAllocTargetType = null
-					flushPreStmts("    ")
-					impl.appendLine("    \$self.$vBodyFieldName = $vExpr;")
-					}
-				emitBodyPropLenIfArray(vBp)
-				}
-			}
-        impl.appendLine("    return \$self;")
-    }
-    impl.appendLine("}")
-    impl.appendLine()
-
+    // DUPLICATE START HERE ID2
+    emitConstructorBody(cName, ci)
+    // DUPLICATE END HERE ID2
     // --- methods (from template AST, but with typeSubst active) ---
     currentClass = mangledName
     selfIsPointer = true
@@ -429,35 +182,7 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
         hdr.appendLine("#define ${cName}_dispose(self) ((void)(self))")
     }
     // Implicit hashCode
-    if (templateDecl.members.none { it is FunDecl && it.name == "hashCode" }) {
-        hdr.appendLine("ktc_Int ${cName}_hashCode($cName* \$self);")
-        impl.appendLine("ktc_Int ${cName}_hashCode($cName* \$self) {")
-        if (templateDecl.isData && ci.props.isNotEmpty()) {
-            impl.appendLine("    ktc_Int h = 0;")
-            for ((name, type) in ci.props) {
-                val vKtcHash2  = resolveTypeName(type)          // KtcType for hash dispatch
-                val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                val hashExpr = if (type.nullable && vKtcHash2 !is KtcType.Ptr) {
-                    val valueExpr = "\$self->$fieldName"
-                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(vKtcHash2, "${valueExpr}.value")} : 0)"
-                } else {
-                    hashFieldExprKtc(vKtcHash2, "\$self->$fieldName")
-                }
-                impl.appendLine("    h = h * 31 + $hashExpr;")
-            }
-            impl.appendLine("    return h;")
-        } else {
-            impl.appendLine("    uintptr_t p = (uintptr_t)\$self; p >>= 4;")
-            impl.appendLine("    ktc_UInt lo = (ktc_UInt)p;")
-            impl.appendLine("    ktc_UInt hi = (ktc_UInt)(p >> 32);")
-            impl.appendLine("    ktc_UInt t = (ktc_UInt)\$self->__type_id * 0x9e3779b1U;")
-            impl.appendLine("    ktc_UInt h = lo ^ hi ^ t;")
-            impl.appendLine("    h = ktc_fmix32(h);")
-            impl.appendLine("    return (ktc_Int)h;")
-        }
-        impl.appendLine("}")
-        impl.appendLine()
-    }
+    emitImplicitHashCode(cName, ci, templateDecl.isData, isGenericClass = true, templateDecl.members)
     // Implicit equals for all classes
     if (templateDecl.members.none { it is FunDecl && it.name == "equals" }) {
         emitClassEquals(cName, ci)
@@ -1383,7 +1108,168 @@ internal fun CCodeGen.collectAllIfaceProperties(info: IfaceInfo): List<PropDecl>
 /** Data member name for a class inside a tagged union or single-field interface struct. */
 internal fun CCodeGen.ifaceDataName(className: String): String = "${typeFlatName(className)}_data"
 
+/** Emit implicit hashCode for a class. Uses field-based hash for data classes, identity hash otherwise. */
+internal fun CCodeGen.emitImplicitHashCode(cName: String, ci: ClassInfo, isData: Boolean, isGenericClass: Boolean, members: List<Decl>) {
+    if (members.any { it is FunDecl && it.name == "hashCode" }) return
+    hdr.appendLine("ktc_Int ${cName}_hashCode($cName* \$self);")
+    impl.appendLine("ktc_Int ${cName}_hashCode($cName* \$self) {")
+    if (isData && ci.props.isNotEmpty()) {
+        impl.appendLine("    ktc_Int h = 0;")
+        for ((name, type) in ci.props) {
+            val vKtcHash = resolveTypeName(type)
+            val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
+            val hashExpr = if (type.nullable && vKtcHash !is KtcType.Ptr) {
+                val valueExpr = "\$self->$fieldName"
+                "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(vKtcHash, "${valueExpr}.value")} : 0)"
+            } else {
+                hashFieldExprKtc(vKtcHash, "\$self->$fieldName")
+            }
+            impl.appendLine("    h = h * 31 + $hashExpr;")
+        }
+        impl.appendLine("    return h;")
+    } else if (isGenericClass) {
+        impl.appendLine("    uintptr_t p = (uintptr_t)\$self; p >>= 4;")
+        impl.appendLine("    ktc_UInt lo = (ktc_UInt)p;")
+        impl.appendLine("    ktc_UInt hi = (ktc_UInt)(p >> 32);")
+        impl.appendLine("    ktc_UInt t = (ktc_UInt)\$self->__type_id * 0x9e3779b1U;")
+        impl.appendLine("    ktc_UInt h = lo ^ hi ^ t;")
+        impl.appendLine("    h = ktc_fmix32(h);")
+        impl.appendLine("    return (ktc_Int)h;")
+    } else {
+        impl.appendLine("    uintptr_t x = (uintptr_t)\$self;")
+        impl.appendLine("    return (ktc_Int)(x ^ (x >> 32));")
+    }
+    impl.appendLine("}")
+    impl.appendLine()
+}
+
 /** KtcType-based overload. */
+/** Emit struct field declarations (shared by emitClass and emitGenericClass). */
+internal fun CCodeGen.emitStructFields(ci: ClassInfo) {
+    hdr.appendLine("    ktc_Int __type_id;")
+    for ((name, type) in ci.props)
+        {
+        val vFieldName = if (name in ci.privateProps) "PRIV_$name" else name  // C field name
+        val vKtcField = if (type.name == "RawArray" && type.typeArgs.isNotEmpty())
+            KtcType.Ptr(resolveTypeName(type.typeArgs[0]))
+        else resolveTypeName(type)
+        val vMutComment = if (ci.isValProp(name)) "/*VAL*/ " else "/*VAR*/ "
+        if (vKtcField is KtcType.Func) {
+            hdr.appendLine("    $vMutComment${cFuncPtrDecl(vKtcField, vFieldName)};")
+        } else if (vKtcField.isArrayLike) {
+            val vSizeAnn = getSizeAnnotation(type)
+            if (vSizeAnn != null) {
+                val vElemCt = cTypeStr(vKtcField.asArr!!.elem)
+                hdr.appendLine("    $vMutComment$vElemCt $vFieldName[${vSizeAnn}];")
+            } else {
+                hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
+                hdr.appendLine("    ktc_Int ${vFieldName}\$len;")
+            }
+        } else if (type.nullable) {
+            hdr.appendLine("    $vMutComment${optCTypeName(vKtcField.toInternalStr)} $vFieldName;")
+        } else {
+            hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;${ptrNullComment(vKtcField)}")
+        }
+        }
+}
+
+/** Emit primary constructor body (shared by emitClass and emitGenericClass). */
+internal fun CCodeGen.emitConstructorBody(cName: String, ci: ClassInfo) {
+    hdr.appendLine("KTC_OPTIONAL($cName);")
+    hdr.appendLine()
+    val vAllCtorParams = ci.ctorProps + ci.ctorPlainParams
+    val vParamStr = expandCtorParams(vAllCtorParams)
+    val vParamDecl = vParamStr.ifEmpty { "void" }
+    hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl);")
+    impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl) {")
+    if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { resolveTypeName(it.typeRef).isArrayLike || it.typeRef.nullable }) {
+        impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
+    } else {
+        impl.appendLine("    $cName \$self = {0};")
+        impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
+        for (vProp in ci.ctorProps) {
+            val vName = vProp.name
+            val vType = vProp.typeRef
+            val vFieldName = if (vName in ci.privateProps) "PRIV_$vName" else vName
+            val vKtcProp = resolveTypeName(vType)
+            val vSizeAnn = getSizeAnnotation(vType)
+            if (vSizeAnn != null) {
+                val vElemType = cTypeStr(vKtcProp.asArr!!.elem)
+                impl.appendLine("    memcpy(\$self.$vFieldName, $vName, $vSizeAnn * sizeof($vElemType));")
+            } else if (vKtcProp.isArrayLike) {
+                impl.appendLine("    \$self.$vFieldName = $vName;")
+                impl.appendLine("    \$self.${vFieldName}\$len = ${vName}\$len;")
+            } else if (vType.nullable) {
+                impl.appendLine("    \$self.$vFieldName = $vName;")
+            } else {
+                impl.appendLine("    \$self.$vFieldName = $vName;")
+            }
+        }
+        for (vBp in ci.bodyProps) {
+            if (vBp.initExpr != null) {
+                if (vBp.line > 0) currentStmtLine = vBp.line
+                heapAllocTargetType = vBp.typeRef
+                val vBodyFieldName = if (vBp.isPrivate) "PRIV_${vBp.name}" else vBp.name
+                val vSizeAnn = getSizeAnnotation(vBp.typeRef)
+                if (vSizeAnn != null && isSizedArrayTypeRef(vBp.typeRef)) {
+                    val vIsZeroInit = vBp.initExpr is CallExpr && (vBp.initExpr.callee as? NameExpr)?.name?.endsWith("Array") == true &&
+                        vBp.initExpr.args.size == 1 && vBp.initExpr.args[0].expr !is LambdaExpr
+                    if (!vIsZeroInit) {
+                        val vExpr = genExpr(vBp.initExpr)
+                        heapAllocTargetType = null
+                        flushPreStmts("    ")
+                        val vElemType = cTypeStr(resolveTypeName(vBp.typeRef).asArr!!.elem)
+                        impl.appendLine("    memcpy(\$self.$vBodyFieldName, $vExpr, $vSizeAnn * sizeof($vElemType));")
+                    } else {
+                        heapAllocTargetType = null
+                    }
+                } else {
+                    val vExpr = genExpr(vBp.initExpr)
+                    heapAllocTargetType = null
+                    flushPreStmts("    ")
+                    impl.appendLine("    \$self.$vBodyFieldName = $vExpr;")
+                }
+                emitBodyPropLenIfArray(vBp)
+            }
+        }
+        impl.appendLine("    return \$self;")
+    }
+    impl.appendLine("}")
+    impl.appendLine()
+}
+
+/** Emit vtable struct for a class implementing an interface (shared by two interface-emission paths). */
+internal fun CCodeGen.emitVtable(cClass: String, cIface: String, ifaceName: String, className: String, props: List<PropDecl>, methods: List<FunDecl>) {
+    impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
+    for (p in props) {
+        val ct = if (p.type != null) cType(p.type) else "ktc_Int"
+        impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
+    }
+    for (m in methods) {
+        val mReturnsNullable = m.returnType != null && m.returnType.nullable
+        val vMRetKtc = if (m.returnType != null) resolveTypeName(m.returnType) else null
+        val mRetResolved = vMRetKtc?.toInternalStr ?: ""
+        val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
+        val extraCast = m.params.joinToString("") { p ->
+            val vKtcParam = resolveTypeName(p.type)
+            val vPStr = vKtcParam.toInternalStr
+            if (p.type.nullable) ", ${optCTypeName(vPStr)}" else ", ${cType(p.type)}"
+        }
+        val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
+            "ktc_noop_dispose"
+        else "${cClass}_${m.name}"
+        impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
+    }
+    if (methods.none { it.name == "dispose" }) {
+        val fnDispose = if (classes[className]?.methods?.none { it.name == "dispose" } == true)
+            "ktc_noop_dispose"
+        else "${cClass}_dispose"
+        impl.appendLine("    (void (*)(void*)) $fnDispose,")
+    }
+    impl.appendLine("};")
+    impl.appendLine()
+}
+
 internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String = when (ktc) { // Nullable value types: hash tag + value (or 0 if null)
     is KtcType.Nullable if isValueNullableKtc(ktc) -> {
         "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(ktc.inner, "${valueExpr}.value")} : 0)"
@@ -1462,34 +1348,9 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
         // static vtable instance
         if (!implsOnly) hdr.appendLine("extern const ${cIface}_vt ${cClass}_${ifaceName}_vt;")
         if (!declsOnly) {
-            impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
-            for (p in allProps) {
-                val ct = if (p.type != null) cType(p.type) else "ktc_Int"
-                impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
-            }
-            for (m in allMethods) {
-                val mReturnsNullable = m.returnType != null && m.returnType.nullable
-                val vMRetKtcCast   = if (m.returnType != null) resolveTypeName(m.returnType) else null  // KtcType of return
-                val mRetResolved   = vMRetKtcCast?.toInternalStr ?: ""                                  // string for optCTypeName
-                val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
-                val extraCast = m.params.joinToString("") { p ->
-                    val vKtcCastParam = resolveTypeName(p.type)          // KtcType of cast param
-                    val vCastPStr     = vKtcCastParam.toInternalStr      // string for optCTypeName
-                    if (p.type.nullable) ", ${optCTypeName(vCastPStr)}" else ", ${cType(p.type)}"
-                }
-                val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
-                    "ktc_noop_dispose"
-                else "${cClass}_${m.name}"
-                impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
-            }
-            if (allMethods.none { it.name == "dispose" }) {
-                val fnDispose = if (classes[className]?.methods?.none { it.name == "dispose" } == true)
-                    "ktc_noop_dispose"
-                else "${cClass}_dispose"
-                impl.appendLine("    (void (*)(void*)) $fnDispose,")
-            }
-            impl.appendLine("};")
-            impl.appendLine()
+            // DUPLICATE START HERE ID3
+            emitVtable(cClass, cIface, ifaceName, className, allProps, allMethods)
+            // DUPLICATE END HERE ID3
         }
 
         // wrapping function: ClassName_as_IfaceName
@@ -1547,35 +1408,9 @@ internal fun CCodeGen.emitTransitiveInterfaceVtables(className: String, cClass: 
 
         // static vtable instance (same class methods, but only the parent's slots)
         hdr.appendLine("extern const ${cSuper}_vt ${cClass}_${superName}_vt;")
-        impl.appendLine("const ${cSuper}_vt ${cClass}_${superName}_vt = {")
-        for (p in superProps) {
-            val ct = if (p.type != null) cType(p.type) else "ktc_Int"
-            impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
-        }
-        for (m in superMethods) {
-            val mReturnsNullable = m.returnType != null && m.returnType.nullable
-            val vMRetKtcTrans   = if (m.returnType != null) resolveTypeName(m.returnType) else null  // KtcType of return
-            val mRetResolved    = vMRetKtcTrans?.toInternalStr ?: ""                                 // string for optCTypeName
-            val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
-            val extraCast = m.params.joinToString("") { p ->
-                val vKtcTransParam = resolveTypeName(p.type)             // KtcType of cast param
-                val vTransPStr     = vKtcTransParam.toInternalStr        // string for optCTypeName
-                if (p.type.nullable) ", ${optCTypeName(vTransPStr)}" else ", ${cType(p.type)}"
-            }
-            val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
-                "ktc_noop_dispose"
-            else "${cClass}_${m.name}"
-            impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
-        }
-        if (superMethods.none { it.name == "dispose" }) {
-            val fnDispose = if (classes[className]?.methods?.none { it.name == "dispose" } == true)
-                "ktc_noop_dispose"
-            else "${cClass}_dispose"
-            impl.appendLine("    (void (*)(void*)) $fnDispose,")
-        }
-        impl.appendLine("};")
-        impl.appendLine()
-
+        // DUPLICATE START HERE ID3
+        emitVtable(cClass, cSuper, superName, className, superProps, superMethods)
+        // DUPLICATE END HERE ID3
         // wrapping function
         hdr.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self);")
         impl.appendLine("$cSuper ${cClass}_as_${superName}($cClass* \$self) {")

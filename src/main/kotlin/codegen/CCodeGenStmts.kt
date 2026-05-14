@@ -767,7 +767,7 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
 
     // Object / Companion property write: ensure lazy init before assignment
     if (s.target is DotExpr) {
-        val vObjWriteCName = resolveDotObjCName(s.target as DotExpr)
+        val vObjWriteCName = resolveDotObjCName(s.target)
         if (vObjWriteCName != null) {
             impl.appendLine("$ind${vObjWriteCName}_\$ensure_init();")
         }
@@ -1724,7 +1724,7 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
                     val arrayId = getTypeId(target)
                     "($subj${memOp}__array_type_id == $arrayId)"
                 }
-            } else if (isBuiltinType(target)) {
+            } else if (targetKtc !is KtcType.User || targetKtc.kind != KtcType.UserKind.Class) {
                 val isSourceNullable = exprKtc is KtcType.Nullable
                 if (exprKtcCore != null && exprKtcCore !is KtcType.Ptr) {
                     if (exprKtcCore.toInternalStr == target) {

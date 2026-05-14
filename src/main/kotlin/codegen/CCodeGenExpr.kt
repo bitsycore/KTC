@@ -205,7 +205,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
                 val arrayId = getTypeId(target)
                 "(${inner}${memOp}__array_type_id == $arrayId)"
             }
-        } else if (isBuiltinType(target)) {
+        } else if (targetKtc !is KtcType.User || targetKtc.kind != KtcType.UserKind.Class) {
             val isSourceNullable = exprKtc is KtcType.Nullable
             val isSourceAny = exprKtcCore is KtcType.Any
             if (exprKtcCore != null && !isSourceAny && exprKtcCore !is KtcType.Ptr) {
@@ -244,7 +244,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
                 else impls.joinToString(" || ") { "${inner}${memOp}__type_id == ${typeFlatName(it)}_TYPE_ID" }
-            } else if (isBuiltinType(target)) {
+            } else if (targetKtc !is KtcType.User || targetKtc.kind != KtcType.UserKind.Class) {
                 val typeId = getTypeId(target)
                 "${inner}${memOp}__type_id == $typeId"
             } else {

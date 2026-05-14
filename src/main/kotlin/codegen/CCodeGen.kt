@@ -309,16 +309,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     // Target type for HeapAlloc/HeapArrayZero/HeapArrayResize inference (context from LHS)
     internal var heapAllocTargetType: TypeRef? = null
 
-    /** Built-in types that are not classes/interfaces/arrays (primitives, String, Any). */
-    internal fun isBuiltinType(t: String): Boolean {
-        val base = t.removeSuffix("?")
-        return base in builtinTypes
-    }
-    private val builtinTypes = setOf(
-        "Byte", "Short", "Int", "Long", "Float", "Double", "Boolean", "Char",
-        "UByte", "UShort", "UInt", "ULong", "String", "Any"
-    )
-
     /* True if the variable was originally declared as Any trampoline (or Any?) and later smart-cast narrowed. */
     internal fun isAnySmartCastVar(inName: String): Boolean
         {
