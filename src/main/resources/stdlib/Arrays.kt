@@ -1,11 +1,9 @@
 @file:DocumentationOnly
 package ktc.std
 
-/**
-Stack array construction intrinsics.
-These functions are handled directly by the transpiler and emit
-stack-allocated C arrays.  All arrays carry a companion $len field.
-*/
+// ==================================================
+// MARK: Arrays
+// ==================================================
 
 /**
 Construct a stack array from a fixed list of values.
@@ -31,7 +29,9 @@ Usage: val arr = Array(n) { i -> i * 2 }
 */
 fun <T> Array(inSize: Int, inInit: (Int) -> T): Array<T> = error("Transpiler intrinsic")
 
-// ── Primitive array constructors ─────────────────────────────────────────────
+// ==================================================
+// MARK: Primitive Arrays
+// ==================================================
 
 /**
 Construct a stack array of n Int elements, all zero-initialised.
@@ -105,6 +105,56 @@ Construct a stack array of n Boolean elements, initialised by calling init(index
 */
 fun BooleanArray(inSize: Int, inInit: (Int) -> Boolean): Array<Boolean> = error("Transpiler intrinsic")
 
+// ==================================================
+// MARK: Primitive arrayOf variants
+// ==================================================
+
+/**
+Construct a stack array from a fixed list of Int values.
+Usage: val arr = intArrayOf(1, 2, 3)
+*/
+fun intArrayOf(vararg inElements: Int): Array<Int> = error("Transpiler intrinsic")
+
+/**
+Construct a stack array from a fixed list of Long values.
+Usage: val arr = longArrayOf(1L, 2L, 3L)
+*/
+fun longArrayOf(vararg inElements: Long): Array<Long> = error("Transpiler intrinsic")
+
+/**
+Construct a stack array from a fixed list of Float values.
+Usage: val arr = floatArrayOf(1f, 2f, 3f)
+*/
+fun floatArrayOf(vararg inElements: Float): Array<Float> = error("Transpiler intrinsic")
+
+/**
+Construct a stack array from a fixed list of Double values.
+Usage: val arr = doubleArrayOf(1.0, 2.0, 3.0)
+*/
+fun doubleArrayOf(vararg inElements: Double): Array<Double> = error("Transpiler intrinsic")
+
+/**
+Construct a stack array from a fixed list of Byte values.
+Usage: val arr = byteArrayOf(0x00, 0xFF)
+*/
+fun byteArrayOf(vararg inElements: Byte): Array<Byte> = error("Transpiler intrinsic")
+
+/**
+Construct a stack array from a fixed list of Char values.
+Usage: val arr = charArrayOf('a', 'b', 'c')
+*/
+fun charArrayOf(vararg inElements: Char): Array<Char> = error("Transpiler intrinsic")
+
+/**
+Construct a stack array from a fixed list of Boolean values.
+Usage: val arr = booleanArrayOf(true, false, true)
+*/
+fun booleanArrayOf(vararg inElements: Boolean): Array<Boolean> = error("Transpiler intrinsic")
+
+// ==================================================
+// MARK: RawArray
+// ==================================================
+
 /**
 A raw C pointer to an array of T elements with no companion $len field.
 RawArray<T> is always used together with @Ptr:
@@ -112,7 +162,7 @@ RawArray<T> is always used together with @Ptr:
 
 Unlike Array<T>, RawArray has no length tracking.  The caller is responsible
 for keeping track of the element count.  Use this only when interfacing with
-C APIs that expect a bare pointer.
+C APIs that expect a bare pointer or for optimizing class like HashMap implementation.
 
 Heap-allocating a RawArray:
 val vRaw: @Ptr RawArray<Byte> = HeapAlloc<RawArray<Byte>>(n)
