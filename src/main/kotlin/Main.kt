@@ -218,7 +218,7 @@ fun main(args: Array<String>) {
 
     // ── Copy intrinsic files to ktc/ subdirectory ────────────────
     val intrinsicDst = File(ktcDir, "ktc_intrinsic.h")
-    val intrinsicSrc = aClass.getResourceAsStream("/ktc_intrinsic.h")
+    val intrinsicSrc = aClass.getResourceAsStream("/ktc/ktc_intrinsic.h")
     if (intrinsicSrc != null) {
         intrinsicDst.writeText(intrinsicSrc.bufferedReader().readText())
     } else {
@@ -226,7 +226,7 @@ fun main(args: Array<String>) {
     }
 
     val intrinsicDstC = File(ktcDir, "ktc_intrinsic.c")
-    val intrinsicSrcC = aClass.getResourceAsStream("/ktc_intrinsic.c")
+    val intrinsicSrcC = aClass.getResourceAsStream("/ktc/ktc_intrinsic.c")
     if (intrinsicSrcC != null) {
         intrinsicDstC.writeText(intrinsicSrcC.bufferedReader().readText())
     } else {

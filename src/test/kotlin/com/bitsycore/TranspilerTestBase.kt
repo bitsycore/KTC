@@ -265,9 +265,9 @@ open class TranspilerTestBase {
         val dir = verifyTempDir.resolve("test_$idx").toFile()
         dir.mkdirs()
 
-        val intrinsicH = javaClass.getResourceAsStream("/ktc_intrinsic.h")
+        val intrinsicH = javaClass.getResourceAsStream("/ktc/ktc_intrinsic.h")
             ?.bufferedReader()?.readText() ?: error("ktc_intrinsic.h not found")
-        val intrinsicC = javaClass.getResourceAsStream("/ktc_intrinsic.c")
+        val intrinsicC = javaClass.getResourceAsStream("/ktc/ktc_intrinsic.c")
             ?.bufferedReader()?.readText() ?: error("ktc_intrinsic.c not found")
         java.io.File(dir, "ktc_intrinsic.h").writeText(intrinsicH)
         java.io.File(dir, "ktc_intrinsic.c").writeText(intrinsicC)
