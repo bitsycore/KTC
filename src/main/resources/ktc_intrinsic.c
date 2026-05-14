@@ -1,5 +1,7 @@
 #include "ktc_intrinsic.h"
 
+/* ═══════════════════════════ Rand ══════════════════════════ */
+
 void ktc_srand(
     ktc_ULong* state,
     ktc_ULong* inc,
@@ -48,6 +50,8 @@ ktc_UInt ktc_rand_range(
             return r % bound;
     }
 }
+
+/* ═══════════════════════════ Time ══════════════════════════ */
 
 ktc_Double ktc_time_seconds(void)
 {
@@ -126,7 +130,7 @@ void ktc_time_sleep_seconds(ktc_Double seconds)
 #endif
 }
 
-/** ═══════════════════════════ Stack Trace ══════════════════════════ */
+/* ═══════════════════════════ Stack Trace ══════════════════════════ */
 
 /* Maximum number of frames to capture */
 #define KTC_ST_MAX_FRAMES  32
@@ -173,7 +177,34 @@ static void ktc_st_format_loc(const char* inRaw, char* outBuf, int inBufSize)
  * MinGW: DbgHelp only reads PDB symbols; MinGW/GCC produces DWARF.
  * addr2line (shipped with MinGW binutils) reads DWARF natively.
  * Compile with -g for function names and file:line to be available.
+ *
+ * ASLR: Windows updates the in-memory PE header's ImageBase to the runtime
+ * address, so we must read ImageBase from the on-disk file to get the static
+ * value needed for: static_addr = runtime_addr - runtime_base + static_base.
  */
+
+/** Read the static ImageBase from the exe file on disk (not in-memory PE, which
+ *  Windows rewrites to the runtime load address under ASLR). */
+static ULONGLONG ktc_st_disk_image_base(const char* inExe)
+{
+    HANDLE hf = CreateFileA(inExe, GENERIC_READ, FILE_SHARE_READ,
+                            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf == INVALID_HANDLE_VALUE) return 0;
+
+    IMAGE_DOS_HEADER dos;
+    DWORD n;
+    if (!ReadFile(hf, &dos, sizeof(dos), &n, NULL) || dos.e_magic != IMAGE_DOS_SIGNATURE)
+        { CloseHandle(hf); return 0; }
+
+    SetFilePointer(hf, dos.e_lfanew, NULL, FILE_BEGIN);
+    IMAGE_NT_HEADERS nt;
+    if (!ReadFile(hf, &nt, sizeof(nt), &n, NULL) || nt.Signature != IMAGE_NT_SIGNATURE)
+        { CloseHandle(hf); return 0; }
+
+    CloseHandle(hf);
+    return (ULONGLONG)nt.OptionalHeader.ImageBase;
+}
+
 void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
 {
     fprintf(stderr, "Exception in thread \"main\" kotlin.Error: %.*s\n",
@@ -188,28 +219,50 @@ void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
     char vExe[MAX_PATH];
     GetModuleFileNameA(NULL, vExe, sizeof(vExe));
 
-    /* Build: addr2line -f -e "<exe>" 0xADDR1 0xADDR2 ... 2>NUL */
+    ULONGLONG runtimeBase = (ULONGLONG)GetModuleHandleA(NULL);
+    ULONGLONG staticBase  = ktc_st_disk_image_base(vExe);
+    if (staticBase == 0) staticBase = runtimeBase; /* fallback: no correction */
+
+    /* imageSize from the in-memory header — still valid for range check. */
+    IMAGE_DOS_HEADER* dos  = (IMAGE_DOS_HEADER*)GetModuleHandleA(NULL);
+    IMAGE_NT_HEADERS* nt   = (IMAGE_NT_HEADERS*)((BYTE*)dos + dos->e_lfanew);
+    ULONGLONG imageSize    = (ULONGLONG)nt->OptionalHeader.SizeOfImage;
+
+    /* Only include frames inside the main exe; apply ASLR correction. */
+    int vExeCount = 0;
     char vCmd[4096];
     int  vPos = snprintf(vCmd, sizeof(vCmd), "addr2line -f -e \"%s\"", vExe);
-    for (int i = 0; i < vFrameCount && vPos < (int)sizeof(vCmd) - 24; i++)
-        vPos += snprintf(vCmd + vPos, sizeof(vCmd) - vPos, " %p", vFrames[i]);
+
+    for (int i = 0; i < vFrameCount; i++) {
+        ULONGLONG frameAddr = (ULONGLONG)vFrames[i];
+        if (frameAddr >= runtimeBase && frameAddr < runtimeBase + imageSize) {
+            ULONGLONG corrected = frameAddr - runtimeBase + staticBase;
+            if (vPos < (int)sizeof(vCmd) - 24)
+                vPos += snprintf(vCmd + vPos, sizeof(vCmd) - vPos, " %llx",
+                                 (unsigned long long)corrected);
+            vExeCount++;
+        }
+    }
+
+    if (vExeCount == 0) { fprintf(stderr, "\tat ??(Unknown Source)\n"); return; }
+
     if (vPos < (int)sizeof(vCmd) - 8)
         strncat(vCmd, " 2>NUL", sizeof(vCmd) - (size_t)vPos - 1);
 
-    FILE* vFp = popen(vCmd, "r");
-    if (!vFp) {
-        for (int i = 0; i < vFrameCount; i++)
-            fprintf(stderr, "\tat ??(Unknown Source)\n");
-        return;
-    }
+    /* _popen/_pclose must be used explicitly: popen is hidden by __STRICT_ANSI__
+     * which -std=c11 activates. */
+    FILE* vFp = _popen(vCmd, "r");
+    if (!vFp) { fprintf(stderr, "\tat ??(Unknown Source)\n"); return; }
 
-    /* addr2line -f outputs pairs: function name line, then file:line. */
     char vFunc[256], vFileLine[512], vLoc[256];
-    for (int i = 0; i < vFrameCount; i++) {
+    for (int i = 0; i < vExeCount; i++) {
         if (!fgets(vFunc,     sizeof(vFunc),     vFp)) break;
         if (!fgets(vFileLine, sizeof(vFileLine), vFp)) break;
         vFunc[strcspn(vFunc, "\r\n")]         = '\0';
         vFileLine[strcspn(vFileLine, "\r\n")] = '\0';
+
+        /* Skip frames with no symbol info — they are CRT/startup internals. */
+        if (vFunc[0] == '?' && vFunc[1] == '?') continue;
 
         if (vFileLine[0] == '?' && vFileLine[1] == '?')
             fprintf(stderr, "\tat %s(Unknown Source)\n", vFunc);
@@ -218,7 +271,7 @@ void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
             fprintf(stderr, "\tat %s(%s)\n", vFunc, vLoc);
         }
     }
-    pclose(vFp);
+    _pclose(vFp);
 }
 
 #else
