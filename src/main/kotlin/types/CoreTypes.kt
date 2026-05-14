@@ -82,6 +82,15 @@ internal sealed class KtcType {
         override fun toCType() = "void"
     }
 
+    // ── Any (top type) ─────────────────────────────────────────────────
+    // At runtime, Any is ktc_Any (a type-id + data pointer trampoline).
+    // Narrowed / guaranteed subtype is tracked via scopes, not stored here.
+    // TODO: consider `class Any(val narrowed: KtcType?)` to carry the guaranteed type.
+
+    object Any : KtcType() {
+        override fun toCType() = "ktc_Any"
+    }
+
     // ── User-defined class / interface / enum / object ──────────────────
 
     enum class UserKind { Class, DataClass, Object, Interface, Enum }
@@ -183,6 +192,7 @@ internal sealed class KtcType {
             is Prim -> kind.name                             // "Int", "Boolean", etc.
             is Str -> "String"
             is Void -> "Unit"
+            is Any -> "Any"
             is User -> baseName                              // bare class name, no pkg
             is Func -> {
                 val vReceiverStr = receiver?.let { it.toInternalStr + "|" } ?: ""  // "T|" or ""
@@ -247,7 +257,7 @@ internal sealed class KtcType {
                     User(BuiltinTypeDef(base, pkg = "ktc_"), typeArgKtc)
                 }
 
-                base == "Any" -> User(BuiltinTypeDef("Any", pkg = ""))
+                base == "Any" -> Any
                 else -> User(BuiltinTypeDef(resolved, pkg = ""))
             }
 

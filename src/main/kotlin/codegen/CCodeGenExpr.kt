@@ -206,7 +206,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             }
         } else if (isBuiltinType(target)) {
             val isSourceNullable = exprKtc is KtcType.Nullable
-            val isSourceAny = exprKtcCore is KtcType.User && (exprKtcCore as KtcType.User).baseName == "Any"
+            val isSourceAny = exprKtcCore is KtcType.Any
             if (exprKtcCore != null && !isSourceAny && exprKtcCore !is KtcType.Ptr) {
                 if (exprKtcCore.toInternalStr == target) {
                     // Nullable source: check non-null (tag check for value Optional, != NULL for pointers)
@@ -256,7 +256,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             } else if (srcType != null && interfaces.containsKey(srcType) && classes.containsKey(target)) {
                 // Source is an interface, target is a concrete class — extract from tagged union
                 ifaceUnionAccess(srcType, target, inner)
-            } else if (srcType == "Any" || srcType == "Any*") {
+            } else if (srcKtc is KtcType.Any || (srcKtcCore is KtcType.Ptr && (srcKtcCore as KtcType.Ptr).inner is KtcType.Any)) {
                 "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
             } else {
                 "(${cTypeStr(target)})($inner)"
@@ -272,7 +272,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
         } else if (srcType != null && interfaces.containsKey(srcType) && classes.containsKey(target)) {
             // Source is an interface, target is a concrete class — extract from tagged union
             ifaceUnionAccess(srcType, target, inner)
-        } else if (srcType == "Any" || srcType == "Any*") {
+        } else if (srcKtc is KtcType.Any || (srcKtcCore is KtcType.Ptr && (srcKtcCore as KtcType.Ptr).inner is KtcType.Any)) {
             val memOp = if (isPtr) "->" else "."
             "(*(${cTypeStr(target)}*)(${inner}${memOp}data))"
         } else {
@@ -290,6 +290,7 @@ internal fun CCodeGen.genName(e: NameExpr): String {
     val subst = lambdaParamSubst[e.name]
     if (subst != null) return subst
     val curType = lookupVar(e.name)
+    val curKtc = lookupVarKtc(e.name)
     // Check if it's a known variable in scope
     if (curType != null) {
         if (currentClass != null && classes[currentClass]?.props?.any { it.first == e.name } == true) {
@@ -321,7 +322,7 @@ internal fun CCodeGen.genName(e: NameExpr): String {
         // Trampolined array param: redirect to local stack copy
         if (e.name in trampolinedParams) return "local\$${e.name}"
         // Any trampoline smart-cast: narrowed from Any, dereference .data
-        if (curType != "Any" && isAnySmartCastVar(e.name)) {
+        if (curKtc !is KtcType.Any && isAnySmartCastVar(e.name)) {
             val ct = cTypeStr(curType)
             return "(*(($ct*)(${e.name}.data)))"
         }
@@ -1336,7 +1337,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                 if (arg.expr is NullLit) {
                     parts += "NULL"
                     if (isArrayType(paramType)) parts += "0"
-                } else if (paramType.removeSuffix("?").removeSuffix("*") == "Any") {
+                } else if ((paramTypeKtc as? KtcType.Ptr)?.inner is KtcType.Any) {
                     // @Ptr Any → wrap as ktc_Any fat pointer, pass pointer to it.
                     // For variables, take address of original (allows mutation).
                     // For rvalues, copy to temp first (isolates the callee from the caller's stack).
@@ -1414,7 +1415,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                 } else {
                     parts += expr
                 }
-            } else if (paramType == "Any") {
+            } else if (paramTypeKtc is KtcType.Any) {
                 if (arg.expr is NullLit) {
                     parts += "(ktc_Any){0}"
                 } else {

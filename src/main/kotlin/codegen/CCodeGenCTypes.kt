@@ -516,7 +516,7 @@ internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null
     // String, void
     if (resolved == "String") return KtcType.Str
     if (resolved == "void" || resolved == "Nothing" || resolved == "Unit") return KtcType.Void
-    if (resolved == "Any") return userType("Any")
+    if (resolved == "Any") return KtcType.Any
 
     // StringBuffer
     if (resolved == "ktc_StrBuf") return userType("ktc_StrBuf")
@@ -565,6 +565,7 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Prim -> ktc.toCType()
     is KtcType.Str -> ktc.toCType()
     is KtcType.Void -> ktc.toCType()
+    is KtcType.Any -> ktc.toCType()
     is KtcType.User -> {
         val bn = ktc.baseName // base name (no package prefix)
         when (bn) {

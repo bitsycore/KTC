@@ -418,7 +418,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         ktc !is KtcType.Nullable -> false
         ktc.inner is KtcType.Ptr -> false
         ktc.inner is KtcType.Arr -> false
-        ktc.inner is KtcType.User && ktc.inner.baseName == "Any" -> false
+        ktc.inner is KtcType.Any -> false
         else -> true
     }
 

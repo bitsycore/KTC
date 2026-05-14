@@ -137,7 +137,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
         isPointer -> false
         vKtcCore is KtcType.Func -> false
         vKtcCore.isArrayLike -> false
-        vKtcCore is KtcType.User && vKtcCore.baseName == "Any" -> false
+        vKtcCore is KtcType.Any -> false
         else -> s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init) || inferredNullable
     }
 
@@ -146,7 +146,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
             (s.type?.nullable == true || s.init is NullLit || inferredNullable)
 
     // Nullable Any: trampoline, null = data == NULL
-    val isAnyNullable = vKtcCore is KtcType.User && vKtcCore.baseName == "Any" &&
+    val isAnyNullable = vKtcCore is KtcType.Any &&
             (s.type?.nullable == true || s.init is NullLit || inferredNullable)
 
     val isInferredPtr = inferredPtr
@@ -325,7 +325,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenExpr;")
                 } else {
                     // Auto-wrap init into ktc_Any trampoline when variable is typed Any
-                    if (tRaw == "Any" && s.init != null && s.init !is NullLit) {
+                    if (vKtc is KtcType.Any && s.init != null && s.init !is NullLit) {
                         val initType = inferExprType(s.init)?.removeSuffix("?") ?: "Int"
                         val typeId = getTypeId(initType)
                         val initCT = cTypeStr(initType)
