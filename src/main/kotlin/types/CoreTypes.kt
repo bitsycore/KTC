@@ -111,6 +111,10 @@ internal sealed class KtcType {
 
     // ── Raw pointer ──────────────────────────────────────────────────
 
+    /** A pointer type. When [inner] is [Arr], this represents a **typed array**
+     * (e.g. `IntArray`, `ByteArray`) — the trampoline is a pointer to the array data.
+     * When [inner] is [User], this is a `@Ptr`-annotated class pointer (e.g. `Vec2*`).
+     * Use `isArrayLike` to cover both [Arr] and `Ptr(Arr)`. */
     data class Ptr(val inner: KtcType) : KtcType() {
         override fun toCType() = "${inner.toCType()}*"
     }
@@ -147,7 +151,8 @@ internal sealed class KtcType {
     val isString: Boolean get() = this is Str
     val isVoid: Boolean get() = this is Void
 
-    /* True for both Arr and Ptr(Arr): replaces isArrayType(String) check. */
+    /* True for both Arr and Ptr(Arr): covers typed arrays (IntArray) and @Ptr Array<T>.
+    This replaces the string-based `isArrayType()` check. */
     val isArrayLike: Boolean get() = this is Arr || (this is Ptr && inner is Arr)
 
     /* Extract the Arr node from Arr or Ptr(Arr), null otherwise. */
@@ -188,8 +193,9 @@ internal sealed class KtcType {
             is Arr -> "${elem.toInternalStr}Array"          // "IntArray", "Vec2Array"
             is Ptr -> when (val vInner = inner) {
                 is Arr -> when (val vElem = vInner.elem) {
-                    is Nullable -> "${vElem.inner.toInternalStr}OptArray"  // "IntOptArray"
-                    else -> "${vElem.toInternalStr}Array"           // "IntArray" (typed ptr)
+                    // Typed arrays: Ptr(Arr(Int)) → "IntArray", Ptr(Arr(Nullable(Int))) → "IntOptArray"
+                    is Nullable -> "${vElem.inner.toInternalStr}OptArray"
+                    else -> "${vElem.toInternalStr}Array"
                 }
 
                 else -> "${vInner.toInternalStr}*"                      // "Vec2*"
