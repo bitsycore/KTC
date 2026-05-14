@@ -319,15 +319,21 @@ internal fun CCodeGen.genName(e: NameExpr): String {
 
 internal fun CCodeGen.genBin(e: BinExpr): String {
     val lt = inferExprType(e.left)
-    // `to` infix → Pair; use intrinsic path unless stdlib Pair is active
-    if (e.op == "to" && !(genericClassDecls.containsKey("Pair") && inlineExtFunDecls.containsKey("to"))) {
-        val aType = inferExprType(e.left) ?: "Int"
-        val bType = inferExprType(e.right) ?: "Int"
-        pairTypes.add(Pair(aType, bType))
-        pairTypeComponents["Pair_${aType}_${bType}"] = Pair(aType, bType)
-        ensurePairType(aType, bType)
-        val pairCType = "ktc_Pair_${aType}_${bType}"
-        return "($pairCType){${genExpr(e.left)}, ${genExpr(e.right)}}"
+    /* `to` infix → Pair; use stdlib path when stdlib Pair class is loaded, else intrinsic */
+    if (e.op == "to") {
+        val aType = inferExprType(e.left) ?: "Int" // left operand type
+        val bType = inferExprType(e.right) ?: "Int" // right operand type
+        if (genericClassDecls.containsKey("Pair")) {
+            // stdlib Pair<A,B> is active — emit primaryConstructor call
+            val vMangledName = recordGenericInstantiation("Pair", listOf(aType, bType)) // e.g. "Pair_Int_String"
+            materializeGenericInstantiations() // ensure ClassInfo entry exists
+            val vCi = classes[vMangledName] // concrete class info with correct pkg
+            if (vCi != null) {
+                val vLExpr = genExpr(e.left) // C expression for first
+                val vRExpr = genExpr(e.right) // C expression for second
+                return "${vCi.flatName}_primaryConstructor($vLExpr, $vRExpr)"
+            }
+        }
     }
     // User-defined infix inline extension function dispatch
     val vInfixDecl = inlineExtFunDecls[e.op]
@@ -848,27 +854,6 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 return genNewArray(elemC, args)
             }
         }
-    }
-
-    // Pair constructor (intrinsic — only when no user-defined class named Pair)
-    if (name == "Pair" && args.size == 2 && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
-        val a = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[0]).toInternalStr else inferExprType(args[0].expr) ?: "Int"
-        val b = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[1]).toInternalStr else inferExprType(args[1].expr) ?: "Int"
-        pairTypes.add(Pair(a, b))
-        pairTypeComponents["Pair_${a}_${b}"] = Pair(a, b)
-        ensurePairType(a, b)
-        val pairCType = "ktc_Pair_${a}_${b}"
-        return "($pairCType){${genExpr(args[0].expr)}, ${genExpr(args[1].expr)}}"
-    }
-
-    // Triple constructor (intrinsic)
-    if (name == "Triple" && args.size == 3 && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
-        val a = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[0]).toInternalStr else inferExprType(args[0].expr) ?: "Int"
-        val b = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[1]).toInternalStr else inferExprType(args[1].expr) ?: "Int"
-        val c = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[2]).toInternalStr else inferExprType(args[2].expr) ?: "Int"
-        tripleTypeComponents["Triple_${a}_${b}_${c}"] = Triple(a, b, c)
-        ensureTripleType(a, b, c)
-        return "(ktc_Triple_${a}_${b}_${c}){${genExpr(args[0].expr)}, ${genExpr(args[1].expr)}, ${genExpr(args[2].expr)}}"
     }
 
     // StringBuffer constructor (intrinsic — only when no user-defined class named StringBuffer)

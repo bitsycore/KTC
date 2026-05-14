@@ -113,10 +113,10 @@ class InfixUnitTest : TranspilerTestBase() {
 				println(p.first)
 				println(p.second)
 			""")
-		// StdPair_Int_String struct must exist in the header
-		vR.headerContains("ktc_std_StdPair_Int_String")
+		// Pair_Int_String struct must exist in the header
+		vR.headerContains("ktc_std_Pair_Int_String")
 		// Result variable uses that type
-		vR.sourceContains("ktc_std_StdPair_Int_String \$ir")
+		vR.sourceContains("ktc_std_Pair_Int_String \$ir")
 	}
 
 	@Test fun stdlibToStdFirstAndSecondAccess() {
@@ -124,7 +124,7 @@ class InfixUnitTest : TranspilerTestBase() {
 			body = """
 				val p = 42 toStd "world"
 			""")
-		vR.headerContains("ktc_std_StdPair_Int_String")
+		vR.headerContains("ktc_std_Pair_Int_String")
 	}
 
 	// ── Infix used inside expression position ───────────────────────

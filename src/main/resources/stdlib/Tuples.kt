@@ -13,17 +13,18 @@ package ktc.std
  * @property second Second value.
  * @constructor Creates a new instance of Pair.
  */
-data class StdPair<A, B>(
+data class Pair<A, B>(
     val first: A,
     val second: B
 )
 
 /**
- * Creates a tuple of type [Pair] from this and [that].
- *
- * This can be useful for creating [Map] literals with less noise, for example:
+ * Creates a Pair from this and [that] using the infix toStd operator.
+ * The `to` BinExpr operator is handled directly by the code generator (Phase 4).
+ * A `to` extension function is intentionally left out; the BinExpr handler calls
+ * Pair_primaryConstructor directly when the stdlib Pair class is active.
  */
-infix fun <A, B> A.toStd(that: B): StdPair<A, B> = StdPair(this, that)
+infix fun <A, B> A.toStd(that: B): Pair<A, B> = Pair(this, that)
 
 /**
  * Converts this pair into a list.
@@ -34,7 +35,7 @@ fun <T> Pair<T, T>.toList(): List<T> = listOf(first, second)
  * Represents a triad of values
  *
  * There is no meaning attached to values in this class, it can be used for any purpose.
- * Triple exhibits value semantics, i.e. two triples are equal if all three components are equal.
+ * Triple exhibits value semantics, i.e. two triples are equal if both components are equal.
  * An example of decomposing it into values:
  *
  * @param A type of the first value.
@@ -44,7 +45,7 @@ fun <T> Pair<T, T>.toList(): List<T> = listOf(first, second)
  * @property second Second value.
  * @property third Third value.
  */
-data class StdTriple<A, B, C>(
+data class Triple<A, B, C>(
     val first: A,
     val second: B,
     val third: C

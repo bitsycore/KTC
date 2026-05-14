@@ -35,9 +35,4 @@ fun main() {
     println("Triple2: ${t2.first}, ${t2.second}, ${t2.third}")
 
     println("done")
-
-    // From Stdlib Pair
-    val np = StdPair(1, "52")
-    println("StdPair: ${np}")
-    println("StdPair: ${np.first} -> ${np.second}")
 }

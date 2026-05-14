@@ -2,62 +2,63 @@ package com.bitsycore
 
 import kotlin.test.Test
 
-/**
- * Tests for intrinsic Pair<A,B> type, vararg parameters, and spread operator.
- */
+/*
+Tests for stdlib Pair<A,B> type (via ktc.std), vararg parameters, and spread operator.
+Pair and Triple are now fully defined in stdlib — no intrinsic codegen fallback exists.
+*/
 class PairVarargUnitTest : TranspilerTestBase() {
 
     // ── Pair: to infix ──────────────────────────────────────────────
 
     @Test fun pairToInfix() {
-        val r = transpileMain("""
+        val r = transpileMainWithStdlib("""
             val p = 1 to "hello"
             println(p.first)
         """)
-        r.headerContains("ktc_Pair_Int_String")
+        r.headerContains("ktc_std_Pair_Int_String")
         r.sourceContains(".first")
     }
 
     @Test fun pairToInfixTypes() {
-        val r = transpileMain("""
+        val r = transpileMainWithStdlib("""
             val p = 10 to 20
             println(p.second)
         """)
-        r.headerContains("ktc_Pair_Int_Int")
+        r.headerContains("ktc_std_Pair_Int_Int")
         r.sourceContains(".second")
     }
 
     // ── Pair: constructor ───────────────────────────────────────────
 
     @Test fun pairConstructorExplicitTypes() {
-        val r = transpileMain("""
+        val r = transpileMainWithStdlib("""
             val p = Pair<Int, Int>(3, 4)
             println(p.first)
         """)
-        r.headerContains("ktc_Pair_Int_Int")
+        r.headerContains("ktc_std_Pair_Int_Int")
     }
 
     @Test fun pairConstructorInferred() {
-        val r = transpileMain("""
+        val r = transpileMainWithStdlib("""
             val p = Pair(true, 42)
             println(p.second)
         """)
-        r.headerContains("ktc_Pair_Boolean_Int")
+        r.headerContains("ktc_std_Pair_Boolean_Int")
     }
 
-    // ── Pair: typedef struct emitted ────────────────────────────────
+    // ── Pair: stdlib struct emitted ─────────────────────────────────
 
     @Test fun pairTypedefEmitted() {
-        val r = transpileMain("""
+        val r = transpileMainWithStdlib("""
             val p = 1 to 2
         """)
-        r.headerContains("typedef struct { ktc_Int first; ktc_Int second; } ktc_Pair_Int_Int;")
+        r.headerContains("ktc_std_Pair_Int_Int")
     }
 
     // ── Pair: as function parameter / return ────────────────────────
 
     @Test fun pairAsParam() {
-        val r = transpile("""
+        val r = transpileWithStdlib("""
             package test.Main
             fun printPair(p: Pair<Int, Int>) {
                 println(p.first)
@@ -66,7 +67,7 @@ class PairVarargUnitTest : TranspilerTestBase() {
                 printPair(1 to 2)
             }
         """)
-        r.headerContains("ktc_Pair_Int_Int")
+        r.headerContains("ktc_std_Pair_Int_Int")
         r.sourceContains("p.first")
     }
 

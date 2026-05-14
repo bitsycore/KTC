@@ -98,11 +98,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         return TypeRef(typeName)
     }
 
-    /** Convert internal type name to Kotlin display name: "Wrapper_String" → "Wrapper<String>" */
+    /* Convert internal type name to Kotlin display name: "Wrapper_String" → "Wrapper<String>" */
     internal fun ktDisplayName(internal: String): String {
-        // Pair/Triple intrinsics
-        pairTypeComponents[internal]?.let { return "Pair<${it.first}, ${it.second}>" }
-        tripleTypeComponents[internal]?.let { return "Triple<${it.first}, ${it.second}, ${it.third}>" }
         // Generic class instantiation: find base name and split by _
         for (baseName in genericClassDecls.keys) {
             if (internal.startsWith("${baseName}_")) {
@@ -178,14 +175,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     // Track class/enum types used in Array<T> so we emit KT_ARRAY_DEF for them
     internal val classArrayTypes = mutableSetOf<String>()
 
-    // Intrinsic Pair<A,B> types: track unique pairs used
-    internal val pairTypes = mutableSetOf<Pair<String, String>>()
-    internal val emittedPairTypes = mutableSetOf<String>()
-    internal val pairTypeComponents = mutableMapOf<String, Pair<String, String>>()
-
-    // Intrinsic Triple<A,B,C> types
-    internal val tripleTypeComponents = mutableMapOf<String, Triple<String, String, String>>()
-    internal val emittedTripleTypes = mutableSetOf<String>()
+    /* Pair/Triple types are now handled entirely by stdlib — no intrinsic maps needed. */
 
 
     // ── Generics (monomorphization) ──────────────────────────────────
@@ -688,22 +678,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             sb.appendLine("── Companion Objects ──")
             for ((cls, companion) in classCompanions) {
                 sb.appendLine("  $cls → $companion")
-            }
-            sb.appendLine()
-        }
-
-        // ── Pair / Triple types ──
-        if (pairTypeComponents.isNotEmpty()) {
-            sb.appendLine("── Pair Types ──")
-            for ((key, pair) in pairTypeComponents) {
-                sb.appendLine("  $key = (${pair.first}, ${pair.second})")
-            }
-            sb.appendLine()
-        }
-        if (tripleTypeComponents.isNotEmpty()) {
-            sb.appendLine("── Triple Types ──")
-            for ((key, triple) in tripleTypeComponents) {
-                sb.appendLine("  $key = (${triple.first}, ${triple.second}, ${triple.third})")
             }
             sb.appendLine()
         }

@@ -354,11 +354,14 @@ internal fun CCodeGen.scanForGenericFunCalls() {
         if (explicitTypeArgs.isNotEmpty()) {
             return explicitTypeArgs.map { it.name }
         }
-        val subst = mutableMapOf<String, String>()
+        val subst = mutableMapOf<String, String>() // accumulated type param substitutions
         for ((i, param) in f.params.withIndex()) {
             if (i >= callArgs.size) break
             val argExpr = callArgs[i].expr
             val argType = inferExprType(argExpr) ?: continue
+            /* Materialize before matching so genericTypeBindings is populated for
+            any generic instantiations inferred by inferExprType above (e.g. Pair_A_B). */
+            materializeGenericInstantiations()
             matchTypeParam(param.type, argType, f.typeParams.toSet(), subst)
         }
         if (subst.size == f.typeParams.size) {
@@ -371,7 +374,9 @@ internal fun CCodeGen.scanForGenericFunCalls() {
         if (explicitTypeArgs.isNotEmpty()) {
             return explicitTypeArgs.map { it.name }
         }
-        val subst = mutableMapOf<String, String>()
+        val subst = mutableMapOf<String, String>() // accumulated type param substitutions
+        /* Materialize before matching so genericTypeBindings is available for generic types. */
+        materializeGenericInstantiations()
         // Match receiver type
         if (f.receiver != null) {
             matchTypeParam(f.receiver, recvType, f.typeParams.toSet(), subst)
@@ -381,6 +386,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
             if (i >= callArgs.size) break
             val argExpr = callArgs[i].expr
             val argType = inferExprType(argExpr) ?: continue
+            materializeGenericInstantiations()
             matchTypeParam(param.type, argType, f.typeParams.toSet(), subst)
         }
         if (subst.size == f.typeParams.size) {
@@ -514,6 +520,13 @@ internal fun CCodeGen.scanGenericFunBodiesForInstantiations() {
             val funDecl = genericFunDecls.find { it.name == funName } ?: continue
             for (typeArgs in instantiations.toSet()) {
                 val subst = funDecl.typeParams.zip(typeArgs).toMap()
+                /* Scan param types for generic class references that only appear in signatures,
+                not in the body — e.g. fun newMapOf(vararg pairs: Pair<K,V>) needs Pair<Int,String>
+                even when the body never calls Pair(...) directly. */
+                for (vParam in funDecl.params)
+                    if (scanTypeRefWithSubst(vParam.type, subst)) changed = true
+                /* Scan return type for the same reason (e.g. fun makePair(): Pair<A,B>). */
+                if (funDecl.returnType != null && scanTypeRefWithSubst(funDecl.returnType, subst)) changed = true
                 if (scanBodyWithSubst(funDecl.body, subst)) changed = true
             }
         }
@@ -787,36 +800,52 @@ internal fun CCodeGen.inferConcreteReturnClass(body: Block?, subst: Map<String, 
  * Match a parameter type against a concrete argument type to infer type params.
  * E.g., param=MutableList<T>, argType="MutableList_Int", typeParams={T} → subst[T]=Int
  */
+/*
+Infer type parameter substitutions from a single param/arg pair.
+Callers must call materializeGenericInstantiations() before invoking this so
+genericTypeBindings is populated for any generic types inferred by inferExprType.
+E.g., param=MutableList<T>, argType="MutableList_Int", typeParams={T} → subst[T]=Int
+E.g., param=Pair<K,V>,       argType="Pair_Int_String",  typeParams={K,V} → subst[K]=Int, subst[V]=String
+*/
 internal fun CCodeGen.matchTypeParam(paramType: TypeRef, argType: String, typeParams: Set<String>, subst: MutableMap<String, String>) {
     // Direct type param: param is T, arg is Int → T=Int
     if (paramType.name in typeParams) {
         subst[paramType.name] = argType
         return
     }
-    // Generic class param: MutableList<T>, arg=MutableList_Int → T=Int
-    if (paramType.typeArgs.isNotEmpty() && classes.containsKey(paramType.name) && classes[paramType.name]!!.isGeneric) {
-        val baseType = argType.trimEnd('*', '?')
-        val bindings = genericTypeBindings[baseType] ?: return
-        val templateCi = classes[paramType.name] ?: return
-        for ((i, typeArg) in paramType.typeArgs.withIndex()) {
-            if (typeArg.name in typeParams && i < templateCi.typeParams.size) {
-                val templateParam = templateCi.typeParams[i]
-                bindings[templateParam]?.let { subst[typeArg.name] = it }
+    /* Generic class param (includes stdlib Pair<A,B>, Triple<A,B,C>):
+    Uses genericTypeBindings populated by materializeGenericInstantiations().
+    Checks genericClassDecls for the template (e.g. "Pair") and classes for
+    already-materialized generic entries (e.g. "MutableList"). */
+    if (paramType.typeArgs.isNotEmpty()) {
+        val baseType = argType.trimEnd('*', '?') // strip pointer/nullable suffix
+        val bindings = genericTypeBindings[baseType] // type bindings for the mangled arg type, or null
+        if (bindings != null) {
+            val templateTypeParams: List<String>? = when {
+                classes.containsKey(paramType.name) && classes[paramType.name]!!.isGeneric ->
+                    classes[paramType.name]!!.typeParams
+                genericClassDecls.containsKey(paramType.name) ->
+                    genericClassDecls[paramType.name]!!.typeParams
+                else -> null
+            }
+            if (templateTypeParams != null) {
+                for ((i, typeArg) in paramType.typeArgs.withIndex()) {
+                    if (typeArg.name in typeParams && i < templateTypeParams.size) {
+                        val templateParam = templateTypeParams[i] // template type param name (e.g. "A")
+                        bindings[templateParam]?.let { subst[typeArg.name] = it }
+                    }
+                }
+                return
             }
         }
     }
     // Generic interface param: List<T>, arg=ArrayList_Int → T=Int
-    // Look up what interface the arg class implements and extract type bindings from the mangled name
     if (paramType.typeArgs.isNotEmpty() && genericIfaceDecls.containsKey(paramType.name)) {
-        val baseType = argType.trimEnd('*', '?')
-        val ifaceTemplate = genericIfaceDecls[paramType.name] ?: return
-        // Check if the arg class implements a monomorphized version of this interface
+        val baseType = argType.trimEnd('*', '?') // strip pointer/nullable suffix
         val classIfaces = classInterfaces[baseType] ?: return
         for (ifaceName in classIfaces) {
-            // Match monomorphized interface name like "List_Int" against template "List"
             if (ifaceName.startsWith(paramType.name + "_")) {
-                // Extract type args from the mangled name, e.g., "List_Int" → ["Int"]
-                val suffix = ifaceName.removePrefix(paramType.name + "_")
+                val suffix = ifaceName.removePrefix(paramType.name + "_") // type args suffix
                 val extractedArgs = suffix.split("_")
                 for ((i, typeArg) in paramType.typeArgs.withIndex()) {
                     if (typeArg.name in typeParams && i < extractedArgs.size) {
@@ -825,29 +854,6 @@ internal fun CCodeGen.matchTypeParam(paramType: TypeRef, argType: String, typePa
                 }
                 return
             }
-        }
-    }
-    // Intrinsic Pair<A,B> param: Pair<K, V>, arg=Pair_Int_String → K=Int, V=String
-    if (paramType.name == "Pair" && paramType.typeArgs.size == 2
-        && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
-        val baseType = argType.trimEnd('*', '?')
-        val components = pairTypeComponents[baseType]
-        if (components != null) {
-            val (first, second) = components
-            if (paramType.typeArgs[0].name in typeParams) subst[paramType.typeArgs[0].name] = first
-            if (paramType.typeArgs[1].name in typeParams) subst[paramType.typeArgs[1].name] = second
-        }
-    }
-    // Intrinsic Triple<A,B,C> param decomposition
-    if (paramType.name == "Triple" && paramType.typeArgs.size == 3
-        && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
-        val baseType = argType.trimEnd('*', '?')
-        val components = tripleTypeComponents[baseType]
-        if (components != null) {
-            val names = paramType.typeArgs.map { it.name }
-            if (names[0] in typeParams) subst[names[0]] = components.first
-            if (names[1] in typeParams) subst[names[1]] = components.second
-            if (names[2] in typeParams) subst[names[2]] = components.third
         }
     }
 }

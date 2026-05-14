@@ -76,11 +76,14 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
         if (e.op in setOf("==", "!=", "<", ">", "<=", ">=", "&&", "||", "in", "!in")) "Boolean"
         else if (e.op == "..") "IntRange"
         else if (e.op == "to") {
-            val a = inferExprType(e.left) ?: "Int"
-            val b = inferExprType(e.right) ?: "Int"
-            // Register in pairTypeComponents so matchTypeParam can decompose
-            // Pair types during early scanning (before codegen populates it)
-            pairTypeComponents["Pair_${a}_${b}"] = Pair(a, b)
+            val a = inferExprType(e.left) ?: "Int" // left operand type
+            val b = inferExprType(e.right) ?: "Int" // right operand type
+            if (genericClassDecls.containsKey("Pair")) {
+                /* Register and materialize immediately so genericTypeBindings is
+                available when matchTypeParam is called during scan phase. */
+                recordGenericInstantiation("Pair", listOf(a, b))
+                materializeGenericInstantiations()
+            }
             "Pair_${a}_${b}"
         }
         else {
@@ -152,19 +155,6 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         // StringBuffer constructor (intrinsic — only when no user-defined class named StringBuffer)
         if (name == "StringBuffer" && !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer")) {
             return "ktc_StrBuf"
-        }
-        // Pair constructor (intrinsic — only when no user-defined class named Pair)
-        if (name == "Pair" && !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair")) {
-            val a = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[0]).toInternalStr else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
-            val b = if (e.typeArgs.size == 2) resolveTypeName(e.typeArgs[1]).toInternalStr else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
-            return "Pair_${a}_${b}"
-        }
-        // Triple constructor (intrinsic)
-        if (name == "Triple" && !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple")) {
-            val a = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[0]).toInternalStr else inferExprType(e.args.getOrNull(0)?.expr) ?: "Int"
-            val b = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[1]).toInternalStr else inferExprType(e.args.getOrNull(1)?.expr) ?: "Int"
-            val c = if (e.typeArgs.size == 3) resolveTypeName(e.typeArgs[2]).toInternalStr else inferExprType(e.args.getOrNull(2)?.expr) ?: "Int"
-            return "Triple_${a}_${b}_${c}"
         }
         // Generic class constructor: MyList<Int>(8) → "MyList_Int"
         // Apply typeSubst so type params resolve inside generic function bodies
@@ -515,27 +505,6 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
         return if (vProp != null) resolveTypeName(vProp.second).toInternalStr else null
     }
     val recvType = inferExprType(e.obj) ?: return null
-    if (recvType.startsWith("Pair_")) {
-        val components = pairTypeComponents[recvType]
-        if (components != null) {
-            return when (e.name) {
-                "first" -> components.first
-                "second" -> components.second
-                else -> null
-            }
-        }
-    }
-    if (recvType.startsWith("Triple_")) {
-        val components = tripleTypeComponents[recvType]
-        if (components != null) {
-            return when (e.name) {
-                "first" -> components.first
-                "second" -> components.second
-                "third" -> components.third
-                else -> null
-            }
-        }
-    }
     // StringBuffer field types
     if (recvType == "ktc_StrBuf" || recvType == "StringBuffer") {
         return when (e.name) {

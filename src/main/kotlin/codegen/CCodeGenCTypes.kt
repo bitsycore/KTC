@@ -212,22 +212,6 @@ internal fun CCodeGen.cTypeStr(t: String): String {
     return cTypeStr(ktc)
 }
 
-internal fun CCodeGen.ensurePairType(a: String, b: String) {
-    val key = "${a}_${b}"
-    if (key !in emittedPairTypes) {
-        emittedPairTypes.add(key)
-        hdr.appendLine("typedef struct { ${cTypeStr(a)} first; ${cTypeStr(b)} second; } ktc_Pair_${a}_${b};")
-    }
-}
-
-internal fun CCodeGen.ensureTripleType(a: String, b: String, c: String) {
-    val key = "${a}_${b}_${c}"
-    if (key !in emittedTripleTypes) {
-        emittedTripleTypes.add(key)
-        hdr.appendLine("typedef struct { ${cTypeStr(a)} first; ${cTypeStr(b)} second; ${cTypeStr(c)} third; } ktc_Triple_${a}_${b}_${c};")
-    }
-}
-
 /* Resolve a TypeRef to its internal string type name (legacy bridge). */
 internal fun CCodeGen.resolveTypeNameStr(t: TypeRef?): String {
 	if (t == null) return "Int"
@@ -297,28 +281,6 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
 		val vTypeArgNames = t.typeArgs.map { resolveTypeNameStr(it) } // resolved type argument names
 		return mangledGenericName(t.name, vTypeArgNames)
 		}
-	// Intrinsic Pair<A,B> — only when no user-defined class/interface named Pair
-	if (t.name == "Pair" && t.typeArgs.size == 2
-		&& !classes.containsKey("Pair") && !genericClassDecls.containsKey("Pair") && !genericIfaceDecls.containsKey("Pair"))
-		{
-		val vA = resolveTypeNameStr(t.typeArgs[0]) // first type arg string
-		val vB = resolveTypeNameStr(t.typeArgs[1]) // second type arg string
-		pairTypes.add(Pair(vA, vB))
-		pairTypeComponents["Pair_${vA}_${vB}"] = Pair(vA, vB)
-		ensurePairType(vA, vB)
-		return "Pair_${vA}_${vB}"
-		}
-	// Intrinsic Triple<A,B,C>
-	if (t.name == "Triple" && t.typeArgs.size == 3
-		&& !classes.containsKey("Triple") && !genericClassDecls.containsKey("Triple") && !genericIfaceDecls.containsKey("Triple"))
-		{
-		val vA = resolveTypeNameStr(t.typeArgs[0]) // first type arg string
-		val vB = resolveTypeNameStr(t.typeArgs[1]) // second type arg string
-		val vC = resolveTypeNameStr(t.typeArgs[2]) // third type arg string
-		tripleTypeComponents["Triple_${vA}_${vB}_${vC}"] = Triple(vA, vB, vC)
-		ensureTripleType(vA, vB, vC)
-		return "Triple_${vA}_${vB}_${vC}"
-		}
 	// Intrinsic StringBuffer → ktc_StrBuf (only when no user-defined class named StringBuffer)
 	if (t.name == "StringBuffer" && t.typeArgs.isEmpty()
 		&& !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer"))
@@ -374,7 +336,7 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
 		&& !interfaces.containsKey(t.name)
 		&& !genericClassDecls.containsKey(t.name)
 		&& !genericIfaceDecls.containsKey(t.name)
-		&& t.name !in setOf("Array", "Pair", "Triple", "Tuple", "RawArray"))
+		&& t.name !in setOf("Array", "Tuple", "RawArray"))
 		codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
 	// Resolve nested class within current object/class scope (e.g., Context → Sha256$Context)
 	if (!classes.containsKey(t.name) && !enums.containsKey(t.name) && !interfaces.containsKey(t.name)
@@ -520,9 +482,8 @@ internal fun CCodeGen.arrayElementCType(arrType: String?): String = when (arrTyp
         if (arrType != null) {
             // Class array: "Vec2Array" → element type "game_Vec2"
             if (arrType.endsWith("Array") && arrType.length > 5) {
-                val elem = arrType.removeSuffix("Array")
+                val elem = arrType.removeSuffix("Array") // element type name
                 if (classArrayTypes.contains(elem) || classes.containsKey(elem) || enums.containsKey(elem)) return typeFlatName(elem)
-                if (elem.startsWith("Pair_")) return cTypeStr(elem)
             }
             // Nullable-element class array: "Vec2OptArray" → "pkg_Vec2_Optional"
             if (arrType.endsWith("OptArray") && arrType.length > 8) {
@@ -565,9 +526,8 @@ internal fun CCodeGen.arrayElementKtType(arrType: String?): String = when (arrTy
         if (arrType != null) {
             // Class array: "Vec2Array" → element Kotlin type "Vec2"
             if (arrType.endsWith("Array") && arrType.length > 5) {
-                val elem = arrType.removeSuffix("Array")
+                val elem = arrType.removeSuffix("Array") // element type name
                 if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return elem
-                if (elem.startsWith("Pair_")) return elem
             }
             // Nullable-element class array: "Vec2OptArray" → "Vec2?"
             if (arrType.endsWith("OptArray") && arrType.length > 8) {
@@ -714,21 +674,14 @@ internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null
         val elem = when {
             elemName in KtcType.PrimKind.entries.map { it.name } -> KtcType.Prim(KtcType.PrimKind.valueOf(elemName))
             elemName == "String" -> KtcType.Str
-            elemName.startsWith("Pair_") || elemName.startsWith("Triple_") -> userType(elemName)
-            classArrayTypes.contains(elemName) || enums.containsKey(elemName) -> userType(elemName)
             else -> userType(elemName)
         }
         val sized = t?.let { getSizeAnnotation(it) }
         val isTypedArray = elemName in KtcType.PrimKind.entries.map { it.name } || elemName == "String"
-            || elemName.startsWith("Pair_") || elemName.startsWith("Triple_")
             || classArrayTypes.contains(elemName) || enums.containsKey(elemName)
         val arr = KtcType.Arr(elem, sized = sized)
         return if (isTypedArray) KtcType.Ptr(arr) else arr
     }
-
-    // Pair/Triple types
-    if (resolved.startsWith("Pair_") || resolved.startsWith("Triple_"))
-        return userType(resolved)
 
     // User-defined classes, interfaces
     if (classes.containsKey(resolved) || objects.containsKey(resolved) || interfaces.containsKey(resolved)) {
@@ -752,12 +705,10 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Str -> "ktc_String"
     is KtcType.Void -> "void"
     is KtcType.User -> {
-        val bn = ktc.baseName
+        val bn = ktc.baseName // base name (no package prefix)
         when {
             bn == "Any" -> "ktc_Any"
             bn == "ktc_StrBuf" -> "ktc_StrBuf"
-            bn.startsWith("Pair_") -> "ktc_${bn}"
-            bn.startsWith("Triple_") -> "ktc_${bn}"
             else -> ktc.flatName
         }
     }
