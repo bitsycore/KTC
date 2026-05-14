@@ -1034,7 +1034,15 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
     // Inline function call — expand body at call site
     if (e is CallExpr && e.callee is NameExpr) {
         val name = e.callee.name
-        val inlineDecl = inlineFunDecls[name]
+        val inlineCandidates = inlineFunDecls[name]
+        val inlineDecl = when {
+            inlineCandidates == null -> null
+            inlineCandidates.size == 1 -> inlineCandidates[0]
+            else -> {
+                val exact = inlineCandidates.find { it.params.size == e.args.size }
+                exact ?: inlineCandidates.minByOrNull { kotlin.math.abs(it.params.size - e.args.size) }
+            }
+        }
         if (inlineDecl != null) {
             emitInlineCall(inlineDecl, e.args, ind, method); return
         }
@@ -1208,7 +1216,8 @@ internal fun CCodeGen.emitInlineCall(
         if (expr is LambdaExpr) {
             val funcParams = param.type.funcParams ?: emptyList()
             val paramTypes = funcParams.map { resolveTypeName(it).toInternalStr }
-            newLambdas[param.name] = ActiveLambda(expr, paramTypes)
+            val retType = param.type.funcReturn?.let { resolveTypeName(it).toInternalStr }
+            newLambdas[param.name] = ActiveLambda(expr, paramTypes, retType)
         } else {
             val cTypeName = cType(param.type)
             val cVal = genExpr(expr)

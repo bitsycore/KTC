@@ -699,7 +699,16 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     val args = e.args
 
     // Inline function call in value position — emit body as C block, capture return via result var
-    val inlineDecl = inlineFunDecls[name]
+    val inlineCandidates = inlineFunDecls[name]
+    val inlineDecl = when {
+        inlineCandidates == null -> null
+        inlineCandidates.size == 1 -> inlineCandidates[0]
+        else -> {
+            // Overloaded: pick by exact argument count match, or the nearest
+            val exact = inlineCandidates.find { it.params.size == args.size }
+            exact ?: inlineCandidates.minByOrNull { kotlin.math.abs(it.params.size - args.size) }
+        }
+    }
     if (inlineDecl != null) {
         val retType = inlineDecl.returnType
         if (retType == null) {

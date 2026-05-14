@@ -121,7 +121,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal val objects  = mutableMapOf<String, ObjInfo>()
     internal val funSigs  = mutableMapOf<String, FunSig>()
     internal val funNames = mutableMapOf<String, String>()  // top-level function name → C name
-    internal val inlineFunDecls = mutableMapOf<String, FunDecl>()
+    internal val inlineFunDecls = mutableMapOf<String, MutableList<FunDecl>>()
     internal val inlineExtFunDecls = mutableMapOf<String, FunDecl>()  // inline generic extension funs, keyed by method name
     internal var activeLambdas: Map<String, ActiveLambda> = emptyMap()
     internal val lambdaParamSubst = mutableMapOf<String, String>()  // also stores "\$this" → receiver C expr during inline ext expansion
@@ -1344,6 +1344,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     funSigs[d.name] = FunSig(d.params, effectiveReturnType)
                     allGenericTypeParamNames += d.typeParams
                     if (d.isInline && d.receiver != null) inlineExtFunDecls[d.name] = d
+                    if (d.isInline) inlineFunDecls.getOrPut(d.name) { mutableListOf() }.add(d)
                 } else if (d.receiver != null && d.receiver.typeArgs.any { it.name == "*" }) {
                     // Star-projection extension function — store for expansion
                     if (starExtFunDecls.none { it === d }) starExtFunDecls += d
@@ -1361,7 +1362,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     if (d.isInfix) inlineExtFunDecls[d.name] = d
                 } else {
                     funSigs[d.name] = FunSig(d.params, effectiveReturnType)
-                    if (d.isInline) inlineFunDecls[d.name] = d
+                    if (d.isInline) inlineFunDecls.getOrPut(d.name) { mutableListOf() }.add(d)
                 }
             }
             is PropDecl  -> { topProps.add(d.name); if (!d.mutable) valTopProps.add(d.name); if (d.annotations.any { it.name == "Tls" }) tlsProps.add(d.name) }

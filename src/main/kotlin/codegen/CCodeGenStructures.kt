@@ -130,7 +130,7 @@ internal data class IfaceInfo(
 }
 
 /** active inline lambda */
-internal data class ActiveLambda(val expr: LambdaExpr, val paramTypes: List<String>)
+internal data class ActiveLambda(val expr: LambdaExpr, val paramTypes: List<String>, val returnType: String? = null)
 /** iterator dispatch info */
 internal data class IteratorInfo(val iterClass: String, val iterCType: String, val elemKtType: String, val isPointer: Boolean)
 /** Output of code generation: C header (.h) and source (.c) strings. */

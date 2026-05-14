@@ -302,6 +302,7 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
                 return if (genFun.returnType.nullable) KtcType.Nullable(result).toInternalStr else result.toInternalStr
             }
         }
+        activeLambdas[name]?.returnType?.let { return it }
         funSigs[name]?.returnType?.let {
             val base = resolveTypeName(it)
             return if (it.nullable) KtcType.Nullable(base).toInternalStr else base.toInternalStr
