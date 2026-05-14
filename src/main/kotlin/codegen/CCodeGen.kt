@@ -413,6 +413,15 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         return true
     }
 
+    /** True if KtcType is a value-nullable (non-pointer, non-array Optional). */
+    internal fun isValueNullableKtc(ktc: KtcType): Boolean = when {
+        ktc !is KtcType.Nullable -> false
+        ktc.inner is KtcType.Ptr -> false
+        ktc.inner is KtcType.Arr -> false
+        ktc.inner is KtcType.User && ktc.inner.baseName == "Any" -> false
+        else -> true
+    }
+
     /* Maps an internal type string to its C Optional struct type name. */
     internal fun optCTypeName(internalType: String): String {
         return when (val base = internalType.removeSuffix("?")) {

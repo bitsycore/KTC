@@ -407,15 +407,16 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         val nonNull = if (e.left is NullLit) e.right else e.left
         // Warn: comparing a non-nullable type to null — always true/false
         val nonNullType = inferExprType(nonNull)
-        if (nonNullType != null && !nonNullType.endsWith("?")) {
+        val nonNullKtc = inferExprTypeKtc(nonNull)
+        if (nonNullKtc != null && nonNullKtc !is KtcType.Nullable) {
             val always = if (e.op == "==") "false" else "true"
             codegenWarning("Null check on non-nullable '$nonNullType' is always $always")
         }
         // this == null / this != null inside nullable-receiver extension
         if (nonNull is ThisExpr) {
-            val thisType = inferExprType(nonNull)
-            if (thisType != null && thisType.endsWith("?")) {
-                if (isValueNullableType(thisType)) {
+            val thisKtc = inferExprTypeKtc(nonNull)
+            if (thisKtc is KtcType.Nullable) {
+                if (isValueNullableKtc(thisKtc)) {
                     return if (e.op == "==") "\$self.tag == ktc_NONE" else "\$self.tag == ktc_SOME"
                 }
                 return if (e.op == "==") "!\$self\$has" else "\$self\$has"
@@ -446,7 +447,8 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             }
         }
         // DotExpr on nullable field (e.g. np.x == null)
-        if (nonNull is DotExpr && nonNullType != null && nonNullType.endsWith("?") && isValueNullableType(nonNullType)) {
+        val nonNullKtc2 = nonNullKtc ?: inferExprTypeKtc(nonNull)
+        if (nonNull is DotExpr && nonNullKtc2 is KtcType.Nullable && isValueNullableKtc(nonNullKtc2)) {
             val dotExpr = genExpr(nonNull)
             return if (e.op == "==") "$dotExpr.tag == ktc_NONE" else "$dotExpr.tag == ktc_SOME"
         }
@@ -454,9 +456,11 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     // Nullable T? vs non-null value: generate Optional-aware comparison
     if (e.op in setOf("==", "!=", "<", ">", "<=", ">=")) {
         val rt = inferExprType(e.right)
+        val ltKtc = inferExprTypeKtc(e.left)
+        val rtKtc = inferExprTypeKtc(e.right)
         // Left is nullable value type, right is non-null → wrap in tag check
-        if (lt != null && lt.endsWith("?") && isValueNullableType(lt) &&
-            rt != null && !rt.endsWith("?") && e.right !is NullLit) {
+        if (ltKtc is KtcType.Nullable && isValueNullableKtc(ltKtc) &&
+            rtKtc != null && rtKtc !is KtcType.Nullable && e.right !is NullLit) {
             val leftExpr = genExpr(e.left)
             val rightExpr = genExpr(e.right)
             return when (e.op) {
@@ -466,8 +470,8 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             }
         }
         // Right is nullable value type, left is non-null
-        if (rt != null && rt.endsWith("?") && isValueNullableType(rt) &&
-            lt != null && !lt.endsWith("?") && e.left !is NullLit) {
+        if (rtKtc is KtcType.Nullable && isValueNullableKtc(rtKtc) &&
+            ltKtc != null && ltKtc !is KtcType.Nullable && e.left !is NullLit) {
             val leftExpr = genExpr(e.left)
             val rightExpr = genExpr(e.right)
             return when (e.op) {
@@ -478,27 +482,40 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         }
     }
     // Class == / != → ClassName_equals (all classes, not just data)
-    // Also handles @Ptr types (Type*) by resolving to base class and dereferencing pointers
-    val classKeyPtr = pointerClassName(lt)
-    val classKey = classKeyPtr ?: lt?.takeIf { classes.containsKey(it) }
+    // Also handles @Ptr types by resolving to base class and dereferencing
+    val ltKtc2 = inferExprTypeKtc(e.left)
+    var isPtr = false
+    val classKeyFromKtc: String? = when {
+        ltKtc2 is KtcType.Ptr -> { isPtr = true; (ltKtc2.inner as? KtcType.User)?.baseName }
+        ltKtc2 is KtcType.Nullable && ltKtc2.inner is KtcType.Ptr -> {
+            isPtr = true; ((ltKtc2.inner as KtcType.Ptr).inner as? KtcType.User)?.baseName
+        }
+        ltKtc2 is KtcType.User -> ltKtc2.baseName.takeIf { classes.containsKey(it) }
+        else -> null
+    }
+    // String-based fallback for types parseResolvedTypeName couldn't handle
+    val classKeyStr = if (classKeyFromKtc == null) pointerClassName(lt) else null
+    if (classKeyStr != null) isPtr = true
+    val classKey = classKeyFromKtc ?: classKeyStr ?: lt?.takeIf { classes.containsKey(it) }
     if ((e.op == "==" || e.op == "!=") && classKey != null) {
         val leftExpr = genExpr(e.left)
         val rightExpr = genExpr(e.right)
         // Dereference if the operands are pointers (e.g. @Ptr Vec2)
-        val l = if (classKeyPtr != null) "(*$leftExpr)" else leftExpr
-        val r = if (classKeyPtr != null) "(*$rightExpr)" else rightExpr
+        val l = if (isPtr) "(*$leftExpr)" else leftExpr
+        val r = if (isPtr) "(*$rightExpr)" else rightExpr
         val eq = "${typeFlatName(classKey)}_equals($l, $r)"
         return if (e.op == "==") eq else "!$eq"
     }
     // String == → ktc_string_eq
-    if (e.op == "==" && lt == "String") {
+    val ltKtc3 = inferExprTypeKtc(e.left)
+    if (e.op == "==" && ltKtc3 is KtcType.Str) {
         return "ktc_string_eq(${genExpr(e.left)}, ${genExpr(e.right)})"
     }
-    if (e.op == "!=" && lt == "String") {
+    if (e.op == "!=" && ltKtc3 is KtcType.Str) {
         return "!ktc_string_eq(${genExpr(e.left)}, ${genExpr(e.right)})"
     }
     // String <, >, <=, >= → ktc_string_cmp
-    if (lt == "String" && e.op in listOf("<", ">", "<=", ">=")) {
+    if (ltKtc3 is KtcType.Str && e.op in listOf("<", ">", "<=", ">=")) {
         return "(ktc_string_cmp(${genExpr(e.left)}, ${genExpr(e.right)}) ${e.op} 0)"
     }
     // String + → ktc_string_cat
@@ -1462,7 +1479,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
 
         "runeAt" -> {
-            if (recvType == "String" && args.size == 1) {
+            if (recvTypeKtc is KtcType.Str && args.size == 1) {
                 return "ktc_str_runeAt($recv, ${genExpr(args[0].expr)})"
             }
             codegenError("runeAt() only supported on String with a byteIndex argument")
@@ -1479,22 +1496,22 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
 
         "toInt" -> {
-            if (recvType == "String") return "ktc_str_toInt($recv)"
+            if (recvTypeKtc is KtcType.Str) return "ktc_str_toInt($recv)"
             return "((ktc_Int)($recv))"
         }
 
         "toLong" -> {
-            if (recvType == "String") return "ktc_str_toLong($recv)"
+            if (recvTypeKtc is KtcType.Str) return "ktc_str_toLong($recv)"
             return "((ktc_Long)($recv))"
         }
 
         "toFloat" -> {
-            if (recvType == "String") return "((ktc_Float)ktc_str_toDouble($recv))"
+            if (recvTypeKtc is KtcType.Str) return "((ktc_Float)ktc_str_toDouble($recv))"
             return "((ktc_Float)($recv))"
         }
 
         "toDouble" -> {
-            if (recvType == "String") return "ktc_str_toDouble($recv)"
+            if (recvTypeKtc is KtcType.Str) return "ktc_str_toDouble($recv)"
             return "((ktc_Double)($recv))"
         }
 
@@ -1509,7 +1526,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             return "(~($recv))"
         }
         // Nullable string-to-number: toIntOrNull, toLongOrNull, toFloatOrNull, toDoubleOrNull
-        "toIntOrNull" -> if (recvType == "String") {
+        "toIntOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Int ${t}_val;"
             preStmts += "ktc_Int_Optional $t;"
@@ -1519,7 +1536,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             t
         }
 
-        "toLongOrNull" -> if (recvType == "String") {
+        "toLongOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Long ${t}_val;"
             preStmts += "ktc_Long_Optional $t;"
@@ -1529,7 +1546,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             t
         }
 
-        "toDoubleOrNull" -> if (recvType == "String") {
+        "toDoubleOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Double ${t}_val;"
             preStmts += "ktc_Double_Optional $t;"
@@ -1539,7 +1556,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             t
         }
 
-        "toFloatOrNull" -> if (recvType == "String") {
+        "toFloatOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Double ${t}_d;"
             preStmts += "ktc_Float_Optional $t;"
@@ -1549,23 +1566,23 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             t
         }
 
-        "substring" -> if (recvType == "String") {
+        "substring" -> if (recvTypeKtc is KtcType.Str) {
             val from = genExpr(args[0].expr)
             val to = if (args.size >= 2) genExpr(args[1].expr) else "$recv.len"
             return "ktc_string_substring($recv, $from, $to)"
         }
 
-        "startsWith" -> if (recvType == "String") {
+        "startsWith" -> if (recvTypeKtc is KtcType.Str) {
             val prefix = genExpr(args[0].expr)
             return "($recv.len >= $prefix.len && memcmp($recv.ptr, $prefix.ptr, (size_t)$prefix.len) == 0)"
         }
 
-        "endsWith" -> if (recvType == "String") {
+        "endsWith" -> if (recvTypeKtc is KtcType.Str) {
             val suffix = genExpr(args[0].expr)
             return "($recv.len >= $suffix.len && memcmp($recv.ptr + $recv.len - $suffix.len, $suffix.ptr, (size_t)$suffix.len) == 0)"
         }
 
-        "contains" -> if (recvType == "String") {
+        "contains" -> if (recvTypeKtc is KtcType.Str) {
             val sub = genExpr(args[0].expr)
             val t = tmp()
             preStmts += "ktc_Bool $t = false;"
@@ -1573,7 +1590,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             return t
         }
 
-        "indexOf" -> if (recvType == "String") {
+        "indexOf" -> if (recvTypeKtc is KtcType.Str) {
             val sub = genExpr(args[0].expr)
             val t = tmp()
             preStmts += "ktc_Int $t = -1;"
@@ -1581,54 +1598,60 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             return t
         }
 
-        "isEmpty" -> if (recvType == "String") {
+        "isEmpty" -> if (recvTypeKtc is KtcType.Str) {
             return "($recv.len == 0)"
         }
 
-        "isNotEmpty" -> if (recvType == "String") {
+        "isNotEmpty" -> if (recvTypeKtc is KtcType.Str) {
             return "($recv.len > 0)"
         }
 
         "hashCode" -> {
-            val rt = recvType ?: "Int"
-            return when (rt) {
-                "Byte" -> "ktc_hash_i8($recv)"
-                "Short" -> "ktc_hash_i16($recv)"
-                "Int" -> "ktc_hash_i32($recv)"
-                "Long" -> "ktc_hash_i64($recv)"
-                "Float" -> "ktc_hash_f32($recv)"
-                "Double" -> "ktc_hash_f64($recv)"
-                "Boolean" -> "ktc_hash_bool($recv)"
-                "Char" -> "ktc_hash_char($recv)"
-                "UByte" -> "ktc_hash_u8($recv)"
-                "UShort" -> "ktc_hash_u16($recv)"
-                "UInt" -> "ktc_hash_u32($recv)"
-                "ULong" -> "ktc_hash_u64($recv)"
-                "String" -> "ktc_hash_str($recv)"
-                else -> {
-                    // @Ptr class pointer → call ClassName_hashCode(pointer)
-                    val pointerBase = pointerClassName(rt)
-                    if (pointerBase != null) {
-                        "${typeFlatName(pointerBase)}_hashCode($recv)"
-                    } else {
-                        "${typeFlatName(rt)}_hashCode(&($recv))"
+            val ktc = recvTypeKtc
+            if (ktc != null) {
+                return when {
+                    ktc is KtcType.Prim -> when (ktc.kind) {
+                        KtcType.PrimKind.Byte -> "ktc_hash_i8($recv)"
+                        KtcType.PrimKind.Short -> "ktc_hash_i16($recv)"
+                        KtcType.PrimKind.Int -> "ktc_hash_i32($recv)"
+                        KtcType.PrimKind.Long -> "ktc_hash_i64($recv)"
+                        KtcType.PrimKind.Float -> "ktc_hash_f32($recv)"
+                        KtcType.PrimKind.Double -> "ktc_hash_f64($recv)"
+                        KtcType.PrimKind.Boolean -> "ktc_hash_bool($recv)"
+                        KtcType.PrimKind.Char -> "ktc_hash_char($recv)"
+                        KtcType.PrimKind.UByte -> "ktc_hash_u8($recv)"
+                        KtcType.PrimKind.UShort -> "ktc_hash_u16($recv)"
+                        KtcType.PrimKind.UInt -> "ktc_hash_u32($recv)"
+                        KtcType.PrimKind.ULong -> "ktc_hash_u64($recv)"
+                        KtcType.PrimKind.Rune -> "ktc_hash_i32($recv)"
+                    }
+                    ktc is KtcType.Str -> "ktc_hash_str($recv)"
+                    else -> {
+                        // @Ptr class pointer → call ClassName_hashCode(pointer)
+                        val pointerBase = pointerClassName(recvType)
+                        if (pointerBase != null) {
+                            "${typeFlatName(pointerBase)}_hashCode($recv)"
+                        } else {
+                            "${typeFlatName(recvType!!)}_hashCode(&($recv))"
+                        }
                     }
                 }
             }
+            "${typeFlatName(recvType!!)}_hashCode(&($recv))"
         }
     }
 
     // Array .size → trampolined param uses trampoline size field; others use $len
-    if (method == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*"))) {
+    if (method == "size" && recvTypeKtc != null && recvTypeKtc.isArrayLike) {
         val dotName = (dot.obj as? NameExpr)?.name
         return if (dotName != null && dotName in trampolinedParams) "$dotName.size" else "${recv}\$len"
     }
     // Array .ptr() → just the pointer (already a pointer type)
-    if (method == "ptr" && recvType != null && isArrayType(recvType)) {
+    if (method == "ptr" && recvTypeKtc != null && recvTypeKtc.isArrayLike) {
         return recv
     }
     // Array .toHeap() → malloc + memcpy to heap
-    if (method == "toHeap" && recvType != null && isArrayType(recvType)) {
+    if (method == "toHeap" && recvTypeKtc != null && recvTypeKtc.isArrayLike) {
         val elemC = arrayElementCType(recvType)
         val lenExpr = when {
             dot.obj is NameExpr && (dot.obj as NameExpr).name in trampolinedParams -> "${(dot.obj as NameExpr).name}.size"
@@ -1641,16 +1664,14 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         return t
     }
     // Array pointer .get(i) → recv[i] and .set(i,v) → recv[i] = v
-    if ((method == "get" || method == "set") && recvType != null && isArrayType(recvType)) {
+    if ((method == "get" || method == "set") && recvTypeKtc != null && recvTypeKtc.isArrayLike) {
         val idx = args.getOrNull(0)?.let { genExpr(it.expr) } ?: "0"
         if (method == "get") return "${recv}[$idx]"
         val valExpr = args.getOrNull(1)?.let { genExpr(it.expr) } ?: "0"
         return "(${recv}[$idx] = $valExpr)"
     }
     // Ptr<Array<T>> .deref() → dereference to get the array
-    if (method == "deref" && recvType != null && isArrayType(recvType) &&
-        (recvType.endsWith("*") || recvType.endsWith("*?"))
-    ) {
+    if (method == "deref" && recvTypeKtc != null && recvTypeKtc.isArrayLike && recvTypeKtc is KtcType.Ptr) {
         return recv
     }
 
@@ -2057,8 +2078,8 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     // Array .size → trampolined param uses trampoline struct field; others use $len
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
     if (e.name == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*"))) return "${recv}\$len"
-    if (e.name == "length" && recvType == "String") return "$recv.len"
-    if (e.name == "runeLen" && recvType == "String") return "ktc_str_runeLen($recv)"
+    if (e.name == "length" && recvTypeKtc is KtcType.Str) return "$recv.len"
+    if (e.name == "runeLen" && recvTypeKtc is KtcType.Str) return "ktc_str_runeLen($recv)"
     // Enum .ordinal → the int value itself
     val vOrdinalEnumInfo = enumInfoFor(recvTypeCoreKtc)                               // non-null if receiver is an enum (for ordinal/name)
     if (e.name == "ordinal" && vOrdinalEnumInfo != null) return recv

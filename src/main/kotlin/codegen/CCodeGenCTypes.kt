@@ -394,6 +394,32 @@ internal fun CCodeGen.printfFmt(t: String): String = when {
     else -> "%.*s"       // assume toString → ktc_String
 }
 
+internal fun CCodeGen.printfFmtKtc(ktc: KtcType): String = when (ktc) {
+    is KtcType.Prim -> when (ktc.kind) {
+        KtcType.PrimKind.Byte -> "%\" PRId8 \""
+        KtcType.PrimKind.Short -> "%\" PRId16 \""
+        KtcType.PrimKind.Int -> "%\" PRId32 \""
+        KtcType.PrimKind.Long -> "%\" PRId64 \""
+        KtcType.PrimKind.Float -> "%f"
+        KtcType.PrimKind.Double -> "%f"
+        KtcType.PrimKind.Boolean -> "%s"
+        KtcType.PrimKind.Char -> "%c"
+        KtcType.PrimKind.Rune -> "%\" PRId32 \""
+        KtcType.PrimKind.UByte -> "%\" PRIu8 \""
+        KtcType.PrimKind.UShort -> "%\" PRIu16 \""
+        KtcType.PrimKind.UInt -> "%\" PRIu32 \""
+        KtcType.PrimKind.ULong -> "%\" PRIu64 \""
+    }
+    is KtcType.Str -> "%.*s"
+    is KtcType.Ptr -> "%p"
+    is KtcType.Nullable -> if (ktc.inner is KtcType.Ptr) "%p" else printfFmtKtc(ktc.inner)
+    is KtcType.User -> when (ktc.kind) {
+        KtcType.UserKind.Enum -> "%.*s"
+        else -> "%.*s"
+    }
+    else -> "%.*s"
+}
+
 internal fun CCodeGen.printfArg(expr: String, t: String): String = when (t) {
     "Boolean" -> "($expr) ? \"true\" : \"false\""
     "String" -> "(ktc_Int)($expr).len, ($expr).ptr"
