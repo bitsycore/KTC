@@ -496,6 +496,8 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
         return if (baseComp != null && vProp!!.second.nullable) KtcType.Nullable(baseComp).toInternalStr else baseComp?.toInternalStr
     }
     val recvType = inferExprType(e.obj) ?: return null
+    val recvTypeKtc = inferExprTypeKtc(e.obj)
+    val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc
     // StringBuffer field types
     if (recvType == "ktc_StrBuf" || recvType == "StringBuffer") {
         return when (e.name) {
@@ -504,29 +506,28 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
             else -> null
         }
     }
-    if (e.name == "size" && recvType.endsWith("Array")) return "Int"
-    if (e.name == "size" && recvType.removeSuffix("?").endsWith("*") && isArrayType(recvType)) return "Int"
+    if (e.name == "size" && recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) return "Int"
     if (e.name == "ptr") {
         if (recvType.endsWith("Array")) {
             val elem = recvType.removeSuffix("Array")
             val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
             return "${internal}*"
         }
-        if (recvType.removeSuffix("?").endsWith("*") && isArrayType(recvType)) return recvType
-        return if (recvType.endsWith("*")) recvType else "${recvType}*"
+        if (recvTypeCoreKtc is KtcType.Ptr && recvTypeCoreKtc.inner is KtcType.Arr) return recvType
+        return if (recvTypeCoreKtc is KtcType.Ptr) recvType else "${recvType}*"
     }
     if (e.name == "toHeap" && recvType.endsWith("Array")) {
         val elem = recvType.removeSuffix("Array")
         val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
         return "${internal}*"
     }
-    if (e.name == "length" && recvType.removeSuffix("?") == "String") return "Int"
-    if (e.name == "runeLen" && recvType.removeSuffix("?") == "String") return "Int"
+    if (e.name == "length" && recvTypeCoreKtc is KtcType.Str) return "Int"
+    if (e.name == "runeLen" && recvTypeCoreKtc is KtcType.Str) return "Int"
     // Enum value .name / .ordinal
-    if (e.name == "name" && recvType in enums) return "String"
-    if (e.name == "ordinal" && recvType in enums) return "Int"
+    if (e.name == "name" && recvTypeCoreKtc is KtcType.User && (recvTypeCoreKtc as KtcType.User).kind == KtcType.UserKind.Enum) return "String"
+    if (e.name == "ordinal" && recvTypeCoreKtc is KtcType.User && (recvTypeCoreKtc as KtcType.User).kind == KtcType.UserKind.Enum) return "Int"
     // Heap/Ptr/Value pointer field access → look up in base class
-    val indirectBase = anyIndirectClassName(recvType)
+    val indirectBase = (recvTypeCoreKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (indirectBase != null) {
         val ci = classes[indirectBase] ?: return null
         val prop = ci.props.find { it.first == e.name }
@@ -546,6 +547,8 @@ internal fun CCodeGen.inferDotTypeSafe(e: SafeDotExpr): String? {
 }
 internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
     val tRaw = inferExprType(e.obj) ?: return null
+    val tKtc = inferExprTypeKtc(e.obj)
+    val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
     // Strip nullability: indexing a nullable array is valid after a null guard
     val t = tRaw.removeSuffix("?")
     // String indexing: str[i] → Char
