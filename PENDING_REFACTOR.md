@@ -2,7 +2,7 @@
 
 ## Status
 
-Currently: **~78% migrated**.  ~186 string checks eliminated.
+Currently: **~86% migrated**.  ~198 string checks eliminated.
 Total remaining: 70 across all codegen files.
 
 ## Completed

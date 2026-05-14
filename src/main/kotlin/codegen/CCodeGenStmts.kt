@@ -1451,8 +1451,8 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
 internal fun CCodeGen.templateNeedsStrBuf(tmpl: StrTemplateExpr): Boolean {
     return tmpl.parts.any { part ->
         part is ExprPart && run {
-            val t = inferExprType(part.expr) ?: "Int"
-            classes.containsKey(t) || t.endsWith("?")
+            val tKtc = inferExprTypeKtc(part.expr)
+            tKtc is KtcType.User || tKtc is KtcType.Nullable || tKtc is KtcType.Ptr
         }
     }
 }
@@ -1531,9 +1531,9 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
     val casts = mutableListOf<Pair<String, String>>()
     fun trySmartCast(name: String) {
         if (isMutable(name)) return  // var cannot be smart-cast
-        val type = lookupVar(name)
-        if (type != null && type.endsWith("?")) {
-            casts.add(name to type.dropLast(1))
+        val typeKtc = lookupVarKtc(name)
+        if (typeKtc is KtcType.Nullable) {
+            casts.add(name to typeKtc.inner.toInternalStr)
         }
     }
 
@@ -1546,11 +1546,11 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
 
     fun tryCastTo(name: String, targetType: String) {
         if (isMutable(name)) return
-        val currentType = lookupVar(name)
+        val currentKtc = lookupVarKtc(name)
         // Don't narrow pointer types (Any* etc.) — they need original type for ->data dereference.
         // But DO narrow trampoline types (Any) — genName handles .data dereference after narrowing.
-        if (currentType != null && currentType != targetType
-            && !currentType.endsWith("*")
+        if (currentKtc != null && currentKtc.toInternalStr != targetType
+            && currentKtc !is KtcType.Ptr
         ) {
             casts.add(name to targetType)
         }
@@ -1595,18 +1595,18 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
     val casts = mutableListOf<Pair<String, String>>()
     fun trySmartCast(name: String) {
         if (isMutable(name)) return
-        val type = lookupVar(name)
-        if (type != null && type.endsWith("?")) {
-            casts.add(name to type.dropLast(1))
+        val typeKtc = lookupVarKtc(name)
+        if (typeKtc is KtcType.Nullable) {
+            casts.add(name to typeKtc.inner.toInternalStr)
         }
     }
 
     fun tryCastTo(name: String, targetType: String) {
         if (isMutable(name)) return
-        val currentType = lookupVar(name)
+        val currentKtc = lookupVarKtc(name)
         // Don't narrow pointer types
-        if (currentType != null && currentType != targetType
-            && !currentType.endsWith("*")
+        if (currentKtc != null && currentKtc.toInternalStr != targetType
+            && currentKtc !is KtcType.Ptr
         ) {
             casts.add(name to targetType)
         }

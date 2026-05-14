@@ -805,8 +805,8 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         }
         currentFnReturnType = concreteRet
             ?: if (f.returnType != null) {
-                val vBase = vRetKtcGen!!.toInternalStr             // string form of resolved return type
-                if (f.returnType.nullable && !vBase.endsWith("?")) "${vBase}?" else vBase
+                val vKtc = vRetKtcGen!!
+                if (f.returnType.nullable) KtcType.Nullable(vKtc).toInternalStr else vKtc.toInternalStr
             } else ""
 
         pushScope()

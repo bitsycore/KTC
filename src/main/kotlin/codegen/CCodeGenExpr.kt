@@ -1001,8 +1001,8 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             }
 
             else -> {
-                val ptrType = inferExprType(args[0].expr)
-                if (ptrType != null && ptrType.removeSuffix("?").endsWith("*") && isArrayType(ptrType))
+                val ptrKtc = inferExprTypeKtc(args[0].expr)
+                if (ptrKtc is KtcType.Ptr && (ptrKtc as KtcType.Ptr).inner is KtcType.Arr)
                     "${ptrExpr}\$len"
                 else
                     "0x7FFFFFFF"
@@ -2025,7 +2025,8 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
         return "($guard ? ($call, 0) : 0)"
     }
     // Pointer return (@Ptr): use NULL for null, no Optional wrapping
-    if (retType.endsWith("*")) {
+    val retKtc = if (retType != null) parseResolvedTypeName(retType) else null
+    if (retKtc is KtcType.Ptr) {
         val t = tmp()
         preStmts += "${cTypeStr(retType)} $t = $guard ? $call : NULL;"
         defineVar(t, "${retType}?")
@@ -3281,8 +3282,9 @@ internal fun CCodeGen.genLValue(e: Expr, method: Boolean): String {
         }
 
         is IndexExpr -> {
-            val objType = inferExprType(e.obj)
-            if (objType != null && (objType.endsWith("*") || isArrayType(objType))) {
+            val objKtc = inferExprTypeKtc(e.obj)
+            val objKtcCore = (objKtc as? KtcType.Nullable)?.inner ?: objKtc
+            if (objKtcCore != null && (objKtcCore is KtcType.Ptr || objKtcCore.isArrayLike)) {
                 "${genExpr(e.obj)}[${genExpr(e.index)}]"
             } else {
                 "${genExpr(e.obj)}.ptr[${genExpr(e.index)}]"

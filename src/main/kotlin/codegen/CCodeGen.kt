@@ -307,12 +307,12 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     /* True if the variable was originally declared as Any trampoline (or Any?) and later smart-cast narrowed. */
     internal fun isAnySmartCastVar(inName: String): Boolean
         {
-        val vCur = lookupVar(inName) ?: return false    // current (narrowed) type string
-        if (vCur == "Any") return false                  // not narrowed if still Any
+        val vCur = lookupVarKtc(inName) ?: return false     // current (narrowed) type
+        if (vCur is KtcType.Any) return false                // not narrowed if still Any
         for (i in scopes.size - 2 downTo 0)
             {
-            val vOuter = scopes[i][inName]?.toInternalStr  // outer scope type as string
-            if (vOuter == "Any" || vOuter == "Any?") return true
+            val vOuter = scopes[i][inName]                   // outer scope type as KtcType
+            if (vOuter is KtcType.Any || (vOuter is KtcType.Nullable && vOuter.inner is KtcType.Any)) return true
             if (vOuter != null) return false
             }
         return false
@@ -1381,7 +1381,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     val vArgCore   = vArgKtc.core()
                     val vParamCore = vParamKtc.core()
                     vArgCore == vParamCore ||
-                        (vParamCore is KtcType.User && vParamCore.baseName == "Any")
+                        (vParamCore is KtcType.Any)
                     }
                 if (vAllMatch) return vCandidate
                 }
