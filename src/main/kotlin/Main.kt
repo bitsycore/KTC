@@ -1,10 +1,10 @@
-package com.bitsycore
+package com.bitsycore.ktc
 
-import com.bitsycore.ast.*
-import com.bitsycore.codegen.CCodeGen
-import com.bitsycore.codegen.COutput
-import com.bitsycore.parser.Lexer
-import com.bitsycore.parser.Parser
+import com.bitsycore.ktc.ast.*
+import com.bitsycore.ktc.codegen.CCodeGen
+import com.bitsycore.ktc.codegen.COutput
+import com.bitsycore.ktc.parser.Lexer
+import com.bitsycore.ktc.parser.Parser
 import java.io.File
 import kotlin.system.exitProcess
 

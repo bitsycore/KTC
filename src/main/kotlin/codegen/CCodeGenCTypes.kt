@@ -1,9 +1,9 @@
-package com.bitsycore.codegen
+package com.bitsycore.ktc.codegen
 
-import com.bitsycore.ast.*
-import com.bitsycore.types.BuiltinTypeDef
-import com.bitsycore.types.KtcType
-import com.bitsycore.types.TypeDef
+import com.bitsycore.ktc.ast.*
+import com.bitsycore.ktc.types.BuiltinTypeDef
+import com.bitsycore.ktc.types.KtcType
+import com.bitsycore.ktc.types.TypeDef
 
 /**
  * ── C Type Mapping & Printf Helpers ─────────────────────────────────────

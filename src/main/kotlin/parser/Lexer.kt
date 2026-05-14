@@ -1,8 +1,8 @@
-package com.bitsycore.parser
+package com.bitsycore.ktc.parser
 
-import com.bitsycore.ast.KEYWORDS
-import com.bitsycore.ast.Token
-import com.bitsycore.ast.TokenType
+import com.bitsycore.ktc.ast.KEYWORDS
+import com.bitsycore.ktc.ast.Token
+import com.bitsycore.ktc.ast.TokenType
 
 class Lexer(private val src: String) {
     private var pos = 0

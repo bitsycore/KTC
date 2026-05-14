@@ -7,12 +7,12 @@ group = "com.bitsycore"
 version = "1.0-SNAPSHOT"
 
 application {
-    mainClass.set("com.bitsycore.MainKt")
+    mainClass.set("com.bitsycore.ktc.MainKt")
 }
 
 tasks.jar {
     manifest {
-        attributes["Main-Class"] = "com.bitsycore.MainKt"
+        attributes["Main-Class"] = "com.bitsycore.ktc.MainKt"
     }
 
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE

@@ -1,4 +1,4 @@
-package com.bitsycore
+package com.bitsycore.ktc
 
 import kotlin.test.Test
 

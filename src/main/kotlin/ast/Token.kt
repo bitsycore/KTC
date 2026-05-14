@@ -1,4 +1,4 @@
-package com.bitsycore.ast
+package com.bitsycore.ktc.ast
 
 enum class TokenType {
     // Literals

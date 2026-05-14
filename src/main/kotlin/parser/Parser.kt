@@ -1,7 +1,7 @@
-package com.bitsycore.parser
+package com.bitsycore.ktc.parser
 
-import com.bitsycore.ast.*
-import com.bitsycore.ast.Annotation
+import com.bitsycore.ktc.ast.*
+import com.bitsycore.ktc.ast.Annotation
 
 class Parser(private val tokens: List<Token>) {
     private var pos = 0

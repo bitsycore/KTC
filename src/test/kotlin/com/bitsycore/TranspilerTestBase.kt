@@ -1,9 +1,9 @@
-package com.bitsycore
+package com.bitsycore.ktc
 
-import com.bitsycore.ast.KtFile
-import com.bitsycore.codegen.CCodeGen
-import com.bitsycore.parser.Lexer
-import com.bitsycore.parser.Parser
+import com.bitsycore.ktc.ast.KtFile
+import com.bitsycore.ktc.codegen.CCodeGen
+import com.bitsycore.ktc.parser.Lexer
+import com.bitsycore.ktc.parser.Parser
 import org.intellij.lang.annotations.Language
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
