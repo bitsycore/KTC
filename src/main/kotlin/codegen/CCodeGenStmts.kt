@@ -368,7 +368,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     markOptional(s.name)
                     impl.appendLine("$ind$mutComment$optType ${s.name} = ${optNone(optType)};")
                 } else {
-                    impl.appendLine("$ind$mutComment$ct ${s.name} = ${defaultVal(t)};")
+                    impl.appendLine("$ind$mutComment$ct ${s.name} = ${defaultVal(vKtc)};")
                 }
             }
         }
@@ -1368,7 +1368,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
                 impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
             }
         } else {
-            val fmt = printfFmt(baseT) + nl
+            val fmt = printfFmt(tKtcCore ?: KtcType.Prim(KtcType.PrimKind.Int)) + nl
             val a = printfArg(valExpr, baseT)
             impl.appendLine("${ind}if ($hasExpr) { printf(\"$fmt\", $a); }")
             impl.appendLine("${ind}else { printf(\"null$nl\"); }")
@@ -1442,7 +1442,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${cName}_names[$safeExpr].len, ${cName}_names[$safeExpr].ptr);")
         return
     }
-    val fmt = printfFmt(t) + nl
+    val fmt = printfFmt(tKtcCore ?: KtcType.Prim(KtcType.PrimKind.Int)) + nl
     val a = printfArg(expr, t)
     impl.appendLine("${ind}printf(\"$fmt\", $a);")
 }

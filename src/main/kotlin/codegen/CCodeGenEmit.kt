@@ -1766,7 +1766,7 @@ internal fun CCodeGen.emitTopProp(d: PropDecl) {
         impl.appendLine("$tls$qual$mutComment$ct $cName = ${genExpr(d.init)};")
     } else {
         hdr.appendLine("extern $tls$ct $cName;")
-        impl.appendLine("$tls$mutComment$ct $cName = ${defaultVal(t)};")
+        impl.appendLine("$tls$mutComment$ct $cName = ${defaultVal(parseResolvedTypeName(t))};")
     }
     impl.appendLine()
 }

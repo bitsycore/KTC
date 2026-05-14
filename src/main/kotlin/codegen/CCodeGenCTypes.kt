@@ -291,9 +291,7 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
     return t.name
 }
 
-internal fun CCodeGen.defaultVal(t: String): String = defaultValKtc(parseResolvedTypeName(t))
-
-internal fun CCodeGen.defaultValKtc(t: KtcType): String = when {
+internal fun CCodeGen.defaultVal(t: KtcType): String = when {
     t is KtcType.Prim -> when (t.kind) {
         KtcType.PrimKind.Int, KtcType.PrimKind.Long -> "0"
         KtcType.PrimKind.Float -> "0.0f"
@@ -378,27 +376,7 @@ internal fun CCodeGen.getSizedArrayReturnElemType(e: CallExpr): String? {
 
 // ═══════════════════════════ printf helpers ═══════════════════════
 
-internal fun CCodeGen.printfFmt(t: String): String = when {
-    t == "Byte" -> "%\" PRId8 \""
-    t == "Short" -> "%\" PRId16 \""
-    t == "Int" -> "%\" PRId32 \""
-    t == "Long" -> "%\" PRId64 \""
-    t == "Float" -> "%f"
-    t == "Double" -> "%f"
-    t == "Boolean" -> "%s"
-    t == "Char" -> "%c"
-    t == "Rune" -> "%\" PRId32 \""
-    t == "UByte" -> "%\" PRIu8 \""
-    t == "UShort" -> "%\" PRIu16 \""
-    t == "UInt" -> "%\" PRIu32 \""
-    t == "ULong" -> "%\" PRIu64 \""
-    t == "String" -> "%.*s"
-    t.endsWith("*") || t.endsWith("*?") -> "%p"
-    t in enums -> "%.*s"
-    else -> "%.*s"       // assume toString → ktc_String
-}
-
-internal fun CCodeGen.printfFmtKtc(ktc: KtcType): String = when (ktc) {
+internal fun CCodeGen.printfFmt(ktc: KtcType): String = when (ktc) {
     is KtcType.Prim -> when (ktc.kind) {
         KtcType.PrimKind.Byte -> "%\" PRId8 \""
         KtcType.PrimKind.Short -> "%\" PRId16 \""
@@ -416,7 +394,7 @@ internal fun CCodeGen.printfFmtKtc(ktc: KtcType): String = when (ktc) {
     }
     is KtcType.Str -> "%.*s"
     is KtcType.Ptr -> "%p"
-    is KtcType.Nullable -> if (ktc.inner is KtcType.Ptr) "%p" else printfFmtKtc(ktc.inner)
+    is KtcType.Nullable -> if (ktc.inner is KtcType.Ptr) "%p" else printfFmt(ktc.inner)
     is KtcType.User -> when (ktc.kind) {
         KtcType.UserKind.Enum -> "%.*s"
         else -> "%.*s"

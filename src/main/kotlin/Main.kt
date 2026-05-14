@@ -200,6 +200,7 @@ fun main(args: Array<String>) {
             ).generate()
         } catch (e: Exception) {
             System.err.println("CodeGen error in '$srcName': ${e.message}")
+            e.printStackTrace()
             exitProcess(1)
         }
 

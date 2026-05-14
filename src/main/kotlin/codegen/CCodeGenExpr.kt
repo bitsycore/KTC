@@ -2192,7 +2192,7 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
     val fieldType = inferDotType(DotExpr(e.obj, e.name))
     val fieldKtc = if (fieldType != null) parseResolvedTypeName(fieldType) else null
     val ct = if (fieldType != null) cTypeStr(fieldType) else "ktc_Int"
-    val defVal = if (fieldType != null) defaultVal(fieldType) else "0"
+    val defVal = if (fieldKtc != null) defaultVal(fieldKtc) else "0"
 
     // Emit temp as Optional for value-nullable field results
     val t = tmp()
@@ -2386,7 +2386,7 @@ internal fun CCodeGen.emitStmtToPreStmts(s: Stmt, indent: String) {
         is VarDeclStmt -> {
             val t = if (s.type != null) resolveTypeName(s.type).toInternalStr else (inferExprType(s.init) ?: "Int")
             val ct = cTypeStr(t)
-            val initExpr = if (s.init != null) genExpr(s.init) else defaultVal(t)
+            val initExpr = if (s.init != null) genExpr(s.init) else defaultVal(parseResolvedTypeName(t))
             preStmts += "$indent$ct ${s.name} = $initExpr;"
             defineVar(s.name, t)
         }
@@ -2569,6 +2569,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
 
     val t = inferExprType(arg) ?: "Int"
     val tKtc = inferExprTypeKtc(arg)
+    val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
     val expr = genExpr(arg)
 
     // Nullable → ternary: $has ? printf(value) : printf("null")
@@ -2580,7 +2581,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         } else expr
         val isPtrNull = tKtc.inner is KtcType.Ptr && !isValueNullableKtc(tKtc)
         val hasExpr = if (isPtrNull) "$safeExpr != NULL" else if (isValueNullableKtc(tKtc)) "$safeExpr.tag == ktc_SOME" else "${safeExpr}\$has"
-        val fmt = printfFmt(baseT) + nl
+        val fmt = printfFmt(tKtcCore ?: KtcType.Prim(KtcType.PrimKind.Int)) + nl
         val a = printfArg(safeExpr, baseT)
         return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
     }
@@ -2644,7 +2645,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); preStmts += "$cName $vTmp = ($expr);"; vTmp } else expr
         return "printf(\"%.*s$nl\", (ktc_Int)${cName}_names[$safeExpr].len, ${cName}_names[$safeExpr].ptr)"
     }
-    val fmt = printfFmt(t) + nl
+    val fmt = printfFmt(tKtcCore!!) + nl
     val a = printfArg(expr, t)
     return "printf(\"$fmt\", $a)"
 }
@@ -2657,7 +2658,9 @@ internal fun CCodeGen.genPrintfFromTemplate(tmpl: StrTemplateExpr, nl: String): 
             is LitPart -> fmt.append(escapeStr(part.text))
             is ExprPart -> {
                 val t = inferExprType(part.expr) ?: "Int"
-                fmt.append(printfFmt(t))
+                val tKtc = inferExprTypeKtc(part.expr) ?: KtcType.Prim(KtcType.PrimKind.Int)
+                val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
+                fmt.append(printfFmt(tKtcCore))
                 val exprStr = genExpr(part.expr)
                 // String / enum: materialize if complex to avoid double-evaluation
                 if (t == "String") {
