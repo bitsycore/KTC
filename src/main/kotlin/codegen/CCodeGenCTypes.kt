@@ -55,7 +55,7 @@ import com.bitsycore.types.TypeDef
 
 // ═══════════════════════════ C type mapping ═══════════════════════
 
-/* Expand ctor props: array → (T* name, int32_t name$len), nullable → OptT name. */
+/* Expand ctor props: array → (T* name, ktc_Int name$len), nullable → OptT name. */
 internal fun CCodeGen.expandCtorParams(inProps: List<PropertyDef>): String {
 	val vParts = mutableListOf<String>() // accumulated C parameter declarations
 	for (vProp in inProps)
@@ -76,7 +76,7 @@ internal fun CCodeGen.expandCtorParams(inProps: List<PropertyDef>): String {
 			else
 				{
 				vParts += "${cTypeStr(vKtc)} $vName"
-				vParts += "int32_t ${vName}\$len"
+				vParts += "ktc_Int ${vName}\$len"
 				}
 			}
 		else if (vType.nullable)
@@ -172,7 +172,7 @@ internal fun CCodeGen.expandParams(inParams: List<Param>): String {
 			vParts += "${cTypeStr(vKtc)} ${vP.name}$vNullComment"
 			// @Ptr arrays add $len companion (unless sized — size known at compile time)
 			val vInnerArr = vKtc.inner.asArr                                                  // Arr node if Ptr(Arr)
-			if (vInnerArr != null && vInnerArr.sized == null) vParts += "int32_t ${vP.name}\$len"
+			if (vInnerArr != null && vInnerArr.sized == null) vParts += "ktc_Int ${vP.name}\$len"
 			}
 		else if (vKtc.isArrayLike)
 			{
@@ -563,10 +563,10 @@ internal fun CCodeGen.printfFmt(t: String): String = when {
 
 internal fun CCodeGen.printfArg(expr: String, t: String): String = when {
     t == "Boolean" -> "($expr) ? \"true\" : \"false\""
-    t == "String"  -> "(int)($expr).len, ($expr).ptr"
+    t == "String"  -> "(ktc_Int)($expr).len, ($expr).ptr"
     t in enums -> {
         val cName = typeFlatName(t)
-        "(int)${cName}_names[($expr)].len, ${cName}_names[($expr)].ptr"
+        "(ktc_Int)${cName}_names[($expr)].len, ${cName}_names[($expr)].ptr"
     }
     else -> expr
 }

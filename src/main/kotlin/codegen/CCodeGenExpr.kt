@@ -512,7 +512,7 @@ internal fun CCodeGen.inferInlineFunSubst(
 
 internal fun CCodeGen.genStringConcat(e: BinExpr): String {
     val buf = tmp()
-    preStmts += "char ${buf}[512];"
+    preStmts += "ktc_Char ${buf}[512];"
     return "ktc_string_cat($buf, sizeof($buf), ${genExpr(e.left)}, ${genExpr(e.right)})"
 }
 
@@ -651,7 +651,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                     val sizeExpr = genExpr(args[0].expr)
                     val t = tmp()
                     preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
-                    preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                     return t
                 }
                 var typeName = typeSubst[ta.name] ?: ta.name
@@ -692,7 +692,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                     val sizeExpr = genExpr(args[0].expr)
                     val t = tmp()
                     preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
-                    preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                     return t
                 }
                 var typeName = typeSubst[tt.name] ?: tt.name
@@ -730,7 +730,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val t = tmp()
                 preStmts += "$elemC* $t = ($elemC*)${tCalloc("(size_t)($sizeExpr)", "sizeof($elemC)")};"
                 if (isArray) {
-                    preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                 }
                 return t
             }
@@ -748,7 +748,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val t = tmp()
                 preStmts += "$elemC* $t = ($elemC*)${tCalloc("(size_t)($sizeExpr)", "sizeof($elemC)")};"
                 if (isArray) {
-                    preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                 }
                 return t
             }
@@ -769,7 +769,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val t = tmp()
                 preStmts += "$elemC* $t = ($elemC*)${tRealloc(ptrExpr, "sizeof($elemC) * (size_t)($sizeExpr)")};"
                 if (isArray) {
-                    preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                 }
                 return t
             }
@@ -787,7 +787,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val t = tmp()
                 preStmts += "$elemC* $t = ($elemC*)${tRealloc(ptrExpr, "sizeof($elemC) * (size_t)($sizeExpr)")};"
                 if (isArray) {
-                    preStmts += "const int32_t ${t}\$len = $sizeExpr;"
+                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                 }
                 return t
             }
@@ -991,7 +991,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val size = getSizeAnnotation(genFun.returnType)!!
                 val t = tmp()
                 preStmts += "$elemCType ${t}[$size];"
-                preStmts += "const int32_t ${t}\$len = $size;"
+                preStmts += "const ktc_Int ${t}\$len = $size;"
                 val filledArgs = fillDefaults(args, genFun.params, genFun.params.associate { it.name to it.default })
                 val expandedArgs2 = expandCallArgs(filledArgs, genFun.params)
                 val allArgs = if (expandedArgs2.isEmpty()) t else "$expandedArgs2, $t"
@@ -1038,7 +1038,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val size = getSizeAnnotation(methodDecl.returnType)!!
                 val t = tmp()
                 preStmts += "$elemCType ${t}[$size];"
-                preStmts += "const int32_t ${t}\$len = $size;"
+                preStmts += "const ktc_Int ${t}\$len = $size;"
                 preStmts += "${typeFlatName(currentClass!!)}_$fnName($allArgs, $t);"
                 defineVar(t, retType)
                 return t
@@ -1061,7 +1061,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                     val size = getSizeAnnotation(methodDecl.returnType)!!
                     val t = tmp()
                     preStmts += "$elemCType ${t}[$size];"
-                    preStmts += "const int32_t ${t}\$len = $size;"
+                    preStmts += "const ktc_Int ${t}\$len = $size;"
                     preStmts += "${typeFlatName(parentObj)}_$fnName($expandedArgs2, $t);"
                     defineVar(t, retType)
                     return t
@@ -1087,7 +1087,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val size = getSizeAnnotation(methodDecl.returnType)!!
                 val t = tmp()
                 preStmts += "$elemCType ${t}[$size];"
-                preStmts += "const int32_t ${t}\$len = $size;"
+                preStmts += "const ktc_Int ${t}\$len = $size;"
                 preStmts += "${typeFlatName(currentObject!!)}_$fnName($expandedArgs2, $t);"
                 defineVar(t, retType)
                 return t
@@ -1109,7 +1109,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val size = getSizeAnnotation(sig.returnType)!!
         val t = tmp()
         preStmts += "$elemCType ${t}[$size];"
-        preStmts += "const int32_t ${t}\$len = $size;"
+        preStmts += "const ktc_Int ${t}\$len = $size;"
         val allArgs = if (expandedArgs.isEmpty()) t else "$expandedArgs, $t"
         preStmts += "${funCName(name)}($allArgs);"
         defineVar(t, retType)
@@ -1131,7 +1131,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val size = getSizeAnnotation(topOvr.returnType)!!
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
-            preStmts += "const int32_t ${t}\$len = $size;"
+            preStmts += "const ktc_Int ${t}\$len = $size;"
             val allArgs = if (expandedArgs2.isEmpty()) t else "$expandedArgs2, $t"
             preStmts += "${funCName(fnName)}($allArgs);"
             defineVar(t, retType)
@@ -1436,15 +1436,15 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "contains" -> if (recvType == "String") {
             val sub = genExpr(args[0].expr)
             val t = tmp()
-            preStmts += "bool $t = false;"
-            preStmts += "for (int32_t ${t}_i = 0; ${t}_i <= $recv.len - $sub.len; ${t}_i++) { if (memcmp($recv.ptr + ${t}_i, $sub.ptr, (size_t)$sub.len) == 0) { $t = true; break; } }"
+            preStmts += "ktc_Bool $t = false;"
+            preStmts += "for (ktc_Int ${t}_i = 0; ${t}_i <= $recv.len - $sub.len; ${t}_i++) { if (memcmp($recv.ptr + ${t}_i, $sub.ptr, (size_t)$sub.len) == 0) { $t = true; break; } }"
             return t
         }
         "indexOf" -> if (recvType == "String") {
             val sub = genExpr(args[0].expr)
             val t = tmp()
-            preStmts += "int32_t $t = -1;"
-            preStmts += "for (int32_t ${t}_i = 0; ${t}_i <= $recv.len - $sub.len; ${t}_i++) { if (memcmp($recv.ptr + ${t}_i, $sub.ptr, (size_t)$sub.len) == 0) { $t = ${t}_i; break; } }"
+            preStmts += "ktc_Int $t = -1;"
+            preStmts += "for (ktc_Int ${t}_i = 0; ${t}_i <= $recv.len - $sub.len; ${t}_i++) { if (memcmp($recv.ptr + ${t}_i, $sub.ptr, (size_t)$sub.len) == 0) { $t = ${t}_i; break; } }"
             return t
         }
         "isEmpty" -> if (recvType == "String") {
@@ -1493,7 +1493,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val t = tmp()
         preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($lenExpr)")};"
         preStmts += "if ($t) memcpy($t, $recv, sizeof($elemC) * (size_t)($lenExpr));"
-        preStmts += "int32_t ${t}\$len = $lenExpr;"
+        preStmts += "ktc_Int ${t}\$len = $lenExpr;"
         return t
     }
     // Array pointer .get(i) → recv[i] and .set(i,v) → recv[i] = v
@@ -1609,7 +1609,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val size = getSizeAnnotation(methodDecl.returnType)!!
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
-            preStmts += "const int32_t ${t}\$len = $size;"
+            preStmts += "const ktc_Int ${t}\$len = $size;"
             preStmts += "${vClassInfo.flatName}_$fnPrefix($allArgs, $t);"
             defineVar(t, retType)
             return t
@@ -1636,7 +1636,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val size = getSizeAnnotation(vObjMethod.returnType)!!
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
-            preStmts += "const int32_t ${t}\$len = $size;"
+            preStmts += "const ktc_Int ${t}\$len = $size;"
             preStmts += "${vObjInfo.flatName}_$overloadedMethod($vObjArgs, $t);"
             defineVar(t, retType)
             return t
@@ -1662,7 +1662,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val size = getSizeAnnotation(vCompMethod.returnType)!!
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
-            preStmts += "const int32_t ${t}\$len = $size;"
+            preStmts += "const ktc_Int ${t}\$len = $size;"
             preStmts += "${vCompCName}_$overloadedComp($vCompArgs, $t);"
             defineVar(t, retType)
             return t
@@ -1801,7 +1801,7 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
             val guard = if (recvType.endsWith("?")) "${recvName}\$has" else "true"
             val arrCType = cTypeStr(cleanType)
             preStmts += "$arrCType $t = $guard ? $recvName : NULL;"
-            preStmts += "int32_t ${t}\$len = $guard ? ${recvName}\$len : 0;"
+            preStmts += "ktc_Int ${t}\$len = $guard ? ${recvName}\$len : 0;"
             defineVar(t, "${cleanType}*?")
             return t
         }
@@ -1956,7 +1956,7 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
 
     // Infer field type for proper default and C type
     val fieldType = inferDotType(DotExpr(e.obj, e.name))
-    val ct = if (fieldType != null) cTypeStr(fieldType) else "int32_t"
+    val ct = if (fieldType != null) cTypeStr(fieldType) else "ktc_Int"
     val defVal = if (fieldType != null) defaultVal(fieldType) else "0"
 
     // Emit temp as Optional for value-nullable field results
@@ -1969,7 +1969,7 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
         defineVar(t, fieldType)
     } else {
         val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int_Optional"
-        val fieldCType = if (fieldType != null) cTypeStr(fieldType) else "int32_t"
+        val fieldCType = if (fieldType != null) cTypeStr(fieldType) else "ktc_Int"
         preStmts += "$optType $t = $guard ? ($optType){ktc_SOME, $fieldAccess} : ${optNone(optType)};"
         markOptional(t)
         defineVar(t, "${fieldType ?: "Int"}?")
@@ -1998,7 +1998,7 @@ internal fun CCodeGen.genNotNull(e: NotNullExpr): String {
         val t = tmp()
         preStmts += "$ct $t = $inner;"
         if (isArrayType(baseType) || isAllocArrayCall(e.expr)) {
-            preStmts += "const int32_t ${t}\$len = ${inner}\$len;"
+            preStmts += "const ktc_Int ${t}\$len = ${inner}\$len;"
         }
         preStmts += "if (!$t) { fprintf(stderr, \"NullPointerException: $loc\\n\"); exit(1); }"
         return t
@@ -2325,27 +2325,27 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
             val buf = tmp()
             val vTmp = tmp()
             preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
-            preStmts += "char ${buf}[$maxLen];"
+            preStmts += "ktc_Char ${buf}[$maxLen];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
             preStmts += "${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);"
-            return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
+            return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
         }
         val buf = tmp()
         val vTmp = tmp()
         preStmts += "${cTypeStr(t)} $vTmp = ($expr);"
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);"
-        preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);"
-        return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
+        return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
     }
     // Non-data class/object/interface → use toString()
     if (classes.containsKey(t) || objects.containsKey(t) || interfaces.containsKey(t)) {
         val str = genToString(expr, t)
         val tmpStr = tmp()
         preStmts += "ktc_String $tmpStr = $str;"
-        return "printf(\"%.*s$nl\", (int)${tmpStr}.len, ${tmpStr}.ptr)"
+        return "printf(\"%.*s$nl\", (ktc_Int)${tmpStr}.len, ${tmpStr}.ptr)"
     }
     // Heap/Ptr/Value to data class → pass pointer directly
     val indirectBase = anyIndirectClassName(t)
@@ -2353,18 +2353,18 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         val maxLen = toStringMaxLen(indirectBase)
         if (maxLen != null && maxLen <= 512) {
             val buf = tmp()
-            preStmts += "char ${buf}[$maxLen];"
+            preStmts += "ktc_Char ${buf}[$maxLen];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
             preStmts += "${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);"
-            return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
+            return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
         }
         val buf = tmp()
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);"
-        preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);"
-        return "printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr)"
+        return "printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr)"
     }
 
     val fmt = printfFmt(t) + nl
@@ -2417,7 +2417,7 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
     val maxLen = templateMaxLen(e)
     if (maxLen != null && maxLen <= 512) {
         // Single pass with fixed stack buffer
-        preStmts += "char ${buf}[$maxLen];"
+        preStmts += "ktc_Char ${buf}[$maxLen];"
         preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
         for (p in parts) {
             when {
@@ -2436,7 +2436,7 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
         }
     }
     // Allocate exact size
-    preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+    preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
     preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
     // Second pass: write to real buffer
     for (p in parts) {
@@ -2530,7 +2530,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             val buf = tmp()
             val vTmp = tmp()
             preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
-            preStmts += "char ${buf}[$maxLen];"
+            preStmts += "ktc_Char ${buf}[$maxLen];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};"
             preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
             return "ktc_sb_to_string(&${buf}_sb)"
@@ -2541,7 +2541,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         preStmts += "${cTypeStr(type)} $vTmp = ($recv);"
         preStmts += "ktc_StrBuf ${buf}_sb = {NULL, 0, 0};"
         preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
-        preStmts += "char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);"
+        preStmts += "ktc_Char* ${buf} = (ktc_Char*)ktc_alloca(${buf}_sb.len + 1);"
         preStmts += "${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};"
         preStmts += "${typeFlatName(type)}_toString(&$vTmp, &${buf}_sb);"
         return "ktc_sb_to_string(&${buf}_sb)"
@@ -2550,7 +2550,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "Byte" -> {
             val buf = tmp()
             val sz = 6   // "-128\0" = 5+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_byte(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
@@ -2558,7 +2558,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "Short" -> {
             val buf = tmp()
             val sz = 7   // "-32768\0" = 6+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_short(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
@@ -2566,7 +2566,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "Int" -> {
             val buf = tmp()
             val sz = 12   // "-2147483648\0" = 11+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_int(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
@@ -2574,7 +2574,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "Long" -> {
             val buf = tmp()
             val sz = 21   // "-9223372036854775808\0" = 20+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_long(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
@@ -2582,7 +2582,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "UByte" -> {
             val buf = tmp()
             val sz = 4   // "255\0" = 3+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_ubyte(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
@@ -2590,7 +2590,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "UShort" -> {
             val buf = tmp()
             val sz = 6   // "65535\0" = 5+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_ushort(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
@@ -2598,7 +2598,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "UInt" -> {
             val buf = tmp()
             val sz = 11   // "4294967295\0" = 10+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_uint(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
@@ -2606,34 +2606,34 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
         "ULong" -> {
             val buf = tmp()
             val sz = 21   // "18446744073709551615\0" = 20+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "ktc_StrBuf ${buf}_sb = {${buf}, 0, $sz};"
             preStmts += "ktc_sb_append_ulong(&${buf}_sb, $recv);"
             "ktc_sb_to_string(&${buf}_sb)"
         }
         "Float" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[32];"
-            preStmts += "snprintf($buf, 32, \"%g\", (double)($recv));"
+            preStmts += "ktc_Char ${buf}[32];"
+            preStmts += "snprintf($buf, 32, \"%g\", (ktc_Double)($recv));"
             "ktc_str($buf)"
         }
         "Double" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[32];"
+            preStmts += "ktc_Char ${buf}[32];"
             preStmts += "snprintf($buf, 32, \"%g\", $recv);"
             "ktc_str($buf)"
         }
         "Boolean" -> {
             val buf = tmp()
             val sz = 6   // "false\0" = 5+1
-            preStmts += "char ${buf}[$sz];"
+            preStmts += "ktc_Char ${buf}[$sz];"
             preStmts += "snprintf($buf, $sz, \"%s\", ($recv) ? \"true\" : \"false\");"
             "ktc_str($buf)"
         }
         "Char" -> {
             val buf = tmp()
-            preStmts += "char ${buf}[8];"
-            preStmts += "snprintf($buf, 8, \"%c\", (char)($recv));"
+            preStmts += "ktc_Char ${buf}[8];"
+            preStmts += "snprintf($buf, 8, \"%c\", (ktc_Char)($recv));"
             "ktc_str($buf)"
         }
         "String" -> recv
@@ -2648,12 +2648,12 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
                 val cName = typeFlatName(base)
                 val buf = tmp()
                 val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) recv else "&$recv"
-                preStmts += "char ${buf}[$sz];"
+                preStmts += "ktc_Char ${buf}[$sz];"
                 preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
                 "ktc_str($buf)"
             } else if (hasIface) {
                 val buf = tmp()
-                preStmts += "char ${buf}[$sz];"
+                preStmts += "ktc_Char ${buf}[$sz];"
                 preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
                 "ktc_str($buf)"
             } else {
@@ -2678,7 +2678,7 @@ internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): S
         "Short"   -> preStmts += "ktc_sb_append_short(&$sb, $recv);"
         "Int"     -> preStmts += "ktc_sb_append_int(&$sb, $recv);"
         "Long"    -> preStmts += "ktc_sb_append_long(&$sb, $recv);"
-        "Float"   -> preStmts += "ktc_sb_append_double(&$sb, (double)$recv);"
+        "Float"   -> preStmts += "ktc_sb_append_double(&$sb, (ktc_Double)$recv);"
         "Double"  -> preStmts += "ktc_sb_append_double(&$sb, $recv);"
         "Boolean" -> preStmts += "ktc_sb_append_bool(&$sb, $recv);"
         "Char"    -> preStmts += "ktc_sb_append_char(&$sb, $recv);"
@@ -2695,12 +2695,12 @@ internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): S
                 val cName = typeFlatName(base)
                 val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) recv else "&$recv"
                 val buf = tmp()
-                preStmts += "char ${buf}[64];"
+                preStmts += "ktc_Char ${buf}[64];"
                 preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
                 preStmts += "ktc_sb_append_cstr(&$sb, $buf);"
             } else if (hasIface) {
                 val buf = tmp()
-                preStmts += "char ${buf}[64];"
+                preStmts += "ktc_Char ${buf}[64];"
                 preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $recv.vt->hashCode((void*)&$recv));"
                 preStmts += "ktc_sb_append_cstr(&$sb, $buf);"
             } else {
@@ -2730,7 +2730,7 @@ internal fun CCodeGen.genSbAppend(sbRef: String, expr: String, type: String): St
         "Short"   -> "ktc_sb_append_short($sbRef, $expr);"
         "Int"     -> "ktc_sb_append_int($sbRef, $expr);"
         "Long"    -> "ktc_sb_append_long($sbRef, $expr);"
-        "Float"   -> "ktc_sb_append_double($sbRef, (double)$expr);"
+        "Float"   -> "ktc_sb_append_double($sbRef, (ktc_Double)$expr);"
         "Double"  -> "ktc_sb_append_double($sbRef, $expr);"
         "Boolean" -> "ktc_sb_append_bool($sbRef, $expr);"
         "Char"    -> "ktc_sb_append_char($sbRef, $expr);"
@@ -2751,12 +2751,12 @@ internal fun CCodeGen.genSbAppend(sbRef: String, expr: String, type: String): St
                     val buf = tmp()
                     val cName = typeFlatName(base)
                     val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) expr else "&$expr"
-                    preStmts += "char ${buf}[64];"
+                    preStmts += "ktc_Char ${buf}[64];"
                     preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
                     "ktc_sb_append_cstr($sbRef, $buf);"
                 } else if (interfaces.containsKey(base)) {
                     val buf = tmp()
-                    preStmts += "char ${buf}[64];"
+                    preStmts += "ktc_Char ${buf}[64];"
                     preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $expr.vt->hashCode((void*)&$expr));"
                     "ktc_sb_append_cstr($sbRef, $buf);"
                 } else {
@@ -2780,7 +2780,7 @@ internal fun CCodeGen.genArrayOfExpr(name: String, args: List<Arg>, inTypeArg: T
         }
         val vTmp = tmp()
         preStmts += "$vOptCType ${vTmp}[] = {$vVals};"
-        preStmts += "const int32_t ${vTmp}\$len = ${args.size};"
+        preStmts += "const ktc_Int ${vTmp}\$len = ${args.size};"
         return vTmp
     }
     val elemType = when (name) {
@@ -2794,13 +2794,13 @@ internal fun CCodeGen.genArrayOfExpr(name: String, args: List<Arg>, inTypeArg: T
             if (inTypeArg != null) cTypeStr(typeSubst[inTypeArg.name] ?: inTypeArg.name)
             else { val elemKt = if (args.isNotEmpty()) inferExprType(args[0].expr) ?: "Int" else "Int"; cTypeStr(elemKt) }
         }
-        else -> "int32_t"
+        else -> "ktc_Int"
     }
     val vals = args.joinToString(", ") { genExpr(it.expr) }
     val n = args.size
     val t = tmp()
     preStmts += "$elemType ${t}[] = {$vals};"
-    preStmts += "const int32_t ${t}\$len = $n;"
+    preStmts += "const ktc_Int ${t}\$len = $n;"
     return t
 }
 
@@ -2808,7 +2808,7 @@ internal fun CCodeGen.genNewArray(elemCType: String, args: List<Arg>): String {
     val size = if (args.isNotEmpty()) genExpr(args[0].expr) else "0"
     val t = tmp()
     preStmts += "$elemCType* $t = ($elemCType*)ktc_alloca(sizeof($elemCType) * (size_t)($size));"
-    preStmts += "const int32_t ${t}\$len = $size;"
+    preStmts += "const ktc_Int ${t}\$len = $size;"
     return t
 }
 
@@ -2819,7 +2819,7 @@ internal fun CCodeGen.genNewArrayWithLambda(elemCType: String, e: CallExpr, args
     val itName = lambda.params.firstOrNull() ?: "it"
     val t = tmp()
     preStmts += "$elemCType* $t = ($elemCType*)ktc_alloca(sizeof($elemCType) * (size_t)($size));"
-    preStmts += "const int32_t ${t}\$len = $size;"
+    preStmts += "const ktc_Int ${t}\$len = $size;"
     preStmts += "for (ktc_Int $itName = 0; $itName < $size; $itName++) {"
     // Lambda body: must be a single expression producing the element value
     val bodyExpr = when {
@@ -2842,7 +2842,7 @@ internal fun CCodeGen.genHeapArrayOfExpr(args: List<Arg>, inTypeArg: TypeRef? = 
     preStmts += "$elemType* $t = ($elemType*)${tMalloc("sizeof($elemType) * $n")};"
     val vals = args.mapIndexed { i, arg -> "$t[$i] = ${genExpr(arg.expr)};" }.joinToString(" ")
     if (vals.isNotEmpty()) preStmts += vals
-    preStmts += "const int32_t ${t}\$len = $n;"
+    preStmts += "const ktc_Int ${t}\$len = $n;"
     return t
 }
 
@@ -2851,7 +2851,7 @@ internal fun CCodeGen.genHeapArray(elemCType: String, args: List<Arg>): String {
     val size = if (args.isNotEmpty()) genExpr(args[0].expr) else "0"
     val t = tmp()
     preStmts += "$elemCType* $t = ($elemCType*)${tCalloc("(size_t)($size)", "sizeof($elemCType)")};"
-    preStmts += "const int32_t ${t}\$len = $size;"
+    preStmts += "const ktc_Int ${t}\$len = $size;"
     return t
 }
 

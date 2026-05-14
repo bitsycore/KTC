@@ -76,7 +76,7 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
             else
                 {
                 hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
-                hdr.appendLine("    int32_t ${vFieldName}\$len;")
+                hdr.appendLine("    ktc_Int ${vFieldName}\$len;")
                 }
             }
         else if (type.nullable)
@@ -320,7 +320,7 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
             else
                 {
                 hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
-                hdr.appendLine("    int32_t ${vFieldName}\$len;")
+                hdr.appendLine("    ktc_Int ${vFieldName}\$len;")
                 }
             }
         else if (type.nullable)
@@ -480,8 +480,8 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
 }
 
 internal fun CCodeGen.emitClassEquals(cName: String, ci: ClassInfo) {
-    hdr.appendLine("bool ${cName}_equals($cName a, $cName b);")
-    impl.appendLine("bool ${cName}_equals($cName a, $cName b) {")
+    hdr.appendLine("ktc_Bool ${cName}_equals($cName a, $cName b);")
+    impl.appendLine("ktc_Bool ${cName}_equals($cName a, $cName b) {")
     val eqs = ci.props.joinToString(" && ") { (name, type) ->
         val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
         val vKtcEq = resolveTypeName(type)          // KtcType for equals dispatch
@@ -785,7 +785,7 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
                 if (p.isNotEmpty()) "$p, $extra" else extra
             }
             returnsArray -> {
-                val extra = "int32_t* \$len_out"
+                val extra = "ktc_Int* \$len_out"
                 val p = if (selfParam != null && baseParams.isNotEmpty()) "$selfParam, $baseParams" else selfParam ?: baseParams
                 if (p.isNotEmpty()) "$p, $extra" else extra
             }
@@ -878,7 +878,7 @@ internal fun CCodeGen.emitStarExtFunInstantiations(f: FunDecl) {
         val isClassType = classes.containsKey(mangledRecvName)
         val cRecvType = typeFlatName(mangledRecvName)
         val selfParam = if (isClassType) "$cRecvType* \$self" else "$cRecvType \$self"
-        val nullableExtra = if (recvIsNullable) ", bool \$self\$has" else ""
+        val nullableExtra = if (recvIsNullable) ", ktc_Bool \$self\$has" else ""
         val extraParams = expandParams(f.params)
         val allParams = if (extraParams.isEmpty()) "$selfParam$nullableExtra" else "$selfParam$nullableExtra, $extraParams"
         val cFnName = "${typeFlatName(mangledRecvName)}_${f.name}"
@@ -1044,10 +1044,10 @@ internal fun CCodeGen.emitEnumValuesData() {
         val n = info.entries.size
         // extern declarations in header
         hdr.appendLine("extern const $cName ${cName}_values[$n];")
-        hdr.appendLine("extern const int32_t ${cName}_values\$len;")
+        hdr.appendLine("extern const ktc_Int ${cName}_values\$len;")
         // definitions in source
         impl.appendLine("const $cName ${cName}_values[] = {$entryNames};")
-        impl.appendLine("const int32_t ${cName}_values\$len = $n;")
+        impl.appendLine("const ktc_Int ${cName}_values\$len = $n;")
     }
     for (enumName in enumValueOfCalled) {
         val info = enums[enumName] ?: continue
@@ -1084,7 +1084,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
 
     hdr.appendLine("// ══ object ${d.name} ($currentSourceFile) ══")
     hdr.appendLine("typedef struct {")
-    if (props.isEmpty()) hdr.appendLine("    char _dummy;")
+    if (props.isEmpty()) hdr.appendLine("    ktc_Char _dummy;")
     for (p in props) {
         val pType     = p.type ?: inferInitType(p.init)
         val vKtcObj   = resolveTypeName(pType)                          // KtcType for struct field
@@ -1093,11 +1093,11 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
             val vElemType = cTypeStr(vKtcObj.asArr!!.elem)              // element C type for sized array
             val fn = privPrefix(p) + p.name
             hdr.appendLine("    $vElemType ${fn}[${sizeAnn}];")
-            hdr.appendLine("    int32_t ${fn}\$len;")
+            hdr.appendLine("    ktc_Int ${fn}\$len;")
         } else if (vKtcObj.isArrayLike) {
             val fn = privPrefix(p) + p.name
             hdr.appendLine("    ${cTypeStr(vKtcObj)} ${fn};")
-            hdr.appendLine("    int32_t ${fn}\$len;")
+            hdr.appendLine("    ktc_Int ${fn}\$len;")
         } else {
             val fn = privPrefix(p) + p.name
             hdr.appendLine("    ${cTypeStr(vKtcObj)} ${fn};${ptrNullComment(vKtcObj)}")
@@ -1110,7 +1110,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
 
     // global instance (zero-initialized), init flag + ensure_init are internal
     impl.appendLine("${tls}${cName}_t $cName = {0};")
-    impl.appendLine("${tls}static bool ${cName}\$init = false;")
+    impl.appendLine("${tls}static ktc_Bool ${cName}\$init = false;")
     impl.appendLine()
 
     // $ensure_init: lazy initialization function
@@ -1196,7 +1196,7 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
                 val elemCType = cTypeStr(vRetKtcM!!.asArr!!.elem)
                 "$elemCType* \$out"
             }
-            returnsArray -> "int32_t* \$len_out"
+            returnsArray -> "ktc_Int* \$len_out"
             else -> null
         }
         val params = if (extraParam != null) {
@@ -1287,7 +1287,7 @@ internal fun CCodeGen.emitInterfaceVtable(info: IfaceInfo) {
     hdr.appendLine("typedef struct ${cName}_vt {")
     // Properties → getter function pointers
     for (p in allProps) {
-        val ct = if (p.type != null) cType(p.type) else "int32_t"
+        val ct = if (p.type != null) cType(p.type) else "ktc_Int"
         hdr.appendLine("    $ct (*${p.name})(void* \$self);")
     }
     for (m in allMethods) {
@@ -1459,7 +1459,7 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
 
         // Emit property getter wrappers
         for (p in allProps) {
-            val ct = if (p.type != null) cType(p.type) else "int32_t"
+            val ct = if (p.type != null) cType(p.type) else "ktc_Int"
             val getterName = "${cClass}_${p.name}_get"
             if (!implsOnly) hdr.appendLine("$ct $getterName($cClass* \$self);")
             if (!declsOnly) {
@@ -1473,7 +1473,7 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
         if (!declsOnly) {
             impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
             for (p in allProps) {
-                val ct = if (p.type != null) cType(p.type) else "int32_t"
+                val ct = if (p.type != null) cType(p.type) else "ktc_Int"
                 impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
             }
             for (m in allMethods) {
@@ -1561,7 +1561,7 @@ internal fun CCodeGen.emitTransitiveInterfaceVtables(
         hdr.appendLine("extern const ${cSuper}_vt ${cClass}_${superName}_vt;")
         impl.appendLine("const ${cSuper}_vt ${cClass}_${superName}_vt = {")
         for (p in superProps) {
-            val ct = if (p.type != null) cType(p.type) else "int32_t"
+            val ct = if (p.type != null) cType(p.type) else "ktc_Int"
             impl.appendLine("    ($ct (*)(void*)) ${cClass}_${p.name}_get,")
         }
         for (m in superMethods) {
@@ -1640,7 +1640,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
                     val elemCType = cTypeStr(vRetKtcFun!!.asArr!!.elem)
                     "$elemCType* \$out"
                 }
-                returnsArray -> "int32_t* \$len_out"
+                returnsArray -> "ktc_Int* \$len_out"
                 else -> null
             }
             if (extra != null) {
@@ -1680,13 +1680,13 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
         // Convert argc/argv → ktc_StringArray (skip argv[0] = program name)
         val argName = f.params[0].name
         impl.appendLine("    ktc_String \$args_buf[256];")
-        impl.appendLine("    int32_t \$nargs = (argc > 1) ? (int32_t)(argc - 1) : 0;")
+        impl.appendLine("    ktc_Int \$nargs = (argc > 1) ? (ktc_Int)(argc - 1) : 0;")
         impl.appendLine("    if (\$nargs > 256) \$nargs = 256;")
-        impl.appendLine("    for (int32_t \$i = 0; \$i < \$nargs; \$i++) {")
-        impl.appendLine("        \$args_buf[\$i] = (ktc_String){argv[\$i + 1], (int32_t)strlen(argv[\$i + 1])};")
+        impl.appendLine("    for (ktc_Int \$i = 0; \$i < \$nargs; \$i++) {")
+        impl.appendLine("        \$args_buf[\$i] = (ktc_String){argv[\$i + 1], (ktc_Int)strlen(argv[\$i + 1])};")
         impl.appendLine("    }")
         impl.appendLine("    ktc_String* $argName = \$args_buf;")
-        impl.appendLine("    int32_t ${argName}\$len = \$nargs;")
+        impl.appendLine("    ktc_Int ${argName}\$len = \$nargs;")
         defineVar(argName, "StringArray")
     } else {
         for (p in f.params) {

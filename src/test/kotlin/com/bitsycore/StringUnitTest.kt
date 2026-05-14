@@ -122,7 +122,7 @@ class StringUnitTest : TranspilerTestBase() {
         """)
         r.sourceContains("ktc_string_cat")
         // Verify buffer declaration and 4-arg call: (buf, sizeof(buf), a, b)
-        r.sourceMatches(Regex("""char \$\w+\[512\];"""))
+        r.sourceMatches(Regex("""ktc_Char \$\w+\[512\];"""))
         r.sourceMatches(Regex("""ktc_string_cat\(\$\w+, sizeof\(\$\w+\), a, b\)"""))
     }
 

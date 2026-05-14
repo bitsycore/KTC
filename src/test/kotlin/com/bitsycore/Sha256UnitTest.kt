@@ -99,7 +99,7 @@ class Sha256UnitTest : TranspilerTestBase() {
                 }
             }
         """)
-        v.headerContains("int32_t buff\$len")
+        v.headerContains("ktc_Int buff\$len")
     }
 
     @Test fun sha256FinalizeHashOutParam() {
@@ -117,7 +117,7 @@ class Sha256UnitTest : TranspilerTestBase() {
         val v = transpileMain("", """
             object Sha { val x = 1 }
         """)
-        v.sourceContains("static bool test_Main_Sha\$init = false;")
+        v.sourceContains("static ktc_Bool test_Main_Sha\$init = false;")
     }
 
     @Test fun sha256EnsureInitCalledInMethods() {

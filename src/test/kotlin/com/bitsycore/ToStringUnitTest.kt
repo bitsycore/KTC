@@ -177,7 +177,7 @@ class ToStringUnitTest : TranspilerTestBase() {
         assertFalse(Regex("ktc_StrBuf \\w+_sb = \\{NULL, 0, 0\\};").containsMatchIn(r.source),
             "Bounded data class should use fixed buffer, not two-pass")
         // Should use fixed stack buffer with computed size
-        r.sourceContains("char ")
+        r.sourceContains("ktc_Char ")
         r.sourceContains("[")
         r.sourceContains("];")
     }

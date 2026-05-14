@@ -165,11 +165,11 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                 if (isAllocArrayCall(s.init)) {
                     val allocSize = extractAllocSize(s.init)
                     if (allocSize != null) {
-                        impl.appendLine("${ind}int32_t ${s.name}\$len = ${genExpr(allocSize)};")
+                        impl.appendLine("${ind}ktc_Int ${s.name}\$len = ${genExpr(allocSize)};")
                     }
                 } else if (isArrayType(t) && s.init is NameExpr) {
                     val lenVar = (s.init as NameExpr).name + "\$len"
-                    impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenVar;")
+                    impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenVar;")
                 }
             }
             // ── Value nullable — use Optional struct ──
@@ -195,7 +195,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                 val elemCType = arrayElementCType(t)
                 if (s.init is NullLit) {
                     impl.appendLine("$ind$mutComment$elemCType* ${s.name} = NULL;")
-                    impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
+                    impl.appendLine("${ind}const ktc_Int ${s.name}\$len = 0;")
                 } else if (s.init is DotExpr && (s.init as DotExpr).name == "buffer") {
                     val dotInit = s.init as DotExpr
                     val dotRecvType = inferExprType(dotInit.obj)
@@ -204,14 +204,14 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
                         impl.appendLine("$ind$mutComment$elemCType* ${s.name} /* nullable */ = $expr;")
-                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $recvExpr.cap;")
+                        impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $recvExpr.cap;")
                     } else {
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
                         val lenExpr = "${expr}\$len"
                         impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
                         impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
-                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
+                        impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenExpr;")
                     }
                 } else {
                     val expr = genExpr(s.init)
@@ -219,7 +219,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     val lenExpr = if (s.init is NameExpr) "${(s.init as NameExpr).name}\$len" else "${expr}\$len"
                     impl.appendLine("$ind$mutComment$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
-                    impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
+                    impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenExpr;")
                 }
             }
             // ── Nullable Any (trampoline, null = data == NULL) ──
@@ -257,14 +257,14 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     val size = getSizedArrayReturnSize(call)!!
                     val elemCType = getSizedArrayReturnElemType(call)!!
                     impl.appendLine("${ind}${elemCType} ${s.name}[$size];")
-                    impl.appendLine("${ind}const int32_t ${s.name}\$len = $size;")
+                    impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $size;")
                     genExprWithSizedArrayOut(s.init, s.name)
                     flushPreStmts(ind)
                     return
                 }
                 // Array-returning function call: declare $len first, pass &$len as out-param
                 if (isArrayType(t) && isArrayReturningCall(s.init)) {
-                    impl.appendLine("${ind}int32_t ${s.name}\$len;")
+                    impl.appendLine("${ind}ktc_Int ${s.name}\$len;")
                     val expr = genExprWithArrayLenOut(s.init, s.name)
                     flushPreStmts(ind)
                     impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
@@ -278,7 +278,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     val lenExpr = if (s.init is NameExpr) "${(s.init as NameExpr).name}\$len" else "${expr}\$len"
                     impl.appendLine("${ind}$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
-                    impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenExpr;")
+                    impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenExpr;")
                 } else {
                     // Auto-wrap init into ktc_Any trampoline when variable is typed Any
                     if (tRaw == "Any" && s.init != null && s.init !is NullLit) {
@@ -293,14 +293,14 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     }
                     if (isArrayType(t) && !t.endsWith("*?") && (t.endsWith("*") || isArrayType(t))) {
                         val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
-                        impl.appendLine("${ind}const int32_t ${s.name}\$len = $lenInit;")
+                        impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenInit;")
                     } else if (t.endsWith("*") && !t.endsWith("*?") && s.init is NameExpr) {
                         val srcName = (s.init as NameExpr).name
                         // Skip $len copy if source is a @Ptr RawArray<T> field (which has no $len companion)
                         val isRawArrayField = currentClass != null &&
                             classes[currentClass]?.props?.any { it.first == srcName && it.second.name == "RawArray" } == true
                         if (!isRawArrayField) {
-                            impl.appendLine("${ind}int32_t ${s.name}\$len = ${srcName}\$len;")
+                            impl.appendLine("${ind}ktc_Int ${s.name}\$len = ${srcName}\$len;")
                         }
                     }
                 }
@@ -313,7 +313,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
             }
             isNullableArray -> {
                 impl.appendLine("$ind$mutComment${arrayElementCType(t)}* ${s.name} = NULL;")
-                impl.appendLine("${ind}const int32_t ${s.name}\$len = 0;")
+                impl.appendLine("${ind}const ktc_Int ${s.name}\$len = 0;")
             }
             else -> {
                 if (isValueNullable) {
@@ -339,7 +339,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
             if (recvType != null && recvType.endsWith("Array")) {
                 val expr = genExpr(init)
                 flushPreStmts(ind)
-                return "$ind$ct $varName = $expr;\n${ind}int32_t ${varName}\$len = ${expr}\$len;"
+                return "$ind$ct $varName = $expr;\n${ind}ktc_Int ${varName}\$len = ${expr}\$len;"
             }
         }
     }
@@ -352,7 +352,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         val size = if (init.args.isNotEmpty()) genExpr(init.args[0].expr) else "0"
         return "${ind}$optCType* ${varName} = ($optCType*)ktc_alloca(sizeof($optCType) * (size_t)($size));\n" +
                "${ind}memset($varName, 0, sizeof($optCType) * (size_t)($size));\n" +
-               "${ind}const int32_t ${varName}\$len = $size;"
+               "${ind}const ktc_Int ${varName}\$len = $size;"
     }
     // Array<T>(size), IntArray(size) etc. — fresh stack allocation, emit directly into varName
     if (callee in setOf("IntArray", "LongArray", "FloatArray", "DoubleArray",
@@ -379,7 +379,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
             flushPreStmts(ind)
             val sb = StringBuilder()
             sb.appendLine("${ind}$elemC* ${varName} = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));")
-            sb.appendLine("${ind}const int32_t ${varName}\$len = $size;")
+            sb.appendLine("${ind}const ktc_Int ${varName}\$len = $size;")
             sb.appendLine("${ind}for (ktc_Int $itName = 0; $itName < $size; $itName++) {")
             pushScope()
             defineVar(itName, "Int")
@@ -426,7 +426,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         }
         flushPreStmts(ind)
         return "${ind}$elemC* ${varName} = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));\n" +
-               "${ind}const int32_t ${varName}\$len = $size;"
+               "${ind}const ktc_Int ${varName}\$len = $size;"
     }
     // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
     if (callee == "arrayOf") {
@@ -439,7 +439,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
                 if (vArg.expr is NullLit) "($vOptCType){ktc_NONE}"
                 else "($vOptCType){ktc_SOME, ${genExpr(vArg.expr)}}"
             }
-            return "${ind}$vOptCType ${varName}[] = {$vArgs};\n${ind}const int32_t ${varName}\$len = ${init.args.size};"
+            return "${ind}$vOptCType ${varName}[] = {$vArgs};\n${ind}const ktc_Int ${varName}\$len = ${init.args.size};"
         }
     }
     // heapArrayOf<T>(e1, e2, ...) → heap allocation, returns pointer, safe to return from functions
@@ -456,7 +456,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         init.args.forEachIndexed { i, arg ->
             sb.appendLine("${ind}$varName[$i] = ${genExpr(arg.expr)};")
         }
-        sb.appendLine("${ind}const int32_t ${varName}\$len = $n;")
+        sb.appendLine("${ind}const ktc_Int ${varName}\$len = $n;")
         return sb.toString().trimEnd()
     }
     val elemType = when (callee) {
@@ -474,7 +474,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
     }
     val args = init.args.joinToString(", ") { genExpr(it.expr) }
     val n = init.args.size
-    return "${ind}$elemType ${varName}[] = {$args};\n${ind}const int32_t ${varName}\$len = $n;"
+    return "${ind}$elemType ${varName}[] = {$args};\n${ind}const ktc_Int ${varName}\$len = $n;"
 }
 
 /** Check if an expression is a call to a function known to return nullable. */
@@ -1242,7 +1242,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
                 impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
                 impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
                 impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
-                impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+                impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
             } else {
                 impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
                 impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
@@ -1250,7 +1250,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
                 impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
                 impl.appendLine("${ind}if ($hasExpr) { ${typeFlatName(dataClass)}_toString($recv, &${buf}_sb); }")
                 impl.appendLine("${ind}else { ktc_sb_append_str(&${buf}_sb, ktc_str(\"null\")); }")
-                impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+                impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
             }
         } else {
             val fmt = printfFmt(baseT) + nl
@@ -1271,7 +1271,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
             impl.appendLine("${ind}char ${buf}[$maxLen];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
             impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
-            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
         } else {
             impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
@@ -1279,7 +1279,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
             impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
             impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
             impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
-            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
         }
         return
     }
@@ -1293,14 +1293,14 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
             impl.appendLine("${ind}char ${buf}[$maxLen];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
             impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
-            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
         } else {
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
             impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
             impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
             impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
             impl.appendLine("${ind}${typeFlatName(indirectBase)}_toString($expr, &${buf}_sb);")
-            impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+            impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
         }
         return
     }
@@ -1311,7 +1311,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         flushPreStmts(ind)
         val tmpStr = tmp()
         impl.appendLine("${ind}ktc_String $tmpStr = $str;")
-        impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${tmpStr}.len, ${tmpStr}.ptr);")
+        impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${tmpStr}.len, ${tmpStr}.ptr);")
         return
     }
 
@@ -1363,7 +1363,7 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
                 }
             }
         }
-        impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+        impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
         return
     }
     // First pass: count
@@ -1386,7 +1386,7 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
             p.sbAppend != null -> impl.appendLine("$ind${p.sbAppend}")
         }
     }
-    impl.appendLine("${ind}printf(\"%.*s$nl\", (int)${buf}_sb.len, ${buf}_sb.ptr);")
+    impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
 }
 
 // ── if (as statement) ────────────────────────────────────────────

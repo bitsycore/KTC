@@ -72,7 +72,7 @@ class EnumUnitTest : TranspilerTestBase() {
             }
         """)
         r.headerContains("extern const test_Main_Color test_Main_Color_values[3];")
-        r.headerContains("extern const int32_t test_Main_Color_values\$len;")
+        r.headerContains("extern const ktc_Int test_Main_Color_values\$len;")
         r.sourceContains("test_Main_Color_values[]")
         r.sourceContains("test_Main_Color_values\$len")
     }
