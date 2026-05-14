@@ -2047,10 +2047,10 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     // Reject non-safe access on nullable receiver (enum/object/companion are never nullable)
     // Allow array types (plain or indirect) where size/index access is safe
     val isEnumOrObj = e.obj is NameExpr && (enums.containsKey(e.obj.name) || objects.containsKey(e.obj.name) || classCompanions.containsKey(e.obj.name))
-    if (recvType != null && recvType.endsWith("?") && !isEnumOrObj) {
-        val baseType = recvType.removeSuffix("?")
-        val isIndirectArray = baseType.endsWith("*") && isArrayType(baseType)
-        if (!isIndirectArray && !isArrayType(baseType)) {
+    if (recvTypeKtc is KtcType.Nullable && !isEnumOrObj) {
+        val innerKtc = recvTypeKtc.inner
+        val isIndirectArray = innerKtc is KtcType.Ptr && innerKtc.inner is KtcType.Arr
+        if (!isIndirectArray && innerKtc !is KtcType.Arr) {
             val recvSrc = (e.obj as? NameExpr)?.name ?: e.obj.toString()
             codegenError("Only safe (?.) access is allowed on a nullable receiver of type '$recvType': $recvSrc.${e.name}")
         }
@@ -2077,7 +2077,7 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     }
     // Array .size → trampolined param uses trampoline struct field; others use $len
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
-    if (e.name == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*"))) return "${recv}\$len"
+    if (e.name == "size" && recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) return "${recv}\$len"
     if (e.name == "length" && recvTypeKtc is KtcType.Str) return "$recv.len"
     if (e.name == "runeLen" && recvTypeKtc is KtcType.Str) return "ktc_str_runeLen($recv)"
     // Enum .ordinal → the int value itself
@@ -2087,7 +2087,7 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     if (e.name == "name" && vOrdinalEnumInfo != null) return "${vOrdinalEnumInfo.flatName}_names[($recv)]"
 
     // Heap<T> / Ptr<T> / Value<T>: p->field (auto-deref through pointer)
-    if (pointerClassName(recvType) != null) {
+    if (recvTypeCoreKtc is KtcType.Ptr) {
         val fieldName = if (currentClass != null && e.obj is ThisExpr) {
             val ci = classes[currentClass]!!
             if (e.name in ci.privateProps) "PRIV_${e.name}" else e.name
@@ -2136,26 +2136,28 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
 
 internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
     val recvType = inferExprType(e.obj)
-    // Warn: ?. on a receiver that is already non-nullable
-    if (recvType != null && !recvType.endsWith("?") && !recvType.endsWith("*")) {
+    val recvTypeKtc = inferExprTypeKtc(e.obj)
+    val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc
+    // Warn: ?. on a receiver that is already non-nullable (and not a pointer)
+    if (recvTypeKtc != null && recvTypeKtc !is KtcType.Nullable && recvTypeCoreKtc !is KtcType.Ptr) {
         val vSrc = (e.obj as? NameExpr)?.name ?: "expression"
         codegenWarning("Safe call '?.' on non-nullable '$recvType' ($vSrc) is redundant; use '.' instead")
     }
     val recv = genExpr(e.obj)
     val recvName = (e.obj as? NameExpr)?.name
     val isThis = e.obj is ThisExpr
-    val isValueNullRecv = recvType != null && recvType.endsWith("?") && isValueNullableType(recvType)
+    val isValueNullRecv = recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)
 
     // Determine the null guard expression
     val guard = if (isThis) {
         if (isValueNullRecv) "\$self.tag == ktc_SOME" else "\$self\$has"
-    } else if (recvName != null && recvType != null) {
+    } else if (recvName != null) {
         when {
-            recvType.endsWith("*?") ->
+            recvTypeKtc is KtcType.Nullable && recvTypeKtc.inner is KtcType.Ptr ->
                 "$recvName != NULL"
 
             isValueNullRecv -> "$recvName.tag == ktc_SOME"
-            recvType.endsWith("?") ->
+            recvTypeKtc is KtcType.Nullable ->
                 "${recvName}\$has"
 
             else -> "${recv}\$has"
@@ -2167,9 +2169,9 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
 
     // Determine field access expression (same logic as genDot but without nullable check)
     val fieldAccess = when {
-        anyIndirectClassName(recvType) != null -> "$recvVal->${e.name}"
-        e.name == "size" && recvType != null && (isArrayType(recvType) || recvType.removeSuffix("?").endsWith("*")) -> "${recvVal}\$len"
-        e.name == "length" && recvType?.removeSuffix("?") == "String" -> "$recvVal.len"
+        recvTypeCoreKtc is KtcType.Ptr -> "$recvVal->${e.name}"
+        e.name == "size" && recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike -> "${recvVal}\$len"
+        e.name == "length" && recvTypeCoreKtc is KtcType.Str -> "$recvVal.len"
         else -> "$recvVal.${e.name}"
     }
 

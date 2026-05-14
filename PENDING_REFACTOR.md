@@ -6,7 +6,7 @@ The KtcType hierarchy (`src/main/kotlin/types/CoreTypes.kt`) is well-designed bu
 used as a thin bridge layer.  The core codegen still operates mostly on raw strings.
 This file tracks remaining work to complete the migration.
 
-Currently: **~20% migrated**.  ~35 string checks eliminated so far (genBin, genMethodCall).
+Currently: **~25% migrated**.  ~50 string checks eliminated so far.
 
 ## Completed (this session)
 
@@ -14,7 +14,7 @@ Currently: **~20% migrated**.  ~35 string checks eliminated so far (genBin, genM
 - Added `isValueNullableKtc(KtcType)` in `CCodeGen.kt`
 - `genBin` comparison/equality path: `endsWith("?")`, `endsWith("*")`, `isValueNullableType`, `pointerClassName`, `== "String"` → KtcType pattern matching
 - `genMethodCall`: `recvType == "String"` (~20 sites), `isArrayType`, hashCode `when(rt)` → KtcType
-- Fixed nullable field type inference in `inferDotType` (appended `?` for nullable fields)
+- `genDot` + `genSafeDot`: `endsWith("?")`, `endsWith("*")`, `isArrayType`, `pointerClassName`, `anyIndirectClassName`, `== "String"` → KtcType (~15 sites)
 
 ## Patterns to eliminate (string → KtcType)
 
