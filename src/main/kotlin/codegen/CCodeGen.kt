@@ -359,7 +359,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         val vImpls = interfaceImplementors[inIfaceName]
         return when
             {
-            vImpls == null || vImpls.isEmpty() -> "$inRecv.obj"                                     // fallback: void* obj
+            vImpls.isNullOrEmpty() -> "$inRecv.obj"                                     // fallback: void* obj
             vImpls.size == 1 -> "(void*)&$inRecv.${typeFlatName(vImpls[0])}_data"                   // single impl: &recv.Class_data
             else -> "(void*)&$inRecv.data"                                                           // multi impl: &recv.data (= union start)
             }
@@ -551,7 +551,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     fun dumpSemantics(): String {
         val sb = StringBuilder()
         sb.appendLine("╔══════════════════════════════════════════════════╗")
-        sb.appendLine("║  Semantic Analysis  —  ${file.sourceFile ?: file.pkg ?: "unknown"}".padEnd(49) + "║")
+        sb.appendLine("║  Semantic Analysis  —  ${file.sourceFile}".padEnd(49) + "║")
         sb.appendLine("╚══════════════════════════════════════════════════╝")
         sb.appendLine()
 
@@ -635,7 +635,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
             for ((name, oi) in objects) {
                 sb.appendLine("  object $name")
                 for ((pn, pt) in oi.props) {
-                    sb.appendLine("    val $pn: ${pt}")
+                    sb.appendLine("    val $pn: $pt")
                 }
                 for (m in oi.methods) {
                     val ret = m.returnType?.let { ": ${typeRefToStr(it)}" } ?: ""
@@ -854,13 +854,13 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 // Emit companion objects declared inside this class
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
                     hdr.appendLine()
-                    emitObject(ObjectDecl("${d.name}\$${vMember.name}", vMember.members))
+                    emitObject(ObjectDecl("${d.name}$${vMember.name}", vMember.members))
                 }
                 // Emit nested classes recursively
                 fun emitNested(parentOriginal: ClassDecl, parentFlatName: String) {
                     for (nested in parentOriginal.members.filterIsInstance<ClassDecl>()) {
                         if (nested.typeParams.isEmpty()) {
-                            val flatName = "$parentFlatName\$${nested.name}"
+                            val flatName = "$parentFlatName$${nested.name}"
                             hdr.appendLine()
                             emitClass(ClassDecl(flatName, nested.isData,
                                 nested.ctorParams, nested.members, nested.initBlocks,
@@ -899,7 +899,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         // Forward-declare all monomorphized generic interface vtable structs so that
         // class _as_ declarations can reference them before the full vtable definition.
         var emittedMonoFwd = false
-        for ((name, info) in interfaces) {
+        for ((name, _) in interfaces) {
             val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
             if (isMonomorphized) {
                 val cName = typeFlatName(name)
@@ -1066,7 +1066,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                         classes[d.name]?.pkg = fpfx  // set pkg on ClassInfo
                         // Register companion object prefix
                         for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                            objects["${d.name}\$${vMember.name}"]?.pkg = fpfx  // set pkg on ObjInfo
+                            objects["${d.name}$${vMember.name}"]?.pkg = fpfx  // set pkg on ObjInfo
                         }
                     }
                     is EnumDecl -> enums[d.name]?.pkg = fpfx
@@ -1095,7 +1095,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     classes[d.name]?.pkg = prefix  // override with current file prefix
                     // Register companion object prefix
                     for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                        objects["${d.name}\$${vMember.name}"]?.pkg = prefix  // sync pkg
+                        objects["${d.name}$${vMember.name}"]?.pkg = prefix  // sync pkg
                     }
                 }
                 is EnumDecl -> enums[d.name]?.pkg = prefix
@@ -1215,14 +1215,14 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 }
                 // Collect companion objects declared inside this class
                 for (vMember in d.members.filterIsInstance<ObjectDecl>()) {
-                    val vCompanionSynthName = "${d.name}\$${vMember.name}" // e.g. "Foo$Companion"
+                    val vCompanionSynthName = "${d.name}$${vMember.name}" // e.g. "Foo$Companion"
                     classCompanions[d.name] = vCompanionSynthName
                     collectDecl(ObjectDecl(vCompanionSynthName, vMember.members, vMember.annotations))
                 }
                 // Collect nested classes/interfaces/enums (namespacing only — prefix with parent)
                 val nestedClasses = d.members.filterIsInstance<ClassDecl>()
                 for (nested in nestedClasses) {
-                    val nestedName = "${d.name}\$${nested.name}"  // e.g. "Outer$Inner"
+                    val nestedName = "${d.name}$${nested.name}"  // e.g. "Outer$Inner"
                     collectDecl(ClassDecl(nestedName, nested.isData, nested.ctorParams, nested.members,
                         nested.initBlocks, nested.superInterfaces, nested.typeParams, nested.secondaryCtors))
                 }
@@ -1284,7 +1284,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 }
                 // Collect nested classes inside object (namespacing with parent prefix)
                 for (nested in d.members.filterIsInstance<ClassDecl>()) {
-                    val nestedName = "${d.name}\$${nested.name}"  // e.g. "Sha256$Context"
+                    val nestedName = "${d.name}$${nested.name}"  // e.g. "Sha256$Context"
                     collectDecl(ClassDecl(nestedName, nested.isData, nested.ctorParams, nested.members,
                         nested.initBlocks, nested.superInterfaces, nested.typeParams, nested.secondaryCtors))
                 }

@@ -65,10 +65,17 @@ fun main(args: Array<String>) {
 
     // ── Lex & Parse all files ────────────────────────────────────────
     data class ParsedSource(val file: File, val ast: KtFile, val sourceLines: List<String>)
+
     val parsedFiles = mutableListOf<ParsedSource>()
 
     // Collect raw sources first for infix prescan, then parse
-    data class RawSource(val vFile: File, val vName: String, val vSource: String, val vIsStdlib: Boolean) // file + text + origin flag
+    data class RawSource(
+        val vFile: File,
+        val vName: String,
+        val vSource: String,
+        val vIsStdlib: Boolean
+    ) // file + text + origin flag
+
     val vRawSources = mutableListOf<RawSource>() // all sources before parsing
 
     // Collect stdlib .kt files from resources
@@ -83,12 +90,14 @@ fun main(args: Array<String>) {
                     .map { it.name.removePrefix("stdlib/") }
                     .toList()
             }
+
             "file" -> {
                 File(stdlibDir.toURI()).listFiles()
                     ?.filter { it.name.endsWith(".kt") }
                     ?.map { it.name }
                     ?: emptyList()
             }
+
             else -> emptyList()
         }
         for (name in stdlibFiles.sorted()) {
@@ -141,7 +150,12 @@ fun main(args: Array<String>) {
         }
         val lastPs = parsedFiles.last()
         try {
-            val gen = CCodeGen(lastPs.ast, allAsts, lastPs.sourceLines, memTrack = false, sourceFileName = lastPs.ast.sourceFile.ifEmpty { lastPs.file.name })
+            val gen = CCodeGen(
+                lastPs.ast,
+                allAsts,
+                lastPs.sourceLines,
+                memTrack = false,
+                sourceFileName = lastPs.ast.sourceFile.ifEmpty { lastPs.file.name })
             gen.collectAndScan()
             println(gen.dumpSemantics())
         } catch (e: Exception) {
@@ -177,7 +191,13 @@ fun main(args: Array<String>) {
 
         val output: COutput
         try {
-            output = CCodeGen(mergedFile, allAsts, mergedSourceLines, memTrack = memTrack, sourceFileName = srcName).generate()
+            output = CCodeGen(
+                mergedFile,
+                allAsts,
+                mergedSourceLines,
+                memTrack = memTrack,
+                sourceFileName = srcName
+            ).generate()
         } catch (e: Exception) {
             System.err.println("CodeGen error in '$srcName': ${e.message}")
             exitProcess(1)
@@ -246,29 +266,36 @@ private fun dumpDecl(d: Decl, depth: Int): String {
             sb.appendLine("${id}${op}fun $recv${d.name}$tps($p)$r")
             if (d.body != null) sb.append(dumpBlock(d.body, depth + 1))
         }
+
         is ClassDecl -> {
             val tps = if (d.typeParams.isNotEmpty()) "<${d.typeParams.joinToString(", ")}>" else ""
             val ds = if (d.isData) "data " else ""
-            val ifs = if (d.superInterfaces.isNotEmpty()) " : ${d.superInterfaces.joinToString(", ") { dumpTypeRef(it) }}" else ""
+            val ifs =
+                if (d.superInterfaces.isNotEmpty()) " : ${d.superInterfaces.joinToString(", ") { dumpTypeRef(it) }}" else ""
             sb.appendLine("${id}${ds}class ${d.name}$tps$ifs")
             for (cp in d.ctorParams) sb.appendLine("${indent(depth + 1)}ctor ${dumpCtorParam(cp)}")
             for (m in d.members) sb.append(dumpDecl(m, depth + 1))
             for (init in d.initBlocks) sb.append(dumpBlock(init, depth + 1, "init"))
         }
+
         is EnumDecl -> {
             sb.appendLine("${id}enum ${d.name} { ${d.entries.joinToString(", ")} }")
         }
+
         is InterfaceDecl -> {
             val tps = if (d.typeParams.isNotEmpty()) "<${d.typeParams.joinToString(", ")}>" else ""
-            val ifs = if (d.superInterfaces.isNotEmpty()) " : ${d.superInterfaces.joinToString(", ") { dumpTypeRef(it) }}" else ""
+            val ifs =
+                if (d.superInterfaces.isNotEmpty()) " : ${d.superInterfaces.joinToString(", ") { dumpTypeRef(it) }}" else ""
             sb.appendLine("${id}interface ${d.name}$tps$ifs")
             for (p in d.properties) sb.append(dumpDecl(p, depth + 1))
             for (m in d.methods) sb.append(dumpDecl(m, depth + 1))
         }
+
         is ObjectDecl -> {
             sb.appendLine("${id}object ${d.name}")
             for (m in d.members) sb.append(dumpDecl(m, depth + 1))
         }
+
         is PropDecl -> {
             val mut = if (d.mutable) "var" else "val"
             val tp = if (d.type != null) ": ${dumpTypeRef(d.type)}" else ""
@@ -299,7 +326,17 @@ private fun dumpTypeRef(t: TypeRef): String {
         "($ps) -> ${dumpTypeRef(t.funcReturn!!)}"
     } else ""
     val ann = if (t.annotations.isNotEmpty()) {
-        t.annotations.joinToString(" ") { "@${it.name}${if (it.args.isNotEmpty()) "(${it.args.joinToString(", ") { dumpExpr(it) }})" else ""}" } + " "
+        t.annotations.joinToString(" ") {
+            "@${it.name}${
+                if (it.args.isNotEmpty()) "(${
+                    it.args.joinToString(", ") {
+                        dumpExpr(
+                            it
+                        )
+                    }
+                })" else ""
+            }"
+        } + " "
     } else ""
     return "$ann${t.name}$tps$fn$nll"
 }
@@ -325,27 +362,32 @@ private fun dumpStmt(s: Stmt, depth: Int): String {
             val init = if (s.init != null) " = ${dumpExpr(s.init)}" else ""
             sb.appendLine("${id}$mut ${s.name}$tp$init")
         }
+
         is AssignStmt -> sb.appendLine("${id}${dumpExpr(s.target)} ${s.op} ${dumpExpr(s.value)}")
         is ReturnStmt -> sb.appendLine("${id}return${if (s.value != null) " ${dumpExpr(s.value)}" else ""}")
         is ForStmt -> {
             sb.appendLine("${id}for (${s.varName} in ${dumpExpr(s.iter)})")
             sb.append(dumpBlock(s.body, depth))
         }
+
         is WhileStmt -> {
             sb.appendLine("${id}while (${dumpExpr(s.cond)})")
             sb.append(dumpBlock(s.body, depth))
         }
+
         is DoWhileStmt -> {
             sb.appendLine("${id}do")
             sb.append(dumpBlock(s.body, depth))
             sb.appendLine("${id}while (${dumpExpr(s.cond)})")
         }
+
         is BreakStmt -> sb.appendLine("${id}break")
         is ContinueStmt -> sb.appendLine("${id}continue")
         is DeferStmt -> {
             sb.appendLine("${id}defer")
             sb.append(dumpBlock(s.body, depth))
         }
+
         is CommentStmt -> sb.appendLine("${id}comment ${s.text}")
     }
     return sb.toString()
@@ -361,7 +403,14 @@ private fun dumpExpr(e: Expr): String = when (e) {
     is BoolLit -> "${e.value}"
     is CharLit -> "'${e.value}'"
     is StrLit -> "\"${e.value}\""
-    is StrTemplateExpr -> "\"${e.parts.joinToString("") { when (it) { is LitPart -> it.text; is ExprPart -> "\${${dumpExpr(it.expr)}}" } }}\""
+    is StrTemplateExpr -> "\"${
+        e.parts.joinToString("") {
+            when (it) {
+                is LitPart -> it.text; is ExprPart -> "\${${dumpExpr(it.expr)}}"
+            }
+        }
+    }\""
+
     is NullLit -> "null"
     is NameExpr -> e.name
     is ThisExpr -> "this"
@@ -375,6 +424,7 @@ private fun dumpExpr(e: Expr): String = when (e) {
         val args = e.args.joinToString(", ") { if (it.isSpread) "*${dumpExpr(it.expr)}" else dumpExpr(it.expr) }
         "${dumpExpr(e.callee)}$tas($args)"
     }
+
     is DotExpr -> "${dumpExpr(e.obj)}.${e.name}"
     is SafeDotExpr -> "${dumpExpr(e.obj)}?.${e.name}"
     is IndexExpr -> "${dumpExpr(e.obj)}[${dumpExpr(e.index)}]"
@@ -388,6 +438,7 @@ private fun dumpExpr(e: Expr): String = when (e) {
         for (s in e.then.stmts) ts.append(dumpStmt(s, 0))
         "if (${dumpExpr(e.cond)}) { ${ts.toString().trim()} }$els"
     }
+
     is WhenExpr -> {
         val brs = e.branches.joinToString(" ") { b ->
             val conds = if (b.conds == null) "else" else b.conds.joinToString(", ") { dumpWhenCond(it) }
@@ -398,6 +449,7 @@ private fun dumpExpr(e: Expr): String = when (e) {
         val sub = if (e.subject != null) "(${dumpExpr(e.subject)})" else ""
         "when$sub { $brs }"
     }
+
     is NotNullExpr -> "${dumpExpr(e.expr)}!!"
     is ElvisExpr -> "(${dumpExpr(e.left)} ?: ${dumpExpr(e.right)})"
     is IsCheckExpr -> "${dumpExpr(e.expr)} ${if (e.negated) "!is" else "is"} ${dumpTypeRef(e.type)}"

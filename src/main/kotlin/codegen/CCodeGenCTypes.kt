@@ -1,6 +1,10 @@
 package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
+import com.bitsycore.ktc.codegen.mapping.arrayElementCType
+import com.bitsycore.ktc.codegen.mapping.primitiveArraySet
+import com.bitsycore.ktc.codegen.mapping.primitiveToArrayOptionalType
+import com.bitsycore.ktc.codegen.mapping.primitiveToArrayType
 import com.bitsycore.ktc.types.BuiltinTypeDef
 import com.bitsycore.ktc.types.KtcType
 import com.bitsycore.ktc.types.TypeDef
@@ -16,12 +20,11 @@ import com.bitsycore.ktc.types.TypeDef
  * Type resolution follows [resolveTypeName] → [resolveTypeNameStr] → [resolveTypeNameInnerStr]:
  *   - Primitives: Byte → ktc_Byte, Int → ktc_Int, ...
  *   - Arrays: ByteArray → ktc_Byte*, Array<Vec2> → Vec2Array → game_Vec2*
- *   - Nullable: Int? → ktc_Int_Optional (via [optCTypeName])
+ *   - Nullable: Int? → ktc_Int_Optional (via [com.bitsycore.ktc.codegen.CCodeGen.optCTypeName])
  *   - Pointers: @Ptr T → T*
  *   - Function types: (P1,P2)->R → Fun(P1,P2)->R (stored as string key)
  *   - Generics: MutableList<Int> → MutableList_Int (via mangledGenericName)
  *   - Pair/Triple/Tuple: Pair<Int,String> → ktc_Pair_Int_String
- *   - Classes: game_Vec2 → game_Vec2 (via [pfx])
  *
  * ## Main entry points:
  *
@@ -36,11 +39,10 @@ import com.bitsycore.ktc.types.TypeDef
  *   [expandCallArgs]         — call args → C arg list string
  *
  *   (helpers) [isArrayType], [isRawArrayTypeRef], [isSizedArrayTypeRef],
- *             [arrayElementCType], [arrayElementKtType],
- *             [optCTypeName], [optNone], [optSome],
- *             [isValueNullableType], [isFuncType], [parseFuncType], [cFuncPtrDecl],
- *             [defaultVal], [hasSizeAnnotation], [getSizeAnnotation],
- *             [ensurePairType], [ensureTripleType]
+ *             [arrayElementCType], [com.bitsycore.ktc.codegen.mapping.arrayElementKtType],
+ *             [com.bitsycore.ktc.codegen.CCodeGen.optCTypeName], [com.bitsycore.ktc.codegen.CCodeGen.optNone], [com.bitsycore.ktc.codegen.CCodeGen.optSome],
+ *             [com.bitsycore.ktc.codegen.CCodeGen.isValueNullableType], [com.bitsycore.ktc.codegen.CCodeGen.isFuncType], [com.bitsycore.ktc.codegen.CCodeGen.parseFuncType], [com.bitsycore.ktc.codegen.CCodeGen.cFuncPtrDecl],
+ *             [defaultVal], [hasSizeAnnotation], [getSizeAnnotation]
  *
  *   (printf) [printfFmt], [printfArg], [escapeC], [escapeStr]
  *
@@ -55,174 +57,133 @@ import com.bitsycore.ktc.types.TypeDef
 
 // ═══════════════════════════ C type mapping ═══════════════════════
 
-/* Expand ctor props: array → (T* name, ktc_Int name$len), nullable → OptT name. */
+/** Expand ctor props: array → (T* name, ktc_Int name$len), nullable → OptT name. */
 internal fun CCodeGen.expandCtorParams(inProps: List<PropertyDef>): String {
-	val vParts = mutableListOf<String>() // accumulated C parameter declarations
-	for (vProp in inProps)
-		{
-		val vName = vProp.name                     // parameter name
-		val vType = vProp.typeRef                  // parameter type
-		val vKtc  = resolveTypeName(vType)          // KtcType (with full func param info)
-		if (vKtc is KtcType.Func)
-			{
-			vParts += cFuncPtrDecl(vKtc, vName)
-			}
-		else if (vKtc.isArrayLike)
-			{
-			if (hasSizeAnnotation(vType))
-				{
-				vParts += "${cTypeStr(vKtc)} $vName"
-				}
-			else
-				{
-				vParts += "${cTypeStr(vKtc)} $vName"
-				vParts += "ktc_Int ${vName}\$len"
-				}
-			}
-		else if (vType.nullable)
-			{
-			vParts += "${optCTypeName(vKtc.toInternalStr)} $vName"
-			}
-		else
-			{
-			vParts += "${cTypeStr(vKtc)} $vName"
-			}
-		}
-	return vParts.joinToString(", ")
-	}
+    val vParts = mutableListOf<String>() // accumulated C parameter declarations
+    for (vProp in inProps) {
+        val vName = vProp.name                     // parameter name
+        val vType = vProp.typeRef                  // parameter type
+        val vKtc = resolveTypeName(vType)          // KtcType (with full func param info)
+        if (vKtc is KtcType.Func) {
+            vParts += cFuncPtrDecl(vKtc, vName)
+        } else if (vKtc.isArrayLike) {
+            if (hasSizeAnnotation(vType)) {
+                vParts += "${cTypeStr(vKtc)} $vName"
+            } else {
+                vParts += "${cTypeStr(vKtc)} $vName"
+                vParts += "ktc_Int ${vName}\$len"
+            }
+        } else if (vType.nullable) {
+            vParts += "${optCTypeName(vKtc.toInternalStr)} $vName"
+        } else {
+            vParts += "${cTypeStr(vKtc)} $vName"
+        }
+    }
+    return vParts.joinToString(", ")
+}
 
 internal fun CCodeGen.cType(t: TypeRef): String = cTypeStr(resolveTypeName(t))
 
-// Emit alloca+memcpy copies for all variable array params and record them as trampolined.
-/* Emit alloca+memcpy copies for all variable array params and record them as trampolined. */
+/** Emit alloca+memcpy copies for all variable array params and record them as trampolined. */
 internal fun CCodeGen.emitArrayParamCopies(inParams: List<Param>, inInd: String) {
-	var vAny = false // whether any trampoline was emitted
-	for (vP in inParams)
-		{
-		if (vP.isVararg) continue
-		// Use isRawArrayTypeRef to identify trampoline-passed arrays (not @Ptr, not @Size)
-		if (!isRawArrayTypeRef(vP.type)) continue
-		// Both nullable and non-nullable array params use ktc_ArrayTrampoline.
-		// Non-nullable: copy unconditionally. Nullable: copy only when data != NULL.
-		if (!vAny)
-			{
-			impl.appendLine("${inInd}// ── trampoline array start ──")
-			vAny = true
-			}
-		val vElem      = resolveTypeName(vP.type).asArr!!.elem            // element KtcType
-		val vElemCType = if (vElem is KtcType.Nullable)                    // Optional for nullable element types
-			optCTypeName(vElem.inner.toInternalStr)
-		else
-			cTypeStr(vElem)                                                // plain C type for non-nullable
-		if (vP.type.nullable)
-			{
-			impl.appendLine("${inInd}$vElemCType* local$${vP.name} = NULL;")
-			impl.appendLine("${inInd}if (${vP.name}.data != NULL) {")
-			impl.appendLine("${inInd}    local$${vP.name} = ($vElemCType*)ktc_alloca(sizeof($vElemCType) * ${vP.name}.size);")
-			impl.appendLine("${inInd}    memcpy(local$${vP.name}, ${vP.name}.data, sizeof($vElemCType) * ${vP.name}.size);")
-			impl.appendLine("${inInd}}")
-			}
-		else
-			{
-			impl.appendLine("${inInd}$vElemCType* local$${vP.name} = ($vElemCType*)ktc_alloca(sizeof($vElemCType) * ${vP.name}.size);")
-			impl.appendLine("${inInd}memcpy(local$${vP.name}, ${vP.name}.data, sizeof($vElemCType) * ${vP.name}.size);")
-			}
-		trampolinedParams += vP.name
-		}
-	if (vAny) impl.appendLine("${inInd}// ── trampoline array end ──")
-	}
-
-/*
-Returns a trailing C comment reflecting Kotlin pointer nullability.
-" /* nullable */" for Ptr<T>? (NULL is valid), " /* notnull */" for Ptr<T>.
-Returns "" for non-pointer types so the call site is always unconditional.
-*/
-internal fun CCodeGen.ptrNullComment(inResolved: String): String = when {
-    inResolved.endsWith("*?") -> " /* nullable */"
-    inResolved.endsWith("*")  -> " /* notnull */"
-    else -> ""
+    var vAny = false // whether any trampoline was emitted
+    for (vP in inParams) {
+        if (vP.isVararg) continue
+        // Use isRawArrayTypeRef to identify trampoline-passed arrays (not @Ptr, not @Size)
+        if (!isRawArrayTypeRef(vP.type)) continue
+        // Both nullable and non-nullable array params use ktc_ArrayTrampoline.
+        // Non-nullable: copy unconditionally. Nullable: copy only when data != NULL.
+        if (!vAny) {
+            impl.appendLine("${inInd}// ── trampoline array start ──")
+            vAny = true
+        }
+        val vElem = resolveTypeName(vP.type).asArr!!.elem            // element KtcType
+        val vElemCType = if (vElem is KtcType.Nullable)                    // Optional for nullable element types
+            optCTypeName(vElem.inner.toInternalStr)
+        else
+            cTypeStr(vElem)                                                // plain C type for non-nullable
+        if (vP.type.nullable) {
+            impl.appendLine("${inInd}$vElemCType* local$${vP.name} = NULL;")
+            impl.appendLine("${inInd}if (${vP.name}.data != NULL) {")
+            impl.appendLine("$inInd    local$${vP.name} = ($vElemCType*)ktc_alloca(sizeof($vElemCType) * ${vP.name}.size);")
+            impl.appendLine("$inInd    memcpy(local$${vP.name}, ${vP.name}.data, sizeof($vElemCType) * ${vP.name}.size);")
+            impl.appendLine("${inInd}}")
+        } else {
+            impl.appendLine("${inInd}$vElemCType* local$${vP.name} = ($vElemCType*)ktc_alloca(sizeof($vElemCType) * ${vP.name}.size);")
+            impl.appendLine("${inInd}memcpy(local$${vP.name}, ${vP.name}.data, sizeof($vElemCType) * ${vP.name}.size);")
+        }
+        trampolinedParams += vP.name
+    }
+    if (vAny) impl.appendLine("${inInd}// ── trampoline array end ──")
 }
+
 // KtcType overload
-internal fun CCodeGen.ptrNullComment(kt: KtcType): String = when {
-    kt is KtcType.Nullable && kt.inner is KtcType.Ptr -> " /* nullable */"
-    kt is KtcType.Ptr -> " /* notnull */"
+internal fun ptrNullComment(kt: KtcType): String = when (kt) {
+    is KtcType.Nullable if kt.inner is KtcType.Ptr -> " /** nullable */"
+    is KtcType.Ptr -> " /** notnull */"
     else -> ""
 }
 
-/* Expand a parameter list: variable array params → ktc_ArrayTrampoline, @Size arrays → T*, nullable params → OptT name. */
+/** Expand a parameter list: variable array params → ktc_ArrayTrampoline, @Size arrays → T*, nullable params → OptT name. */
 internal fun CCodeGen.expandParams(inParams: List<Param>): String {
-	val vParts = mutableListOf<String>() // accumulated C parameter declarations
-	for (vP in inParams)
-		{
-		val vKtc = resolveTypeName(vP.type)  // KtcType (full func param info preserved)
-		if (vP.isVararg)
-			{
-			vParts += "${cTypeStr(vKtc)}* ${vP.name}"
-			vParts += "ktc_Int ${vP.name}\$len"
-			}
-		else if (vKtc is KtcType.Func)
-			{
-			vParts += cFuncPtrDecl(vKtc, vP.name)
-			}
-		else if (vKtc is KtcType.Ptr && vP.type.annotations.any { it.name == "Ptr" })
-			{
-			// Explicitly @Ptr-annotated: raw pointer; nullability lives in vP.type.nullable
-			// (typed arrays — IntArray, IntOptArray — also resolve to Ptr but are handled by isArrayLike below)
-			val vNullComment = if (vP.type.nullable) " /* nullable */" else " /* notnull */" // null comment
-			vParts += "${cTypeStr(vKtc)} ${vP.name}$vNullComment"
-			// @Ptr arrays add $len companion (unless sized — size known at compile time)
-			val vInnerArr = vKtc.inner.asArr                                                  // Arr node if Ptr(Arr)
-			if (vInnerArr != null && vInnerArr.sized == null) vParts += "ktc_Int ${vP.name}\$len"
-			}
-		else if (vKtc.isArrayLike)
-			{
-			if (hasSizeAnnotation(vP.type))
-				{
-				// @Size(N) fixed array — passed as raw pointer (size known at compile time)
-				vParts += "${cTypeStr(vKtc)} ${vP.name}"
-				}
-			else
-				{
-				// Both nullable and non-nullable arrays use ktc_ArrayTrampoline for value semantics.
-				// Nullable: data == NULL means the array argument was null.
-				val vNullComment  = if (vP.type.nullable) " /* nullable */" else "" // null comment
-				val vArrElem      = vKtc.asArr!!.elem                                // element KtcType
-				val vElemCType    = if (vArrElem is KtcType.Nullable)                // Optional for nullable elem
-					optCTypeName(vArrElem.inner.toInternalStr)
-				else
-					cTypeStr(vArrElem)                                               // plain C type
-				vParts += "ktc_ArrayTrampoline ${vP.name}$vNullComment /* ${vElemCType}[] */"
-				}
-			}
-		else if (vP.type.nullable)
-			{
-			val vNullComment = if ((vKtc as? KtcType.User)?.baseName == "Any") " /* nullable */" else "" // null comment
-			vParts += "${optCTypeName(vKtc.toInternalStr)} ${vP.name}$vNullComment"
-			}
-		else
-			{
-			vParts += "${cTypeStr(vKtc)} ${vP.name}"
-			}
-		}
-	return vParts.joinToString(", ")
-	}
+    val vParts = mutableListOf<String>() // accumulated C parameter declarations
+    for (vP in inParams) {
+        val vKtc = resolveTypeName(vP.type)  // KtcType (full func param info preserved)
+        if (vP.isVararg) {
+            vParts += "${cTypeStr(vKtc)}* ${vP.name}"
+            vParts += "ktc_Int ${vP.name}\$len"
+        } else if (vKtc is KtcType.Func) {
+            vParts += cFuncPtrDecl(vKtc, vP.name)
+        } else if (vKtc is KtcType.Ptr && vP.type.annotations.any { it.name == "Ptr" }) {
+            // Explicitly @Ptr-annotated: raw pointer; nullability lives in vP.type.nullable
+            // (typed arrays — IntArray, IntOptArray — also resolve to Ptr but are handled by isArrayLike below)
+            val vNullComment = if (vP.type.nullable) " /** nullable */" else " /** notnull */" // null comment
+            vParts += "${cTypeStr(vKtc)} ${vP.name}$vNullComment"
+            // @Ptr arrays add $len companion (unless sized — size known at compile time)
+            val vInnerArr = vKtc.inner.asArr                                                  // Arr node if Ptr(Arr)
+            if (vInnerArr != null && vInnerArr.sized == null) vParts += "ktc_Int ${vP.name}\$len"
+        } else if (vKtc.isArrayLike) {
+            if (hasSizeAnnotation(vP.type)) {
+                // @Size(N) fixed array — passed as raw pointer (size known at compile time)
+                vParts += "${cTypeStr(vKtc)} ${vP.name}"
+            } else {
+                // Both nullable and non-nullable arrays use ktc_ArrayTrampoline for value semantics.
+                // Nullable: data == NULL means the array argument was null.
+                val vNullComment = if (vP.type.nullable) " /** nullable */" else "" // null comment
+                val vArrElem = vKtc.asArr!!.elem                                // element KtcType
+                val vElemCType = if (vArrElem is KtcType.Nullable)                // Optional for nullable elem
+                    optCTypeName(vArrElem.inner.toInternalStr)
+                else
+                    cTypeStr(vArrElem)                                               // plain C type
+                vParts += "ktc_ArrayTrampoline ${vP.name}$vNullComment /** ${vElemCType}[] */"
+            }
+        } else if (vP.type.nullable) {
+            val vNullComment =
+                if ((vKtc as? KtcType.User)?.baseName == "Any") " /** nullable */" else "" // null comment
+            vParts += "${optCTypeName(vKtc.toInternalStr)} ${vP.name}$vNullComment"
+        } else {
+            vParts += "${cTypeStr(vKtc)} ${vP.name}"
+        }
+    }
+    return vParts.joinToString(", ")
+}
 
 internal fun CCodeGen.cTypeStr(t: String): String {
     val ktc = parseResolvedTypeName(t)
     return cTypeStr(ktc)
 }
 
-/* Resolve a TypeRef to its internal string type name (legacy bridge). */
+/** Resolve a TypeRef to its internal string type name (legacy bridge). */
 internal fun CCodeGen.resolveTypeNameStr(t: TypeRef?): String {
-	if (t == null) return "Int"
-	val vSubstituted = substituteTypeParams(t)   // type-param substituted copy
-	// RawArray<T> → T* (raw pointer, no $len companion)
-	if (vSubstituted.name == "RawArray" && vSubstituted.typeArgs.isNotEmpty())
-		return resolveTypeNameStr(vSubstituted.typeArgs[0]) + "*"
-	val vBase = resolveTypeNameInnerStr(vSubstituted) // raw resolved name
-	val vIsPtr = vSubstituted.annotations.any { it.name == "Ptr" } // has @Ptr annotation
-	return if (vIsPtr) "${vBase}*" else vBase
-	}
+    if (t == null) return "Int"
+    val vSubstituted = substituteTypeParams(t)   // type-param substituted copy
+    // RawArray<T> → T* (raw pointer, no $len companion)
+    if (vSubstituted.name == "RawArray" && vSubstituted.typeArgs.isNotEmpty())
+        return resolveTypeNameStr(vSubstituted.typeArgs[0]) + "*"
+    val vBase = resolveTypeNameInnerStr(vSubstituted) // raw resolved name
+    val vIsPtr = vSubstituted.annotations.any { it.name == "Ptr" } // has @Ptr annotation
+    return if (vIsPtr) "${vBase}*" else vBase
+}
 
 internal fun CCodeGen.typeRefToStr(t: TypeRef?): String {
     if (t == null) return "Unit"
@@ -245,127 +206,97 @@ internal fun CCodeGen.substituteTypeParams(t: TypeRef): TypeRef {
     } else t
 }
 
-/* Internal string-based type resolution after @Ptr stripping (legacy bridge). */
+/** Internal string-based type resolution after @Ptr stripping (legacy bridge). */
 internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
-	// Function type: (P1, P2) -> R → "Fun(P1,P2)->R"
-	// Receiver function type: T.(P1) -> R → "Fun(T|P1)->R"
-	if (t.funcParams != null)
-		{
-		val vReceiver = t.funcReceiver?.let { resolveTypeNameStr(it) + "|" } ?: "" // optional receiver prefix
-		val vParams = t.funcParams.joinToString(",") { resolveTypeNameStr(it) }     // comma-joined param types
-		val vRet = resolveTypeNameStr(t.funcReturn)                                  // return type string
-		return "Fun($vReceiver$vParams)->$vRet"
-		}
-	// Nested class: Outer.Inner → Outer$Inner
-	if (t.name.contains('.') && !t.name.startsWith("ktc_"))
-		{
-		val vFlatName = t.name.replace('.', '$') // dot-to-dollar flattened name
-		if (classes.containsKey(vFlatName) || genericClassDecls.containsKey(vFlatName) || interfaces.containsKey(vFlatName))
-			{
-			val vSynthetic = TypeRef(vFlatName, t.nullable, t.typeArgs, t.funcParams, t.funcReturn, t.funcReceiver, t.annotations) // synthetic flattened TypeRef
-			return resolveTypeNameInnerStr(vSynthetic)
-			}
-		}
-	// User-defined generic class takes priority over built-in aliases
-	if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric)
-		{
-		val vTypeArgNames = t.typeArgs.map { it.name } // raw type argument names
-		// Don't register as concrete instantiation if any type arg is still a type parameter
-		if (vTypeArgNames.any { it in allGenericTypeParamNames })
-			return mangledGenericName(t.name, vTypeArgNames)
-		return recordGenericInstantiation(t.name, vTypeArgNames)
-		}
-	// User-defined generic interface takes priority over built-in aliases
-	if (t.typeArgs.isNotEmpty() && genericIfaceDecls.containsKey(t.name))
-		{
-		val vTypeArgNames = t.typeArgs.map { resolveTypeNameStr(it) } // resolved type argument names
-		return mangledGenericName(t.name, vTypeArgNames)
-		}
-	// Intrinsic StringBuffer → ktc_StrBuf (only when no user-defined class named StringBuffer)
-	if (t.name == "StringBuffer" && t.typeArgs.isEmpty()
-		&& !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer"))
-		return "ktc_StrBuf"
-	if (t.name == "Array" && t.typeArgs.isNotEmpty())
-		{
-		val vElemRef      = t.typeArgs[0]    // element TypeRef
-		val vElem         = vElemRef.name    // element Kotlin type name
-		val vNullableElem = vElemRef.nullable // true for Array<T?>
-		if (vNullableElem)
-			{
-			return when (vElem)
-				{
-				"Byte"    -> "ByteOptArray"
-				"Short"   -> "ShortOptArray"
-				"Int"     -> "IntOptArray"
-				"Long"    -> "LongOptArray"
-				"Float"   -> "FloatOptArray"
-				"Double"  -> "DoubleOptArray"
-				"Boolean" -> "BooleanOptArray"
-				"Char"    -> "CharOptArray"
-				"UByte"   -> "UByteOptArray"
-				"UShort"  -> "UShortOptArray"
-				"UInt"    -> "UIntOptArray"
-				"ULong"   -> "ULongOptArray"
-				"String"  -> "StringOptArray"
-				else      -> { classArrayTypes.add(vElem); "${vElem}OptArray" }
-				}
-			}
-		return when (vElem)
-			{
-			"Byte"    -> "ByteArray"
-			"Short"   -> "ShortArray"
-			"Int"     -> "IntArray"
-			"Long"    -> "LongArray"
-			"Float"   -> "FloatArray"
-			"Double"  -> "DoubleArray"
-			"Boolean" -> "BooleanArray"
-			"Char"    -> "CharArray"
-			"UByte"   -> "UByteArray"
-			"UShort"  -> "UShortArray"
-			"UInt"    -> "UIntArray"
-			"ULong"   -> "ULongArray"
-			"String"  -> "StringArray"
-			else      -> { classArrayTypes.add(vElem); "${vElem}Array" }
-			}
-		}
-	if (t.name == "RawArray" && t.typeArgs.isNotEmpty())
-		return resolveTypeNameStr(t.typeArgs[0]) + "*"
-	// Reject unknown type constructors with args (e.g. Heap<T>, Value<T>)
-	if (t.typeArgs.isNotEmpty()
-		&& !classes.containsKey(t.name)
-		&& !interfaces.containsKey(t.name)
-		&& !genericClassDecls.containsKey(t.name)
-		&& !genericIfaceDecls.containsKey(t.name)
-		&& t.name !in setOf("Array", "Tuple", "RawArray"))
-		codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
-	// Resolve nested class within current object/class scope (e.g., Context → Sha256$Context)
-	if (!classes.containsKey(t.name) && !enums.containsKey(t.name) && !interfaces.containsKey(t.name)
-		&& !genericClassDecls.containsKey(t.name))
-		{
-		val vParent = currentObject ?: currentClass // enclosing class or object
-		if (vParent != null)
-			{
-			val vNestedName = "$vParent\$${t.name}" // candidate nested name
-			if (classes.containsKey(vNestedName) || genericClassDecls.containsKey(vNestedName))
-				return vNestedName
-			}
-		// Scan all objects for nested class (used when calling obj.method() from outside)
-		for (vObj in objects.keys)
-			{
-			val vNestedName = "$vObj\$${t.name}" // candidate nested name
-			if (classes.containsKey(vNestedName) || genericClassDecls.containsKey(vNestedName))
-				return vNestedName
-			}
-		}
-	return t.name
-	}
+    // Function type: (P1, P2) -> R → "Fun(P1,P2)->R"
+    // Receiver function type: T.(P1) -> R → "Fun(T|P1)->R"
+    if (t.funcParams != null) {
+        val vReceiver = t.funcReceiver?.let { resolveTypeNameStr(it) + "|" } ?: "" // optional receiver prefix
+        val vParams = t.funcParams.joinToString(",") { resolveTypeNameStr(it) }     // comma-joined param types
+        val vRet = resolveTypeNameStr(t.funcReturn)                                  // return type string
+        return "Fun($vReceiver$vParams)->$vRet"
+    }
+    // Nested class: Outer.Inner → Outer$Inner
+    if (t.name.contains('.') && !t.name.startsWith("ktc_")) {
+        val vFlatName = t.name.replace('.', '$') // dot-to-dollar flattened name
+        if (classes.containsKey(vFlatName) || genericClassDecls.containsKey(vFlatName) || interfaces.containsKey(
+                vFlatName
+            )
+        ) {
+            val vSynthetic = TypeRef(
+                vFlatName,
+                t.nullable,
+                t.typeArgs,
+                t.funcParams,
+                t.funcReturn,
+                t.funcReceiver,
+                t.annotations
+            ) // synthetic flattened TypeRef
+            return resolveTypeNameInnerStr(vSynthetic)
+        }
+    }
+    // User-defined generic class takes priority over built-in aliases
+    if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {
+        val vTypeArgNames = t.typeArgs.map { it.name } // raw type argument names
+        // Don't register as concrete instantiation if any type arg is still a type parameter
+        if (vTypeArgNames.any { it in allGenericTypeParamNames })
+            return mangledGenericName(t.name, vTypeArgNames)
+        return recordGenericInstantiation(t.name, vTypeArgNames)
+    }
+    // User-defined generic interface takes priority over built-in aliases
+    if (t.typeArgs.isNotEmpty() && genericIfaceDecls.containsKey(t.name)) {
+        val vTypeArgNames = t.typeArgs.map { resolveTypeNameStr(it) } // resolved type argument names
+        return mangledGenericName(t.name, vTypeArgNames)
+    }
+    // Intrinsic StringBuffer → ktc_StrBuf (only when no user-defined class named StringBuffer)
+    if (t.name == "StringBuffer" && t.typeArgs.isEmpty()
+        && !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer")
+    )
+        return "ktc_StrBuf"
+    if (t.name == "Array" && t.typeArgs.isNotEmpty()) {
+        val vElemRef = t.typeArgs[0]    // element TypeRef
+        val vElem = vElemRef.name    // element Kotlin type name
+        val vNullableElem = vElemRef.nullable // true for Array<T?>
+        return if (vNullableElem) primitiveToArrayOptionalType(vElem)
+        else primitiveToArrayType(vElem)
+    }
+    if (t.name == "RawArray" && t.typeArgs.isNotEmpty())
+        return resolveTypeNameStr(t.typeArgs[0]) + "*"
+    // Reject unknown type constructors with args (e.g. Heap<T>, Value<T>)
+    if (t.typeArgs.isNotEmpty()
+        && !classes.containsKey(t.name)
+        && !interfaces.containsKey(t.name)
+        && !genericClassDecls.containsKey(t.name)
+        && !genericIfaceDecls.containsKey(t.name)
+        && t.name !in setOf("Array", "Tuple", "RawArray")
+    )
+        codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
+    // Resolve nested class within current object/class scope (e.g., Context → Sha256$Context)
+    if (!classes.containsKey(t.name) && !enums.containsKey(t.name) && !interfaces.containsKey(t.name)
+        && !genericClassDecls.containsKey(t.name)
+    ) {
+        val vParent = currentObject ?: currentClass // enclosing class or object
+        if (vParent != null) {
+            val vNestedName = "$vParent$${t.name}" // candidate nested name
+            if (classes.containsKey(vNestedName) || genericClassDecls.containsKey(vNestedName))
+                return vNestedName
+        }
+        // Scan all objects for nested class (used when calling obj.method() from outside)
+        for (vObj in objects.keys) {
+            val vNestedName = "$vObj$${t.name}" // candidate nested name
+            if (classes.containsKey(vNestedName) || genericClassDecls.containsKey(vNestedName))
+                return vNestedName
+        }
+    }
+    return t.name
+}
 
 internal fun CCodeGen.defaultVal(t: String): String = when {
     t == "Int" || t == "Long" -> "0"
-    t == "Float"  -> "0.0f"
+    t == "Float" -> "0.0f"
     t == "Double" -> "0.0"
     t == "Boolean" -> "false"
-    t == "Char"   -> "'\\0'"
+    t == "Char" -> "'\\0'"
     t == "String" -> "ktc_str(\"\")"
     t.endsWith("*") || t.endsWith("*?") -> "NULL"
     else -> {
@@ -376,28 +307,23 @@ internal fun CCodeGen.defaultVal(t: String): String = when {
 }
 
 /** True if the internal type name represents an array (IntArray, LongArray, Vec2Array, etc.). Strips pointer/nullable suffixes. */
-internal fun CCodeGen.isArrayType(t: String): Boolean {
+internal fun isArrayType(t: String): Boolean {
     val base = t.removeSuffix("?").removeSuffix("*")
     return base.endsWith("Array")
 }
 
 /** True if the TypeRef is a raw Array<T> or primitive array type (not wrapped in Heap, Ptr, or Value). */
-internal fun CCodeGen.isRawArrayTypeRef(t: TypeRef): Boolean {
+internal fun isRawArrayTypeRef(t: TypeRef): Boolean {
     if (hasSizeAnnotation(t)) return false
     if (t.annotations.any { it.name == "Ptr" }) return false
     if (t.name == "Array") return true
-    if (t.name in setOf(
-        "ByteArray", "ShortArray", "IntArray", "LongArray",
-        "FloatArray", "DoubleArray", "BooleanArray", "CharArray",
-        "UByteArray", "UShortArray", "UIntArray", "ULongArray",
-        "StringArray"
-    )) return true
+    if (t.name in primitiveArraySet) return true
     return false
 }
 
-internal fun CCodeGen.hasSizeAnnotation(t: TypeRef): Boolean = t.annotations.any { it.name == "Size" }
+internal fun hasSizeAnnotation(t: TypeRef): Boolean = t.annotations.any { it.name == "Size" }
 
-internal fun CCodeGen.getSizeAnnotation(t: TypeRef): Int? {
+internal fun getSizeAnnotation(t: TypeRef): Int? {
     val ann = t.annotations.find { it.name == "Size" }
     if (ann != null && ann.args.isNotEmpty()) {
         val arg = ann.args[0]
@@ -408,15 +334,10 @@ internal fun CCodeGen.getSizeAnnotation(t: TypeRef): Int? {
 }
 
 /** True if the TypeRef is an array type WITH @Size(N) annotation (allowed fixed-size array). */
-internal fun CCodeGen.isSizedArrayTypeRef(t: TypeRef): Boolean {
+internal fun isSizedArrayTypeRef(t: TypeRef): Boolean {
     if (!hasSizeAnnotation(t)) return false
     if (t.name == "Array") return true
-    if (t.name in setOf(
-        "ByteArray", "ShortArray", "IntArray", "LongArray",
-        "FloatArray", "DoubleArray", "BooleanArray", "CharArray",
-        "UByteArray", "UShortArray", "UIntArray", "ULongArray",
-        "StringArray"
-    )) return true
+    if (t.name in primitiveArraySet) return true
     return false
 }
 
@@ -451,127 +372,40 @@ internal fun CCodeGen.getSizedArrayReturnElemType(e: CallExpr): String? {
     return null
 }
 
-internal fun CCodeGen.arrayElementCType(arrType: String?): String = when (arrType) {
-    "ByteArray"    -> "ktc_Byte"
-    "ShortArray"   -> "ktc_Short"
-    "IntArray"     -> "ktc_Int"
-    "LongArray"    -> "ktc_Long"
-    "FloatArray"   -> "ktc_Float"
-    "DoubleArray"  -> "ktc_Double"
-    "BooleanArray" -> "ktc_Bool"
-    "CharArray"    -> "ktc_Char"
-    "UByteArray"   -> "ktc_UByte"
-    "UShortArray"  -> "ktc_UShort"
-    "UIntArray"    -> "ktc_UInt"
-    "ULongArray"   -> "ktc_ULong"
-    "StringArray"  -> "ktc_String"
-    "ByteOptArray"    -> "ktc_Byte_Optional"
-    "ShortOptArray"   -> "ktc_Short_Optional"
-    "IntOptArray"     -> "ktc_Int_Optional"
-    "LongOptArray"    -> "ktc_Long_Optional"
-    "FloatOptArray"   -> "ktc_Float_Optional"
-    "DoubleOptArray"  -> "ktc_Double_Optional"
-    "BooleanOptArray" -> "ktc_Bool_Optional"
-    "CharOptArray"    -> "ktc_Char_Optional"
-    "UByteOptArray"   -> "ktc_UByte_Optional"
-    "UShortOptArray"  -> "ktc_UShort_Optional"
-    "UIntOptArray"    -> "ktc_UInt_Optional"
-    "ULongOptArray"   -> "ktc_ULong_Optional"
-    "StringOptArray"  -> "ktc_String_Optional"
-    else -> {
-        if (arrType != null) {
-            // Class array: "Vec2Array" → element type "game_Vec2"
-            if (arrType.endsWith("Array") && arrType.length > 5) {
-                val elem = arrType.removeSuffix("Array") // element type name
-                if (classArrayTypes.contains(elem) || classes.containsKey(elem) || enums.containsKey(elem)) return typeFlatName(elem)
-            }
-            // Nullable-element class array: "Vec2OptArray" → "pkg_Vec2_Optional"
-            if (arrType.endsWith("OptArray") && arrType.length > 8) {
-                val elem = arrType.removeSuffix("OptArray")
-                if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return "${typeFlatName(elem)}_Optional"
-            }
-        }
-        "ktc_Int"
-    }
-}
-
-internal fun CCodeGen.arrayElementKtType(arrType: String?): String = when (arrType) {
-    "ByteArray"    -> "Byte"
-    "ShortArray"   -> "Short"
-    "IntArray"     -> "Int"
-    "LongArray"    -> "Long"
-    "FloatArray"   -> "Float"
-    "DoubleArray"  -> "Double"
-    "BooleanArray" -> "Boolean"
-    "CharArray"    -> "Char"
-    "UByteArray"   -> "UByte"
-    "UShortArray"  -> "UShort"
-    "UIntArray"    -> "UInt"
-    "ULongArray"   -> "ULong"
-    "StringArray"  -> "String"
-    "ByteOptArray"    -> "Byte?"
-    "ShortOptArray"   -> "Short?"
-    "IntOptArray"     -> "Int?"
-    "LongOptArray"    -> "Long?"
-    "FloatOptArray"   -> "Float?"
-    "DoubleOptArray"  -> "Double?"
-    "BooleanOptArray" -> "Boolean?"
-    "CharOptArray"    -> "Char?"
-    "UByteOptArray"   -> "UByte?"
-    "UShortOptArray"  -> "UShort?"
-    "UIntOptArray"    -> "UInt?"
-    "ULongOptArray"   -> "ULong?"
-    "StringOptArray"  -> "String?"
-    else -> {
-        if (arrType != null) {
-            // Class array: "Vec2Array" → element Kotlin type "Vec2"
-            if (arrType.endsWith("Array") && arrType.length > 5) {
-                val elem = arrType.removeSuffix("Array") // element type name
-                if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return elem
-            }
-            // Nullable-element class array: "Vec2OptArray" → "Vec2?"
-            if (arrType.endsWith("OptArray") && arrType.length > 8) {
-                val elem = arrType.removeSuffix("OptArray")
-                if (classArrayTypes.contains(elem) || classes.containsKey(elem)) return "${elem}?"
-            }
-        }
-        "Int"
-    }
-}
-
 // ═══════════════════════════ printf helpers ═══════════════════════
 
 internal fun CCodeGen.printfFmt(t: String): String = when {
-    t == "Byte"    -> "%\" PRId8 \""
-    t == "Short"   -> "%\" PRId16 \""
-    t == "Int"     -> "%\" PRId32 \""
-    t == "Long"    -> "%\" PRId64 \""
-    t == "Float"   -> "%f"
-    t == "Double"  -> "%f"
+    t == "Byte" -> "%\" PRId8 \""
+    t == "Short" -> "%\" PRId16 \""
+    t == "Int" -> "%\" PRId32 \""
+    t == "Long" -> "%\" PRId64 \""
+    t == "Float" -> "%f"
+    t == "Double" -> "%f"
     t == "Boolean" -> "%s"
-    t == "Char"    -> "%c"
-    t == "Rune"    -> "%\" PRId32 \""
-    t == "UByte"   -> "%\" PRIu8 \""
-    t == "UShort"  -> "%\" PRIu16 \""
-    t == "UInt"    -> "%\" PRIu32 \""
-    t == "ULong"   -> "%\" PRIu64 \""
-    t == "String"  -> "%.*s"
+    t == "Char" -> "%c"
+    t == "Rune" -> "%\" PRId32 \""
+    t == "UByte" -> "%\" PRIu8 \""
+    t == "UShort" -> "%\" PRIu16 \""
+    t == "UInt" -> "%\" PRIu32 \""
+    t == "ULong" -> "%\" PRIu64 \""
+    t == "String" -> "%.*s"
     t.endsWith("*") || t.endsWith("*?") -> "%p"
-    t in enums    -> "%.*s"
-    else           -> "%.*s"       // assume toString → ktc_String
+    t in enums -> "%.*s"
+    else -> "%.*s"       // assume toString → ktc_String
 }
 
-internal fun CCodeGen.printfArg(expr: String, t: String): String = when {
-    t == "Boolean" -> "($expr) ? \"true\" : \"false\""
-    t == "String"  -> "(ktc_Int)($expr).len, ($expr).ptr"
-    t in enums -> {
+internal fun CCodeGen.printfArg(expr: String, t: String): String = when (t) {
+    "Boolean" -> "($expr) ? \"true\" : \"false\""
+    "String" -> "(ktc_Int)($expr).len, ($expr).ptr"
+    in enums -> {
         val cName = typeFlatName(t)
         "(ktc_Int)${cName}_names[($expr)].len, ${cName}_names[($expr)].ptr"
     }
+
     else -> expr
 }
 
-internal fun CCodeGen.escapeC(c: Char): String = when (c) {
+internal fun escapeC(c: Char): String = when (c) {
     '\'' -> "\\'"
     '\\' -> "\\\\"
     '\n' -> "\\n"
@@ -581,7 +415,7 @@ internal fun CCodeGen.escapeC(c: Char): String = when (c) {
     else -> c.toString()
 }
 
-internal fun CCodeGen.escapeStr(s: String): String = s
+internal fun escapeStr(s: String): String = s
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
     .replace("\n", "\\n")
@@ -590,50 +424,51 @@ internal fun CCodeGen.escapeStr(s: String): String = s
 
 // ── Typed bridge (KtcType) ──────────────────────────────────────────
 
-/*
+/**
 Primary entry point: resolve a TypeRef to a KtcType.
 Handles function types directly; bridges through resolveTypeNameStr for all others.
-*/
+ */
 internal fun CCodeGen.resolveTypeName(inT: TypeRef?): KtcType {
-	if (inT == null) return KtcType.Prim(KtcType.PrimKind.Int) // default to Int for null TypeRef
-	val vSubstituted = substituteTypeParams(inT)                // apply type param substitutions
-	// Function types: build KtcType.Func directly to preserve param info and receiver
-	if (vSubstituted.funcParams != null) {
-		val vReceiver = vSubstituted.funcReceiver?.let { resolveTypeName(it) }          // extension receiver, or null
-		val vParams = vSubstituted.funcParams.map { resolveTypeName(it) }               // non-receiver params only
-		val vRet = resolveTypeName(vSubstituted.funcReturn)                             // return type
-		return KtcType.Func(vParams, vRet, receiver = vReceiver)
-		}
-	val vResolved = resolveTypeNameStr(inT)                     // string-based resolution (bridge)
-	return parseResolvedTypeName(vResolved, inT)
-	}
+    if (inT == null) return KtcType.Prim(KtcType.PrimKind.Int) // default to Int for null TypeRef
+    val vSubstituted = substituteTypeParams(inT)                // apply type param substitutions
+    // Function types: build KtcType.Func directly to preserve param info and receiver
+    if (vSubstituted.funcParams != null) {
+        val vReceiver = vSubstituted.funcReceiver?.let { resolveTypeName(it) }          // extension receiver, or null
+        val vParams = vSubstituted.funcParams.map { resolveTypeName(it) }               // non-receiver params only
+        val vRet = resolveTypeName(vSubstituted.funcReturn)                             // return type
+        return KtcType.Func(vParams, vRet, receiver = vReceiver)
+    }
+    val vResolved = resolveTypeNameStr(inT)                     // string-based resolution (bridge)
+    return parseResolvedTypeName(vResolved, inT)
+}
 
-/* Convenience extension so TypeRef can self-resolve to KtcType. */
-internal fun TypeRef.resolveKtc(inGen: CCodeGen): KtcType = inGen.resolveTypeName(this)
-
-/* Create KtcType.User by looking up the TypeDef from symbol tables, or creating a BuiltinTypeDef. */
+/** Create KtcType.User by looking up the TypeDef from symbol tables, or creating a BuiltinTypeDef. */
 internal fun CCodeGen.userType(inName: String, inKind: KtcType.UserKind = KtcType.UserKind.Class): KtcType.User {
-	val vTypeDef: TypeDef = when {
-		classes.containsKey(inName)    -> classes[inName]!!
-		objects.containsKey(inName)    -> objects[inName]!!
-		interfaces.containsKey(inName) -> interfaces[inName]!!
-		enums.containsKey(inName)      -> enums[inName]!!
-		else ->
-			{
-			// Builtin or unknown: derive pkg from typeFlatName
-			val vFullPfx = typeFlatName(inName)
-			val vPkg = if (vFullPfx.endsWith(inName)) vFullPfx.removeSuffix(inName) else ""
-			BuiltinTypeDef(baseName = inName, pkg = vPkg, kind = inKind)
-			}
-		}
-	return KtcType.User(vTypeDef)
-	}
+    val vTypeDef: TypeDef = when {
+        classes.containsKey(inName) -> classes[inName]!!
+        objects.containsKey(inName) -> objects[inName]!!
+        interfaces.containsKey(inName) -> interfaces[inName]!!
+        enums.containsKey(inName) -> enums[inName]!!
+        else -> {
+            // Builtin or unknown: derive pkg from typeFlatName
+            val vFullPfx = typeFlatName(inName)
+            val vPkg = if (vFullPfx.endsWith(inName)) vFullPfx.removeSuffix(inName) else ""
+            BuiltinTypeDef(baseName = inName, pkg = vPkg, kind = inKind)
+        }
+    }
+    return KtcType.User(vTypeDef)
+}
 
 internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null): KtcType {
     // Pointer suffix — for array types that are already pointers, don't double-wrap
     if (resolved.endsWith("*?")) {
         val base = resolved.dropLast(2)
-        if (base.endsWith("Array")) return KtcType.Nullable(parseResolvedTypeName(base, t))  // Array*? → nullable array ptr
+        if (base.endsWith("Array")) return KtcType.Nullable(
+            parseResolvedTypeName(
+                base,
+                t
+            )
+        )  // Array*? → nullable array ptr
         return KtcType.Nullable(KtcType.Ptr(parseResolvedTypeName(base, t)))
     }
     if (resolved.endsWith("*")) {
@@ -671,14 +506,14 @@ internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null
     // Array types: IntArray, ByteArray, Vec2Array, etc.
     if (resolved.endsWith("Array") && resolved.length > 5) {
         val elemName = resolved.removeSuffix("Array")
-        val elem = when {
-            elemName in KtcType.PrimKind.entries.map { it.name } -> KtcType.Prim(KtcType.PrimKind.valueOf(elemName))
-            elemName == "String" -> KtcType.Str
+        val elem = when (elemName) {
+            in KtcType.PrimKind.entries.map { it.name } -> KtcType.Prim(KtcType.PrimKind.valueOf(elemName))
+            "String" -> KtcType.Str
             else -> userType(elemName)
         }
         val sized = t?.let { getSizeAnnotation(it) }
         val isTypedArray = elemName in KtcType.PrimKind.entries.map { it.name } || elemName == "String"
-            || classArrayTypes.contains(elemName) || enums.containsKey(elemName)
+                || classArrayTypes.contains(elemName) || enums.containsKey(elemName)
         val arr = KtcType.Arr(elem, sized = sized)
         return if (isTypedArray) KtcType.Ptr(arr) else arr
     }
@@ -706,24 +541,24 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Void -> "void"
     is KtcType.User -> {
         val bn = ktc.baseName // base name (no package prefix)
-        when {
-            bn == "Any" -> "ktc_Any"
-            bn == "ktc_StrBuf" -> "ktc_StrBuf"
+        when (bn) {
+            "Any" -> "ktc_Any"
+            "ktc_StrBuf" -> "ktc_StrBuf"
             else -> ktc.flatName
         }
     }
+
     is KtcType.Ptr -> {
         // Ptr(Arr(elem)) → elem*, not trampoline* (handles OptArray via nullable elem)
         if (ktc.inner is KtcType.Arr) {
             val vArrElem = ktc.inner.elem                    // element KtcType (smart-cast after is KtcType.Arr)
             val vElemStr = if (vArrElem is KtcType.Nullable) // nullable elem → Optional C type
                 optCTypeName(vArrElem.inner.toInternalStr)
-            else
-                cTypeStr(vArrElem)                           // plain elem C type
+            else cTypeStr(vArrElem)                           // plain elem C type
             "$vElemStr*"
-        }
-        else "${cTypeStr(ktc.inner)}*"
+        } else "${cTypeStr(ktc.inner)}*"
     }
+
     is KtcType.Arr -> {
         val elem = cTypeStr(ktc.elem)
         when {
@@ -731,12 +566,12 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
             else -> "ktc_ArrayTrampoline"
         }
     }
+
     is KtcType.Nullable -> {
         val inner = ktc.inner
-        if (inner is KtcType.Ptr)
-            cTypeStr(inner)  // T* for nullable pointers (NULL = null)
-        else
-            cTypeStr(inner)  // fallback (Optional handled elsewhere)
+        if (inner is KtcType.Ptr) cTypeStr(inner)  // T* for nullable pointers (NULL = null)
+        else cTypeStr(inner)  // fallback (Optional handled elsewhere)
     }
+
     is KtcType.Func -> "void*"
 }

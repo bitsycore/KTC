@@ -2,6 +2,8 @@ package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
 import com.bitsycore.ktc.ast.Annotation
+import com.bitsycore.ktc.codegen.mapping.arrayElementCType
+import com.bitsycore.ktc.codegen.mapping.arrayElementKtType
 import com.bitsycore.ktc.types.KtcType
 
 /**

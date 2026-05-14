@@ -30,8 +30,8 @@ import com.bitsycore.ktc.types.KtcType
  *   classes (materialized generic instantiations), classInterfaces, classArrayTypes
  *
  * ## Dependencies:
- *   Calls into [CCodeGenInfer] (inferExprType, inferBlockType)
- *   Calls into [CCodeGenCTypes] (resolveTypeName, resolveIfaceName)
+ *   Calls into CCodeGenInfer.kt (inferExprType, inferBlockType)
+ *   Calls into CCodeGenCTypes.kt (resolveTypeName, resolveIfaceName)
  *   Used by [CCodeGen.collectAndScan] before [CCodeGen.generate]
  */
 
@@ -798,7 +798,7 @@ internal fun CCodeGen.inferConcreteReturnClass(body: Block?, subst: Map<String, 
 
 /**
  * Match a parameter type against a concrete argument type to infer type params.
- * E.g., param=MutableList<T>, argType="MutableList_Int", typeParams={T} → subst[T]=Int
+ * E.g., param=MutableList<T>, argType="MutableList_Int", typeParams={T} → subst\[T]=Int
  */
 /*
 Infer type parameter substitutions from a single param/arg pair.

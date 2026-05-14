@@ -1,6 +1,9 @@
 package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
+import com.bitsycore.ktc.codegen.mapping.arrayElementKtType
+import com.bitsycore.ktc.codegen.mapping.primitiveToArrayOptionalType
+import com.bitsycore.ktc.codegen.mapping.primitiveToArrayType
 import com.bitsycore.ktc.types.KtcType
 
 /**
@@ -24,7 +27,7 @@ import com.bitsycore.ktc.types.KtcType
  *   [inferCallType]           — infer return type of a function/constructor call
  *   [inferMethodReturnType]   — infer return type of obj.method()
  *   [inferDotType]            — infer type of obj.field
- *   [inferIndexType]          — infer type of obj[index]
+ *   [inferIndexType]          — infer type of obj.get(index)
  *
  *   (helpers) [inferBlockType], [inferIfExprType], [inferWhenExprType]
  *
@@ -39,7 +42,7 @@ import com.bitsycore.ktc.types.KtcType
  *   genericInstantiations (via recordGenericInstantiation on inferred generic class usage)
  *
  * ## Dependencies:
- *   Calls into [CCodeGenCTypes] (resolveTypeName, resolveIfaceName, resolveMethodReturnType, ...)
+ *   Calls into CCodeGenCTypes.kt (resolveTypeName, resolveIfaceName, resolveMethodReturnType, ...)
  *   Called from everywhere (scan passes, emitter, statements, expressions)
  */
 
@@ -88,7 +91,7 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
             val a = inferExprType(e.left) ?: "Int" // left operand type
             val b = inferExprType(e.right) ?: "Int" // right operand type
             if (genericClassDecls.containsKey("Pair")) {
-                /* Register and materialize immediately so genericTypeBindings is
+                /** Register and materialize immediately so genericTypeBindings is
                 available when matchTypeParam is called during scan phase. */
                 recordGenericInstantiation("Pair", listOf(a, b))
                 materializeGenericInstantiations()
@@ -96,7 +99,7 @@ internal fun CCodeGen.inferExprType(e: Expr?): String? = when (e) {
             "Pair_${a}_${b}"
         }
         else {
-            /* User-defined infix operator: look up in inlineExtFunDecls, resolve return type with type substitution. */
+            /** User-defined infix operator: look up in inlineExtFunDecls, resolve return type with type substitution. */
             val vInfixDecl = inlineExtFunDecls[e.op] // infix function declaration, or null if not user-defined infix
             if (vInfixDecl != null && vInfixDecl.returnType != null) {
                 val vRecvType = inferExprType(e.left)  // receiver type (e.g. "Int")
@@ -143,10 +146,10 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         fun flattenDotCallee(callee: Expr): String? {
             if (callee is NameExpr) return callee.name
             if (callee is DotExpr && callee.obj is NameExpr)
-                return "${callee.obj.name}\$${callee.name}"
+                return "${callee.obj.name}$${callee.name}"
             if (callee is DotExpr) {
                 val left = flattenDotCallee(callee.obj)
-                if (left != null) return "$left\$${callee.name}"
+                if (left != null) return "$left$${callee.name}"
             }
             return null
         }
@@ -234,55 +237,19 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
                 val vTypeArg = e.typeArgs[0]
                 val vElemName = typeSubst[vTypeArg.name] ?: vTypeArg.name
                 if (vTypeArg.nullable) {
-                    return when (vElemName) {
-                        "Byte" -> "ByteOptArray"; "Short" -> "ShortOptArray"
-                        "Int" -> "IntOptArray";   "Long" -> "LongOptArray"
-                        "Float" -> "FloatOptArray"; "Double" -> "DoubleOptArray"
-                        "Boolean" -> "BooleanOptArray"; "Char" -> "CharOptArray"
-                        "UByte" -> "UByteOptArray"; "UShort" -> "UShortOptArray"
-                        "UInt" -> "UIntOptArray"; "ULong" -> "ULongOptArray"
-                        "String" -> "StringOptArray"
-                        else -> { classArrayTypes.add(vElemName); "${vElemName}OptArray" }
-                    }
+                    return primitiveToArrayOptionalType(vElemName)
                 }
-                return when (vElemName) {
-                    "Byte" -> "ByteArray"; "Short" -> "ShortArray"
-                    "Int" -> "IntArray"; "Long" -> "LongArray"
-                    "Float" -> "FloatArray"; "Double" -> "DoubleArray"
-                    "Boolean" -> "BooleanArray"; "Char" -> "CharArray"
-                    "UByte" -> "UByteArray"; "UShort" -> "UShortArray"
-                    "UInt" -> "UIntArray"; "ULong" -> "ULongArray"
-                    "String" -> "StringArray"
-                    else -> { classArrayTypes.add(vElemName); "${vElemName}Array" }
-                }
+                return primitiveToArrayType(vElemName)
             }
             // Fall back to inference from first argument
             val elemType = if (e.args.isNotEmpty()) inferExprType(e.args[0].expr) ?: "Int" else "Int"
-            return when (elemType) {
-                "Byte" -> "ByteArray"; "Short" -> "ShortArray"
-                "Int" -> "IntArray"; "Long" -> "LongArray"
-                "Float" -> "FloatArray"; "Double" -> "DoubleArray"
-                "Boolean" -> "BooleanArray"; "Char" -> "CharArray"
-                "UByte" -> "UByteArray"; "UShort" -> "UShortArray"
-                "UInt" -> "UIntArray"; "ULong" -> "ULongArray"
-                "String" -> "StringArray"
-                else -> { classArrayTypes.add(elemType); "${elemType}Array" }
-            }
+            return primitiveToArrayType(elemType)
         }
         if (name == "arrayOfNulls") {
             if (e.typeArgs.isNotEmpty()) {
                 val vTypeArg = e.typeArgs[0]
                 val vElemName = typeSubst[vTypeArg.name] ?: vTypeArg.name
-                return when (vElemName) {
-                    "Byte" -> "ByteOptArray"; "Short" -> "ShortOptArray"
-                    "Int" -> "IntOptArray";   "Long" -> "LongOptArray"
-                    "Float" -> "FloatOptArray"; "Double" -> "DoubleOptArray"
-                    "Boolean" -> "BooleanOptArray"; "Char" -> "CharOptArray"
-                    "UByte" -> "UByteOptArray"; "UShort" -> "UShortOptArray"
-                    "UInt" -> "UIntOptArray"; "ULong" -> "ULongOptArray"
-                    "String" -> "StringOptArray"
-                    else -> { classArrayTypes.add(vElemName); "${vElemName}OptArray" }
-                }
+                return primitiveToArrayOptionalType(vElemName)
             }
             return "IntOptArray"
         }
@@ -488,7 +455,7 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     // Extension function on non-class type
     val extFun = extensionFuns[recvType]?.find { it.name == method }
     if (extFun != null) {
-        /* Generic extension: infer concrete return type by substituting type params from receiver + args. */
+        /** Generic extension: infer concrete return type by substituting type params from receiver + args. */
         if (extFun.typeParams.isNotEmpty() && extFun.returnType != null) {
             val vArgTypes    = args.map { inferExprType(it.expr) } // concrete argument types
             val vSavedSubst  = typeSubst                           // save outer substitution
@@ -609,7 +576,7 @@ internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
 
 // ══ Phase 4.4 — KtcType inference entry points ══════════════════════
 
-/*
+/**
 Infer the KtcType of an expression.
 For NameExpr uses lookupVarKtc directly to avoid string round-trip.
 All other branches delegate to inferExprType and convert via stringToKtc.
@@ -620,27 +587,11 @@ internal fun CCodeGen.inferExprTypeKtc(inExpr: Expr?): KtcType?
 	if (inExpr == null) return null
 	if (inExpr is NameExpr)
 		{
-		/* Use KtcType scope directly — avoids toInternalStr → stringToKtc round-trip. */
+		/** Use KtcType scope directly — avoids toInternalStr → stringToKtc round-trip. */
 		val vKtc = lookupVarKtc(inExpr.name)
 		if (vKtc != null) return vKtc
-		/* Fall through to string-based for objects/enums/parent-object lookup. */
+		/** Fall through to string-based for objects/enums/parent-object lookup. */
 		}
 	val vStr = inferExprType(inExpr) ?: return null  // string-based fallback
-	return parseResolvedTypeName(vStr)
-	}
-
-// ── Phase 4.5 — KtcType dot / method-return inference ───────────────
-
-/* Infer the KtcType of a dot expression (field access). */
-internal fun CCodeGen.inferDotTypeKtc(inExpr: DotExpr): KtcType?
-	{
-	val vStr = inferDotType(inExpr) ?: return null  // delegate to string version
-	return parseResolvedTypeName(vStr)
-	}
-
-/* Infer the KtcType of a method call return. */
-internal fun CCodeGen.inferMethodReturnTypeKtc(inDot: DotExpr, inArgs: List<Arg>): KtcType?
-	{
-	val vStr = inferMethodReturnType(inDot, inArgs) ?: return null
 	return parseResolvedTypeName(vStr)
 	}

@@ -19,32 +19,30 @@ import com.bitsycore.ktc.codegen.PropertyDef
 Describes a resolved Kotlin declaration (class, object, enum, or interface).
 Carries the identity needed to compute a flat C name (pkg + baseName = flatName).
 */
-internal interface TypeDef
-	{
-	val baseName: String              // simple declaration name, e.g. "Vec2"
-	val pkg: String                   // C prefix, e.g. "game_" or "ktc_std_"
-	val kind: KtcType.UserKind        // Class/DataClass/Object/Interface/Enum
-	val flatName: String get() = "$pkg$baseName"  // full C identifier
-	val methods: List<FunDecl>        // declared methods
-	val properties: List<PropertyDef> // declared properties
-	val typeParams: List<String>      // generic type parameters
-	val superTypeDefs: List<TypeDef>  // resolved super-interfaces
-	}
+internal interface TypeDef {
+    val baseName: String              // simple declaration name, e.g. "Vec2"
+    val pkg: String                   // C prefix, e.g. "game_" or "ktc_std_"
+    val kind: KtcType.UserKind        // Class/DataClass/Object/Interface/Enum
+    val flatName: String get() = "$pkg$baseName"  // full C identifier
+    val methods: List<FunDecl>        // declared methods
+    val properties: List<PropertyDef> // declared properties
+    val typeParams: List<String>      // generic type parameters
+    val superTypeDefs: List<TypeDef>  // resolved super-interfaces
+}
 
 /*
 TypeDef for intrinsic types (Pair, Triple, Any, ktc_StrBuf) that have no ClassDecl.
 */
 internal data class BuiltinTypeDef(
-	override val baseName: String,                               // builtin type name
-	override val pkg: String = "ktc_",                          // always ktc_ prefix
-	override val kind: KtcType.UserKind = KtcType.UserKind.Class // always Class kind
-	) : TypeDef
-	{
-	override val methods: List<FunDecl> get() = emptyList()
-	override val properties: List<PropertyDef> get() = emptyList()
-	override val typeParams: List<String> get() = emptyList()
-	override val superTypeDefs: List<TypeDef> get() = emptyList()
-	}
+    override val baseName: String,                               // builtin type name
+    override val pkg: String = "ktc_",                          // always ktc_ prefix
+    override val kind: KtcType.UserKind = KtcType.UserKind.Class // always Class kind
+) : TypeDef {
+    override val methods: List<FunDecl> get() = emptyList()
+    override val properties: List<PropertyDef> get() = emptyList()
+    override val typeParams: List<String> get() = emptyList()
+    override val superTypeDefs: List<TypeDef> get() = emptyList()
+}
 
 internal sealed class KtcType {
 
@@ -52,20 +50,21 @@ internal sealed class KtcType {
 
     data class Prim(val kind: PrimKind) : KtcType() {
         override fun toCType(): String = when (kind) {
-            PrimKind.Byte    -> "ktc_Byte"
-            PrimKind.Short   -> "ktc_Short"
-            PrimKind.Int     -> "ktc_Int"
-            PrimKind.Long    -> "ktc_Long"
-            PrimKind.UByte   -> "ktc_UByte"
-            PrimKind.UShort  -> "ktc_UShort"
-            PrimKind.UInt    -> "ktc_UInt"
-            PrimKind.ULong   -> "ktc_ULong"
-            PrimKind.Float   -> "ktc_Float"
-            PrimKind.Double  -> "ktc_Double"
+            PrimKind.Byte -> "ktc_Byte"
+            PrimKind.Short -> "ktc_Short"
+            PrimKind.Int -> "ktc_Int"
+            PrimKind.Long -> "ktc_Long"
+            PrimKind.UByte -> "ktc_UByte"
+            PrimKind.UShort -> "ktc_UShort"
+            PrimKind.UInt -> "ktc_UInt"
+            PrimKind.ULong -> "ktc_ULong"
+            PrimKind.Float -> "ktc_Float"
+            PrimKind.Double -> "ktc_Double"
             PrimKind.Boolean -> "ktc_Bool"
-            PrimKind.Char    -> "ktc_Char"
-            PrimKind.Rune    -> "ktc_Rune"
+            PrimKind.Char -> "ktc_Char"
+            PrimKind.Rune -> "ktc_Rune"
         }
+
         val ktName: String get() = kind.name
     }
 
@@ -87,17 +86,16 @@ internal sealed class KtcType {
 
     enum class UserKind { Class, DataClass, Object, Interface, Enum }
 
-	data class User(
-		val decl: TypeDef,                         // backing declaration descriptor
-		val typeArgs: List<KtcType> = emptyList()  // concrete type arguments
-		) : KtcType()
-		{
-		val baseName: String get() = decl.baseName
-		val kind: KtcType.UserKind get() = decl.kind
-		val pkg: String get() = decl.pkg
-		val flatName: String get() = decl.flatName
-		override fun toCType(): String = decl.flatName
-		}
+    data class User(
+        val decl: TypeDef,                         // backing declaration descriptor
+        val typeArgs: List<KtcType> = emptyList()  // concrete type arguments
+    ) : KtcType() {
+        val baseName: String get() = decl.baseName
+        val kind: KtcType.UserKind get() = decl.kind
+        val pkg: String get() = decl.pkg
+        val flatName: String get() = decl.flatName
+        override fun toCType(): String = decl.flatName
+    }
 
     // ── Array types ──────────────────────────────────────────────────
 
@@ -107,7 +105,7 @@ internal sealed class KtcType {
     ) : KtcType() {
         override fun toCType(): String = when {
             sized != null -> "${elem.toCType()}[${sized}]"
-            else          -> "ktc_ArrayTrampoline"
+            else -> "ktc_ArrayTrampoline"
         }
     }
 
@@ -129,13 +127,12 @@ internal sealed class KtcType {
     // ── Function type ────────────────────────────────────────────────
 
     data class Func(
-    	val params: List<KtcType>,      // non-receiver parameters
-    	val ret: KtcType,               // return type
-    	val receiver: KtcType? = null   // extension receiver (T in T.() -> R), null for plain lambdas
-    	) : KtcType()
-    	{
-    	override fun toCType() = "void*"
-    	}
+        val params: List<KtcType>,      // non-receiver parameters
+        val ret: KtcType,               // return type
+        val receiver: KtcType? = null   // extension receiver (T in T.() -> R), null for plain lambdas
+    ) : KtcType() {
+        override fun toCType() = "void*"
+    }
 
     // ── Abstract methods ─────────────────────────────────────────────
 
@@ -154,18 +151,20 @@ internal sealed class KtcType {
     val isArrayLike: Boolean get() = this is Arr || (this is Ptr && inner is Arr)
 
     /* Extract the Arr node from Arr or Ptr(Arr), null otherwise. */
-    val asArr: Arr? get() = when (this) {
-        is Arr -> this
-        is Ptr -> inner as? Arr
-        else -> null
-    }
+    val asArr: Arr?
+        get() = when (this) {
+            is Arr -> this
+            is Ptr -> inner as? Arr
+            else -> null
+        }
 
-    val elementType: KtcType? get() = when (this) {
-        is Arr -> elem
-        is Ptr -> inner
-        is Nullable -> inner
-        else -> null
-    }
+    val elementType: KtcType?
+        get() = when (this) {
+            is Arr -> elem
+            is Ptr -> inner
+            is Nullable -> inner
+            else -> null
+        }
 
 
     /*
@@ -174,27 +173,29 @@ internal sealed class KtcType {
     would return. Used as a compat bridge during Phase 4 migration.
     Examples: Prim(Int) → "Int", Nullable(User(Vec2)) → "Vec2?", Ptr(Arr(Prim(Int))) → "IntArray"
     */
-    val toInternalStr: String get() = when (this) {
-        is Prim     -> kind.name                             // "Int", "Boolean", etc.
-        is Str      -> "String"
-        is Void     -> "Unit"
-        is User     -> baseName                              // bare class name, no pkg
-        is Func     -> {
-            val vReceiverStr = receiver?.let { it.toInternalStr + "|" } ?: ""  // "T|" or ""
-            val vParams = params.joinToString(",") { it.toInternalStr }         // param strings
-            "Fun($vReceiverStr$vParams)->${ret.toInternalStr}"
+    val toInternalStr: String
+        get() = when (this) {
+            is Prim -> kind.name                             // "Int", "Boolean", etc.
+            is Str -> "String"
+            is Void -> "Unit"
+            is User -> baseName                              // bare class name, no pkg
+            is Func -> {
+                val vReceiverStr = receiver?.let { it.toInternalStr + "|" } ?: ""  // "T|" or ""
+                val vParams = params.joinToString(",") { it.toInternalStr }         // param strings
+                "Fun($vReceiverStr$vParams)->${ret.toInternalStr}"
             }
-        is Arr      -> "${elem.toInternalStr}Array"          // "IntArray", "Vec2Array"
-        is Ptr      -> when (val vInner = inner)
-            {
-            is Arr  -> when (val vElem = vInner.elem)
-                {
-                is Nullable -> "${vElem.inner.toInternalStr}OptArray"  // "IntOptArray"
-                else        -> "${vElem.toInternalStr}Array"           // "IntArray" (typed ptr)
+
+            is Arr -> "${elem.toInternalStr}Array"          // "IntArray", "Vec2Array"
+            is Ptr -> when (val vInner = inner) {
+                is Arr -> when (val vElem = vInner.elem) {
+                    is Nullable -> "${vElem.inner.toInternalStr}OptArray"  // "IntOptArray"
+                    else -> "${vElem.toInternalStr}Array"           // "IntArray" (typed ptr)
                 }
-            else    -> "${vInner.toInternalStr}*"                      // "Vec2*"
+
+                else -> "${vInner.toInternalStr}*"                      // "Vec2*"
             }
-        is Nullable -> "${inner.toInternalStr}?"             // "Int?", "Vec2?", "Vec2*?"
+
+            is Nullable -> "${inner.toInternalStr}?"             // "Int?", "Vec2?", "Vec2*?"
         }
 
     val nullable: KtcType get() = Nullable(this)
@@ -219,11 +220,13 @@ internal sealed class KtcType {
                 base == "StringBuffer" -> User(BuiltinTypeDef("ktc_StrBuf", pkg = ""))
                 base == "RawArray" && typeRef.typeArgs.isNotEmpty() ->
                     Ptr(from(typeRef.typeArgs[0], resolveName))
+
                 base == "Array" && typeRef.typeArgs.isNotEmpty() -> {
                     val elem = from(typeRef.typeArgs[0], resolveName)
                     val arr = Arr(elem, sized = sizeAnn?.value?.toInt())
                     if (isPtr) Ptr(arr) else arr
                 }
+
                 base.endsWith("Array") && base !in setOf("Array", "RawArray") -> {
                     // IntArray, ByteArray, UIntArray, etc.
                     val elemName = base.removeSuffix("Array")
@@ -231,18 +234,20 @@ internal sealed class KtcType {
                     val arr = Arr(elem, sized = sizeAnn?.value?.toInt())
                     if (isPtr) Ptr(arr) else arr
                 }
+
                 base.startsWith("Pair_") || base.startsWith("Triple_") -> {
                     val typeArgNames = base.removePrefix("Pair_").removePrefix("Triple_").split("_")
                     val typeArgKtc = typeArgNames.map { from(TypeRef(it), resolveName) }
                     User(BuiltinTypeDef(base, pkg = "ktc_"), typeArgKtc)
                 }
+
                 base == "Any" -> User(BuiltinTypeDef("Any", pkg = ""))
                 else -> User(BuiltinTypeDef(resolved, pkg = ""))
             }
 
             return if (isPtr && inner !is Arr) Ptr(inner)
-                   else if (typeRef.nullable) Nullable(inner)
-                   else inner
+            else if (typeRef.nullable) Nullable(inner)
+            else inner
         }
 
         private val primitiveNames = PrimKind.entries.map { it.name }.toSet()
