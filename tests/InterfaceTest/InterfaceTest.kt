@@ -85,7 +85,8 @@ fun main() {
 
     val shape1 = shapeReturnerById(0)
     val shape2 = shapeReturnerById(1)
-
+    shape1.dispose() // Should no op dispose
+    shape2.dispose() // Should no op dispose
     println("${shape1.name()}: ${shape1.area()}")
     println("${shape2.name()}: ${shape2.area()}")
     if (shape1.name() != "Circle") error("FAIL shape1 should be Circle")
