@@ -83,9 +83,8 @@ class Lexer(private val src: String) {
     private fun lexStringContent() {
         val sb = StringBuilder()
         while (pos < src.length) {
-            val c = cur()
-            when {
-                c == '"' -> {
+            when (val c = cur()) {
+                '"' -> {
                     advance()
                     if (inTemplateLiteral) {
                         if (sb.isNotEmpty()) emit(TokenType.STR_TMPL_PART, sb.toString())
@@ -96,14 +95,14 @@ class Lexer(private val src: String) {
                     modes.removeLast()
                     return
                 }
-                c == '\\' -> sb.append(readEscape())
-                c == '$' && pos + 1 < src.length && (src[pos + 1].isLetterOrDigitOrUnderscore()) -> {
+                '\\' -> sb.append(readEscape())
+                '$' if pos + 1 < src.length && (src[pos + 1].isLetterOrDigitOrUnderscore()) -> {
                     ensureTmplStarted(sb)
                     advance()                   // skip $
                     val name = readIdentRaw()
                     emit(TokenType.TMPL_REF, name)
                 }
-                c == '$' && pos + 1 < src.length && src[pos + 1] == '{' -> {
+                '$' if pos + 1 < src.length && src[pos + 1] == '{' -> {
                     ensureTmplStarted(sb)
                     advance(); advance()        // skip ${
                     emit(TokenType.TMPL_EXPR_START, "\${")
@@ -111,7 +110,7 @@ class Lexer(private val src: String) {
                     modes.addLast(Mode.TMPL_EXPR)
                     return                      // hand control to lexTemplateExpr
                 }
-                c == '\n' -> {
+                '\n' -> {
                     sb.append(c); advance(); line++; col = 1
                 }
                 else -> { sb.append(c); advance() }
@@ -268,48 +267,48 @@ class Lexer(private val src: String) {
         val c = cur()
         val nc = if (pos + 1 < src.length) src[pos + 1] else '\u0000'
         val nnc = if (pos + 2 < src.length) src[pos + 2] else '\u0000'
-        when {
-            c == '(' -> { advance(); emit(TokenType.LPAREN, "(") }
-            c == ')' -> { advance(); emit(TokenType.RPAREN, ")") }
-            c == '{' -> { advance(); emit(TokenType.LBRACE, "{") }
-            c == '}' -> { advance(); emit(TokenType.RBRACE, "}") }
-            c == '[' -> { advance(); emit(TokenType.LBRACKET, "[") }
-            c == ']' -> { advance(); emit(TokenType.RBRACKET, "]") }
-            c == ',' -> { advance(); emit(TokenType.COMMA, ",") }
-            c == ':' && nc == ':' -> { advance(); advance(); emit(TokenType.COLON_COLON, "::") }
-            c == ':' -> { advance(); emit(TokenType.COLON, ":") }
-            c == ';' -> { advance(); emit(TokenType.SEMICOLON, ";") }
-            c == '.' && nc == '.' && nnc == '<' -> { advance(); advance(); advance(); emit(TokenType.DOT_DOT, "..<") }
-            c == '.' && nc == '.' -> { advance(); advance(); emit(TokenType.DOT_DOT, "..") }
-            c == '.' -> { advance(); emit(TokenType.DOT, ".") }
-            c == '+' && nc == '+' -> { advance(); advance(); emit(TokenType.PLUS_PLUS, "++") }
-            c == '+' && nc == '=' -> { advance(); advance(); emit(TokenType.PLUS_EQ, "+=") }
-            c == '+' -> { advance(); emit(TokenType.PLUS, "+") }
-            c == '-' && nc == '-' -> { advance(); advance(); emit(TokenType.MINUS_MINUS, "--") }
-            c == '-' && nc == '>' -> { advance(); advance(); emit(TokenType.ARROW, "->") }
-            c == '-' && nc == '=' -> { advance(); advance(); emit(TokenType.MINUS_EQ, "-=") }
-            c == '-' -> { advance(); emit(TokenType.MINUS, "-") }
-            c == '*' && nc == '=' -> { advance(); advance(); emit(TokenType.STAR_EQ, "*=") }
-            c == '*' -> { advance(); emit(TokenType.STAR, "*") }
-            c == '/' && nc == '=' -> { advance(); advance(); emit(TokenType.SLASH_EQ, "/=") }
-            c == '/' -> { advance(); emit(TokenType.SLASH, "/") }
-            c == '%' && nc == '=' -> { advance(); advance(); emit(TokenType.PERCENT_EQ, "%=") }
-            c == '%' -> { advance(); emit(TokenType.PERCENT, "%") }
-            c == '=' && nc == '=' -> { advance(); advance(); emit(TokenType.EQ_EQ, "==") }
-            c == '=' -> { advance(); emit(TokenType.EQ, "=") }
-            c == '!' && nc == '=' -> { advance(); advance(); emit(TokenType.EXCL_EQ, "!=") }
-            c == '!' && nc == '!' -> { advance(); advance(); emit(TokenType.EXCL_EXCL, "!!") }
-            c == '!' -> { advance(); emit(TokenType.EXCL, "!") }
-            c == '<' && nc == '=' -> { advance(); advance(); emit(TokenType.LT_EQ, "<=") }
-            c == '<' -> { advance(); emit(TokenType.LT, "<") }
-            c == '>' && nc == '=' -> { advance(); advance(); emit(TokenType.GT_EQ, ">=") }
-            c == '>' -> { advance(); emit(TokenType.GT, ">") }
-            c == '&' && nc == '&' -> { advance(); advance(); emit(TokenType.AMP_AMP, "&&") }
-            c == '|' && nc == '|' -> { advance(); advance(); emit(TokenType.PIPE_PIPE, "||") }
-            c == '?' && nc == '.' -> { advance(); advance(); emit(TokenType.QUESTION_DOT, "?.") }
-            c == '?' && nc == ':' -> { advance(); advance(); emit(TokenType.QUESTION_COLON, "?:") }
-            c == '?' -> { advance(); emit(TokenType.QUESTION, "?") }
-            c == '@' -> { advance(); emit(TokenType.AT, "@") }
+        when (c) {
+            '(' -> { advance(); emit(TokenType.LPAREN, "(") }
+            ')' -> { advance(); emit(TokenType.RPAREN, ")") }
+            '{' -> { advance(); emit(TokenType.LBRACE, "{") }
+            '}' -> { advance(); emit(TokenType.RBRACE, "}") }
+            '[' -> { advance(); emit(TokenType.LBRACKET, "[") }
+            ']' -> { advance(); emit(TokenType.RBRACKET, "]") }
+            ',' -> { advance(); emit(TokenType.COMMA, ",") }
+            ':' if nc == ':' -> { advance(); advance(); emit(TokenType.COLON_COLON, "::") }
+            ':' -> { advance(); emit(TokenType.COLON, ":") }
+            ';' -> { advance(); emit(TokenType.SEMICOLON, ";") }
+            '.' if nc == '.' && nnc == '<' -> { advance(); advance(); advance(); emit(TokenType.DOT_DOT, "..<") }
+            '.' if nc == '.' -> { advance(); advance(); emit(TokenType.DOT_DOT, "..") }
+            '.' -> { advance(); emit(TokenType.DOT, ".") }
+            '+' if nc == '+' -> { advance(); advance(); emit(TokenType.PLUS_PLUS, "++") }
+            '+' if nc == '=' -> { advance(); advance(); emit(TokenType.PLUS_EQ, "+=") }
+            '+' -> { advance(); emit(TokenType.PLUS, "+") }
+            '-' if nc == '-' -> { advance(); advance(); emit(TokenType.MINUS_MINUS, "--") }
+            '-' if nc == '>' -> { advance(); advance(); emit(TokenType.ARROW, "->") }
+            '-' if nc == '=' -> { advance(); advance(); emit(TokenType.MINUS_EQ, "-=") }
+            '-' -> { advance(); emit(TokenType.MINUS, "-") }
+            '*' if nc == '=' -> { advance(); advance(); emit(TokenType.STAR_EQ, "*=") }
+            '*' -> { advance(); emit(TokenType.STAR, "*") }
+            '/' if nc == '=' -> { advance(); advance(); emit(TokenType.SLASH_EQ, "/=") }
+            '/' -> { advance(); emit(TokenType.SLASH, "/") }
+            '%' if nc == '=' -> { advance(); advance(); emit(TokenType.PERCENT_EQ, "%=") }
+            '%' -> { advance(); emit(TokenType.PERCENT, "%") }
+            '=' if nc == '=' -> { advance(); advance(); emit(TokenType.EQ_EQ, "==") }
+            '=' -> { advance(); emit(TokenType.EQ, "=") }
+            '!' if nc == '=' -> { advance(); advance(); emit(TokenType.EXCL_EQ, "!=") }
+            '!' if nc == '!' -> { advance(); advance(); emit(TokenType.EXCL_EXCL, "!!") }
+            '!' -> { advance(); emit(TokenType.EXCL, "!") }
+            '<' if nc == '=' -> { advance(); advance(); emit(TokenType.LT_EQ, "<=") }
+            '<' -> { advance(); emit(TokenType.LT, "<") }
+            '>' if nc == '=' -> { advance(); advance(); emit(TokenType.GT_EQ, ">=") }
+            '>' -> { advance(); emit(TokenType.GT, ">") }
+            '&' if nc == '&' -> { advance(); advance(); emit(TokenType.AMP_AMP, "&&") }
+            '|' if nc == '|' -> { advance(); advance(); emit(TokenType.PIPE_PIPE, "||") }
+            '?' if nc == '.' -> { advance(); advance(); emit(TokenType.QUESTION_DOT, "?.") }
+            '?' if nc == ':' -> { advance(); advance(); emit(TokenType.QUESTION_COLON, "?:") }
+            '?' -> { advance(); emit(TokenType.QUESTION, "?") }
+            '@' -> { advance(); emit(TokenType.AT, "@") }
             else -> error("Unexpected character '$c' at line $line col $col")
         }
     }
@@ -356,7 +355,7 @@ class Lexer(private val src: String) {
             advance() // skip 'u'
             // Read 4 hex digits
             val hexDigits = StringBuilder()
-            for (i in 0 until 4) {
+            repeat(4) {
                 if (pos >= src.length) error("Unterminated unicode escape at line $line")
                 val h = cur()
                 if (!h.isDigit() && h !in 'a'..'f' && h !in 'A'..'F')
