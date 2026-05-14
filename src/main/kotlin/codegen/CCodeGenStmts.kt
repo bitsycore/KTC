@@ -1834,7 +1834,10 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
                 if (arrType != null && interfaces.containsKey(arrType)) {
                     impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator(${ifaceVtableSelf(arrType, arrExpr)});")
                 } else {
-                    val baseClass = if (isPointer) anyIndirectClassName(arrType)!! else arrType!!
+                    val baseClass = if (isPointer) {
+                        val arrKtc = parseResolvedTypeName(arrType!!)
+                        ((arrKtc as? KtcType.Ptr)?.inner as? KtcType.User)?.baseName ?: arrType
+                    } else arrType!!
                     impl.appendLine("$ind$iterCType $iterVar = ${typeFlatName(baseClass)}_iterator($selfArg);")
                 }
                 val isIfaceIter = interfaces.containsKey(iterClass)
@@ -1903,7 +1906,7 @@ internal fun CCodeGen.findOperatorIterator(type: String?): IteratorInfo? {
         }
     }
     // Heap/Ptr/Value class
-    val indirectBase = anyIndirectClassName(type)
+    val indirectBase = (parseResolvedTypeName(type) as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (indirectBase != null && classes.containsKey(indirectBase)) {
         val vIndirectCI = classes[indirectBase]!!                                      // ClassInfo for the heap class
         val iterMethod = vIndirectCI.methods.find { it.name == "iterator" && it.isOperator }

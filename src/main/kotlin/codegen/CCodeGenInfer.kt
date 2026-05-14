@@ -561,7 +561,7 @@ internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
         }
     }
     // Heap<T>/Ptr<T>/Value<T> wrapping a class with operator get()
-    val indirectBase = anyIndirectClassName(t)
+    val indirectBase = (tKtcCore as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (indirectBase != null && classes.containsKey(indirectBase)) {
         val methodDecl = classes[indirectBase]?.methods?.find { it.name == "get" && it.isOperator }
         if (methodDecl?.returnType != null) {
@@ -577,8 +577,8 @@ internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
             return resolveMethodReturnType(t, ifaceMethod.returnType)
         }
     }
-    // Typed pointer: "Int*" → "Int"; "IntArray*" → "Int" (array element)
-    if (t.endsWith("*")) {
+    // Typed pointer: Ptr<UserClass> → base name. Exclude typed arrays (Ptr<Arr<T>>).
+    if (tKtcCore is KtcType.Ptr && (tKtcCore as KtcType.Ptr).inner !is KtcType.Arr) {
         val base = t.dropLast(1)
         return if (isArrayType(base)) arrayElementKtType(base) else base
     }

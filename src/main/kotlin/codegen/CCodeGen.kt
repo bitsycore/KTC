@@ -283,18 +283,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     // Target type for HeapAlloc/HeapArrayZero/HeapArrayResize inference (context from LHS)
     internal var heapAllocTargetType: TypeRef? = null
 
-    /** Returns the class name if `type` is a pointer to a known class, else null. */
-    internal fun pointerClassName(type: String?): String? {
-        if (type == null) return null
-        val t = type.removeSuffix("?")
-        if (!t.endsWith("*")) return null
-        val base = t.dropLast(1)
-        return if (classes.containsKey(base)) base else null
-    }
-
-    /** Returns the class name for any indirect (pointer) type. */
-    internal fun anyIndirectClassName(type: String?): String? = pointerClassName(type)
-
     /** Built-in types that are not classes/interfaces/arrays (primitives, String, Any). */
     internal fun isBuiltinType(t: String): Boolean {
         val base = t.removeSuffix("?")
@@ -398,21 +386,6 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 		}
 
     // ── Optional type helpers ────────────────────────────────────────
-
-    /* Returns true if type is value-nullable (T?) where T is a struct/primitive — uses Optional struct.
-    Pointer types (@Ptr T?) use NULL instead. Arrays use ktc_ArrayTrampoline. */
-    internal fun isValueNullableType(internalType: String?): Boolean {
-        if (internalType == null) return false
-        if (!internalType.endsWith("?")) return false
-        val base = internalType.removeSuffix("?")
-        // Pointer types use NULL, not Optional
-        if (base.endsWith("*")) return false
-        // Arrays use ktc_ArrayTrampoline, not Optional
-        if (isArrayType(base)) return false
-        // Any is a trampoline, uses data==NULL for null, not Optional
-        if (parseResolvedTypeName(base) is KtcType.Any) return false
-        return true
-    }
 
     /** True if KtcType is a value-nullable (non-pointer, non-array Optional). */
     internal fun isValueNullableKtc(ktc: KtcType): Boolean = when {

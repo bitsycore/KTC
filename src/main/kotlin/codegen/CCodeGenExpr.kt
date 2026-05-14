@@ -498,10 +498,7 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         ltKtc2 is KtcType.User -> ltKtc2.baseName.takeIf { classes.containsKey(it) }
         else -> null
     }
-    // String-based fallback for types parseResolvedTypeName couldn't handle
-    val classKeyStr = if (classKeyFromKtc == null) pointerClassName(lt) else null
-    if (classKeyStr != null) isPtr = true
-    val classKey = classKeyFromKtc ?: classKeyStr ?: lt?.takeIf { classes.containsKey(it) }
+    val classKey = classKeyFromKtc ?: lt?.takeIf { classes.containsKey(it) }
     if ((e.op == "==" || e.op == "!=") && classKey != null) {
         val leftExpr = genExpr(e.left)
         val rightExpr = genExpr(e.right)
@@ -2618,7 +2615,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         return "printf(\"%.*s$nl\", (ktc_Int)${tmpStr}.len, ${tmpStr}.ptr)"
     }
     // Heap/Ptr/Value to data class → pass pointer directly
-    val indirectBase = anyIndirectClassName(t)
+    val indirectBase = (tKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (indirectBase != null && classes[indirectBase]?.isData == true) {
         val maxLen = toStringMaxLen(indirectBase)
         if (maxLen != null && maxLen <= 512) {
@@ -3282,7 +3279,9 @@ internal fun CCodeGen.genLValue(e: Expr, method: Boolean): String {
                 "${typeFlatName(vCompanionName)}.${e.name}"
             } else {
                 val recvType = inferExprType(e.obj)
-                val op = if (anyIndirectClassName(recvType) != null) "->" else "."
+                val recvKtc = inferExprTypeKtc(e.obj)
+                val recvKtcCore = (recvKtc as? KtcType.Nullable)?.inner ?: recvKtc
+                val op = if (recvKtcCore is KtcType.Ptr) "->" else "."
                 "${genExpr(e.obj)}$op${e.name}"
             }
         }
