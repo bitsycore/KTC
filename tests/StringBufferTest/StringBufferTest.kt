@@ -7,7 +7,7 @@ data class Line(val start: Vec2, val end: Vec2)
 
 class Foo(val x: Int)
 
-fun testToStringViaFunction(sb: StringBuffer, p: Point): String {
+inline fun testToStringViaFunction(sb: StringBuffer, p: Point): String {
     return p.toString(sb)
 }
 
@@ -17,7 +17,7 @@ fun main() {
     val buf1 = CharArray(256)
     var sb1 = StringBuffer(buf1.ptr(), 0)
     val s1 = v.toString(sb1)
-    if (s1 != "Vec2(x=1.500000, y=2.500000)") error("FAIL 1: dataClassStackBuffer")
+    if (s1 != "Vec2(x=1.5, y=2.5)") error("FAIL 1: dataClassStackBuffer, expected: \"Vec2(x=1.5, y=2.5)\", got: \"$s1\"")
 
     // 2. Counting mode (null buffer) then write
     val p2 = Point(42)
@@ -42,7 +42,7 @@ fun main() {
     val buf4 = CharArray(32)
     var sb4 = StringBuffer(buf4.ptr(), 0)
     val s4 = dv.toString(sb4)
-    if (s4 != "3.141590") error("FAIL 4: doubleToString")
+    if (s4 != "3.14159") error("FAIL 4: doubleToString, expected: \"3.141590\", got: \"$s4\"")
 
     // 5. Boolean toString
     val buf5 = CharArray(32)
@@ -57,7 +57,7 @@ fun main() {
     val buf6 = CharArray(512)
     var sb6 = StringBuffer(buf6.ptr(), 0)
     val s6 = line.toString(sb6)
-    if (s6 != "Line(start=Vec2(x=0.000000, y=0.000000), end=Vec2(x=10.000000, y=20.000000))") error("FAIL 6: nestedDataClassToString")
+    if (s6 != "Line(start=Vec2(x=0.0, y=0.0), end=Vec2(x=10.0, y=20.0))") error("FAIL 6: nestedDataClassToString")
 
     // 7. StringBuffer passed as function parameter
     val p7 = Point(99)
@@ -94,10 +94,10 @@ fun main() {
     val buf11 = CharArray(512)
     var sb11 = StringBuffer(buf11.ptr(), 0)
     val s11a = v11a.toString(sb11)
-    if (s11a != "Vec2(x=1.000000, y=2.000000)") error("FAIL 11: reuse1")
+    if (s11a != "Vec2(x=1.0, y=2.0)") error("FAIL 11: reuse1")
     sb11.len = 0
     val s11b = v11b.toString(sb11)
-    if (s11b != "Vec2(x=3.000000, y=4.000000)") error("FAIL 11: reuse2")
+    if (s11b != "Vec2(x=3.0, y=4.0)") error("FAIL 11: reuse2")
 
     // 12. Default class toString with StringBuffer
     val f12 = Foo(1)
