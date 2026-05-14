@@ -224,7 +224,8 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     impl.appendLine("$ind$mutComment$optType ${s.name} = ${optNone(optType)};")
                 } else {
                     val srcType = inferExprType(s.init)
-                    val alreadyOpt = srcType != null && srcType.endsWith("?") && isValueNullableType(srcType)
+                    val srcKtc = inferExprTypeKtc(s.init)
+                    val alreadyOpt = srcKtc is KtcType.Nullable && isValueNullableKtc(srcKtc)
                     val expr = genExpr(s.init)
                     flushPreStmts(ind)
                     if (alreadyOpt) {
@@ -873,11 +874,12 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
             val value = genExpr(s.value)
             flushPreStmts(ind)
             val valueType = inferExprType(s.value)
+            val valueKtc = inferExprTypeKtc(s.value)
             if (varKtc is KtcType.Nullable && isValueNullableKtc(varKtc)
                 && varName != null && isOptional(varName)
             ) {
                 val optType = optCTypeName(varType!!)
-                val alreadyOpt = valueType != null && valueType.endsWith("?") && isValueNullableType(valueType)
+                val alreadyOpt = valueKtc is KtcType.Nullable && isValueNullableKtc(valueKtc)
                 if (alreadyOpt) {
                     impl.appendLine("$ind$target = $value;")
                 } else {
@@ -956,7 +958,8 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
             impl.appendLine("${ind}return ${optNone(optType)};")
         } else {
             val srcType = inferExprType(s.value)
-            val alreadyOpt = srcType != null && srcType.endsWith("?") && isValueNullableType(srcType)
+            val srcKtc = inferExprTypeKtc(s.value)
+            val alreadyOpt = srcKtc is KtcType.Nullable && isValueNullableKtc(srcKtc)
             val expr = genExpr(s.value)
             flushPreStmts(ind)
             if (deferStack.isNotEmpty()) {

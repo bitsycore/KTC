@@ -2,105 +2,43 @@
 
 ## Status
 
-The KtcType hierarchy (`src/main/kotlin/types/CoreTypes.kt`) is well-designed but
-used as a thin bridge layer.  The core codegen still operates mostly on raw strings.
-This file tracks remaining work to complete the migration.
+Currently: **~78% migrated**.  ~186 string checks eliminated.
+Total remaining: 70 across all codegen files.
 
-Currently: **~75% migrated**.  ~180 string checks eliminated.
+## Completed
 
-Total remaining: 57 across all codegen files (was ~200+ originally).
-
-## Latest batch (this session)
-- `genMethodCall`: `isValueNull` string check → KtcType
-- `genMethodCall` nullable receiver dispatch: `recvVarType2.endsWith("?")` → `recvVarKtc2 is Nullable`
-- Extension fun nullable receiver: `recvVarType.endsWith("?")` → `recvVarKtc is Nullable`
-- `genSafeMethodCall`: warning check `!endsWith("?") && !endsWith("*")` → KtcType
-- `genSafeMethodCall`: `isValueNullRecv` string check → KtcType
-- `genSafeMethodCall`: `guard` when branch `endsWith("*?")` → KtcType
-- `genSafeMethodCall`: array ptr check `isArrayType` → `recvTypeCoreKtc.isArrayLike`
-- `genSafeMethodCall`: nullable guard `endsWith("?")` → `recvTypeKtc is Nullable`
-- `genExpr` ThisExpr: `!selfType.endsWith("?")` → `selfKtc !is Nullable`
-- `genToStringKtc` thin wrapper added (delegates to string version)
-- `genMethodCall` star-projection selfExpr: pointer check remains (requires broader refactor)
-
-## Completed (this session)
-
-- Added `printfFmtKtc(KtcType)` in `CCodeGenCTypes.kt`
-- Added `isValueNullableKtc(KtcType)` in `CCodeGen.kt`
-- `genBin` comparison/equality path: `endsWith("?")`, `endsWith("*")`, `isValueNullableType`, `pointerClassName`, `== "String"` → KtcType pattern matching
+- `KtcType.Any` first-class type (was `User(BuiltinTypeDef("Any"))`)
+- `genBin` comparison/equality path: `endsWith("?")`, `endsWith("*")`, `isValueNullableType`, `pointerClassName`, `== "String"` → KtcType
 - `genMethodCall`: `recvType == "String"` (~20 sites), `isArrayType`, hashCode `when(rt)` → KtcType
-- `genSbAppend` → `genSbAppendKtc(KtcType)`: fully rewritten with KtcType dispatch.
-  String version now delegates via `parseResolvedTypeName`. All 3 external
-  callers migrated to `genSbAppendKtc`. (~15 string checks eliminated: endsWith("?"),
-  isValueNullableType, when(type) on String, endsWith("*"))
-- `emitDataClassToString` → uses `genSbAppendKtc` with native KtcType (no string roundtrip)
+- `genDot` + `genSafeDot`: `endsWith("?")`, `endsWith("*")`, `isArrayType`, `pointerClassName`, `anyIndirectClassName`, `== "String"` → KtcType (~15 sites)
+- `genSbAppend` → `genSbAppendKtc(KtcType)`: fully rewritten with KtcType dispatch + Ptr data class fix
+- `emitDataClassToString` → uses `genSbAppendKtc` with native KtcType
+- `genWhenCond` → KtcType pattern matching
+- `emitAssign` → safe-dot assignment, value-nullable, `anyIndirectClassName`, `isAnyPtrNullVar`, `isArrayType` → KtcType
+- `emitVarDecl` → `isPointer`, `isValueNullable`, `isFuncType`, `isArrayType`, `const` qualifiers → KtcType
+- `emitPrintStmtInner` → nullable detection, data class checks, `anyIndirectClassName`, class/object/interface → KtcType
+- `genIsAs` IsCheckExpr → `endsWith("*")`, `endsWith("?")`, `isArrayType`, `isValueNullableType` → KtcType
+- `expandCallArgs` → pointer/array param checks → KtcType
+- `genNotNull` → 3 string checks → KtcType
+- `narrowSubjectForBranch` → `endsWith("*")` → KtcType
+- `hashFieldExpr` → `hashFieldExprKtc(KtcType)` with pattern matching
+- `printfFmtKtc(KtcType)` / `isValueNullableKtc(KtcType)` helpers added
+- `genPrintCall` / `genSbAppendKtc` → fixed `$has` for pointer-nullable, data class Ptr detection
 
-## Patterns to eliminate (string → KtcType)
+## Remaining by file
 
-| String check                    | KtcType equivalent                        | Remaining count |
-|---------------------------------|-------------------------------------------|-----------------|
-| `endsWith("*")`                 | `is KtcType.Ptr`                          | ~45             |
-| `endsWith("?")`                 | `is KtcType.Nullable`                     | ~55             |
-| `isArrayType(str)`              | `ktc.isArrayLike`                         | ~35 call sites  |
-| `isValueNullableType(str)`      | `isValueNullableKtc(ktc)`                 | ~30 call sites  |
-| `pointerClassName(str)`         | extract `(ktc as? Ptr)?.inner` + class    | ~5 call sites   |
-| `anyIndirectClassName(str)`     | same as above                             | ~20 call sites  |
-| `printfFmt(str)`                | `printfFmtKtc(ktc)`                       | 5 call sites    |
-| `inferExprType()` → `String?`   | `inferExprTypeKtc()` → `KtcType?`         | 96 call sites   |
-| `resolveTypeName().toInternalStr` | use KtcType directly                    | 54 sites        |
+| File | Count | Main patterns |
+|------|-------|---------------|
+| CCodeGenCTypes.kt | 10 | `cTypeStr(string)`, `isArrayType`, `printfFmt` string version, `arrayElementCType` |
+| CCodeGenInfer.kt | 21 | `endsWith("Array")`, `endsWith("*")`, return-type string manipulation |
+| CCodeGenExpr.kt | 14 | genBin remnants, genToString string version, `endsWith("*")` in dispose/star-projection |
+| CCodeGenStmts.kt | 12 | emitReturn `== "Any"`, netNullable `$has`, emitVarDecl `isArrayType(t)` |
+| CCodeGen.kt | 8 | `pointerClassName`, `anyIndirectClassName`, `isBuiltinType`, `isValueNullableType` |
+| CCodeGenEmit.kt | 3 | `retResolved` string comparisons |
+| ArraysMapping.kt | 2 | internal array mapping string checks |
 
-## Priority work areas
+## Known risks
 
-### 1. `genDot` — `CCodeGenExpr.kt` (~lines 2000-2200)
-
-Heavily string-based field-access dispatch. Uses `anyIndirectClassName(str)`,
-`endsWith("*")`, `endsWith("?")`, `isArrayType`.  Already has `recvTypeKtc`
-available at call sites — just not used for dispatch.
-
-### 2. `genSbAppend` — `CCodeGenExpr.kt` (~lines 2940-3000)
-
-Entire signature is string-based: `genSbAppend(sb: String, expr: String, type: String)`.
-Should take `KtcType` for the `type` parameter.
-
-### 3. `inferDotType` / `inferExprType` — `CCodeGenInfer.kt`
-
-Returns `String?` from 96 call sites vs `KtcType?` from only 7. The Ktc
-version currently just wraps the string result via `parseResolvedTypeName`.
-Real migration means rewriting the inference to produce KtcType natively.
-
-### 4. `CCodeGenStmts.kt` — statement codegen
-
-Many `endsWith("*")`, `endsWith("?")`, `isArrayType`, `isValueNullableType` checks
-in variable declarations, assignments, for-loops, when-expressions.
-
-### 5. `CCodeGenEmit.kt` — class emission
-
-Uses `.isArrayLike`, `.asArr` natively in some places (~15 sites) — this is good.
-But `genSbAppend` dispatch is still string-based.  `hashFieldExpr` takes String.
-
-### 6. `printfFmt` call sites (5 call sites)
-
-All pass raw `String` from `inferExprType`. After upstream `inferExprType` is
-migrated, these can switch to `printfFmtKtc`.
-
-## Known risks when migrating
-
-- **Array types (`IntOptArray?`, etc.)**: `parseResolvedTypeName` classifies these
-  as `Nullable(Ptr(Arr(...)))`, which is semantically different from the string
-  check `endsWith("*?")`.  String checks on null-comparison paths for trampolined
-  array params are sensitive — keep string fallback during migration.
-- **`inferExprType` return type**: Changing from `String?` to `KtcType?` is a
-  massive breaking change. Start by introducing a parallel `inferExprTypeKtc`
-  path, migrate callers incrementally, then deprecate the string version.
-- **Builtin types (Pair, Triple, Any)**: These are handled correctly by KtcType
-  via `BuiltinTypeDef`. No known issues.
-
-## Test strategy
-
-After each batch of changes, run:
-```
-.\run_tests.ps1           # all 32 integration tests
-./gradlew test             # all 541 unit tests
-```
-
-Both must pass with zero failures before proceeding to the next batch.
+- **KtcType.Ptr** wraps both user pointers (`Vec2*`) and typed arrays (`Ptr<Arr<Int>>` = `IntArray`). When migrating `endsWith("*")`, must exclude array-typed pointers via `inner !is KtcType.Arr`.
+- **`inferExprType` → `String?`** vs **`inferExprTypeKtc` → `KtcType?`**: The Ktc version is a wrapper around the string version. Real migration means native KtcType inference.
+- **`$has`** is legacy and should be fully removed. Value types use `tag == ktc_SOME`, pointer types use `!= NULL`.

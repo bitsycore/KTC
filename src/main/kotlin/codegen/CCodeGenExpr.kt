@@ -299,7 +299,7 @@ internal fun CCodeGen.genName(e: NameExpr): String {
             val fieldRef = if (selfIsPointer) "\$self->${fieldName}" else "\$self.${fieldName}"
             // If field is stored as Optional but accessed after smart-cast (non-nullable context), unwrap
             val fieldType = ci.props.find { it.first == e.name }?.second
-            if (fieldType?.nullable == true && !curType.endsWith("?")) {
+            if (fieldType?.nullable == true && curKtc !is KtcType.Nullable) {
                 return "$fieldRef.value"
             }
             return fieldRef
@@ -327,7 +327,7 @@ internal fun CCodeGen.genName(e: NameExpr): String {
             return "(*(($ct*)(${e.name}.data)))"
         }
         // Optional var smart-casted to non-nullable: unwrap to .value
-        if (isOptional(e.name) && !curType.endsWith("?")) {
+        if (isOptional(e.name) && curKtc !is KtcType.Nullable) {
             return "${e.name}.value"
         }
         return e.name
@@ -1911,13 +1911,13 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
         // Implicit dispose — always emitted as no-op
         if (method == "dispose" && (classes.containsKey(recvType) || enums.containsKey(recvType) || objects.containsKey(recvType))) {
-            val selfExpr = if (recvType.endsWith("*") || recvType.endsWith("*?")) recv else "&$recv"
+            val selfExpr = if (recvTypeKtc is KtcType.Ptr) recv else "&$recv"
             val base = anyIndirectClassName(recvType) ?: recvType
             return "${typeFlatName(base)}_dispose($selfExpr)"
         }
         // Per-class star-projection extension (e.g. fun Map<K,V>.tryDispose())
         if (classes.containsKey(recvType) && starExtFunDecls.any { it.name == method }) {
-            val selfExpr = if (recvType.endsWith("*") || recvType.endsWith("*?")) recv else "&$recv"
+            val selfExpr = if (recvTypeKtc is KtcType.Ptr) recv else "&$recv"
             val base = anyIndirectClassName(recvType) ?: recvType
             val allArgs = if (argStr.isEmpty()) selfExpr else "$selfExpr, $argStr"
             return "${typeFlatName(base)}_$method($allArgs)"
