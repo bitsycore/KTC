@@ -7,9 +7,10 @@ fun Box.reset() { value = 0 }
 
 fun main() {
     val b = Box(21)
-    println("Box double: ${b.double()}")
+    val d = b.double()
+    if (d != 42) error("FAIL double: $d")
+    println("Box double: $d")
     b.reset()
     println("after reset: ${b.double()}")
-
     println("done")
 }

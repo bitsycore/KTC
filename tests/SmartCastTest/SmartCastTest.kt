@@ -1,10 +1,11 @@
 package SmartCastTest
 
 fun main() {
-    // Null smart-cast on Int?
     val x: Int? = 42
     if (x != null) {
-        println("doubled: ${x * 2}")
+        val doubled = x * 2
+        if (doubled != 84) error("FAIL doubled: $doubled")
+        println("doubled: $doubled")
     }
     if (x == null) {
         println("is null")
@@ -12,20 +13,24 @@ fun main() {
         println("value = $x")
     }
 
-    // Null smart-cast on String?
     val s: String? = "hello"
     if (s != null) {
+        if (s.length != 5) error("FAIL length: ${s.length}")
         println("length: ${s.length}")
     }
 
-    // is type check on arrays (compile-time resolved)
     val arr = intArrayOf(1, 2, 3)
     if (arr is Array<Int>) {
         println("arr is IntArray")
+    } else {
+        error("FAIL arr should be Array<Int>")
     }
     if (arr !is Array<Float>) {
         println("arr is not FloatArray")
+    } else {
+        error("FAIL arr should not be Array<Float>")
     }
+    if (arr.size <= 0) error("FAIL arr.size=${arr.size}")
     println("has items: ${arr.size > 0}")
 
     println("done")

@@ -6,18 +6,24 @@ fun main() {
     defer list.dispose()
 
     println("--- List iterator ---")
+    var listSum = 0
     for (item in list) {
         println(item)
+        listSum += item
     }
+    if (listSum != 15) error("FAIL list sum=$listSum")  // 1+2+3+4+5
 
     // Test ListIterator via listOf
     val fixedList = listOf(10, 20, 30)
     defer fixedList.dispose()
 
     println("--- Fixed list iterator ---")
+    var fixedSum = 0
     for (item in fixedList) {
         println(item)
+        fixedSum += item
     }
+    if (fixedSum != 60) error("FAIL fixedList sum=$fixedSum")  // 10+20+30
 
     // Test MapIterator via HashMap
     val map = HashMap<String, Int>(8)
@@ -26,9 +32,12 @@ fun main() {
     map["Charlie"] = 35
 
     println("--- Map iterator ---")
+    var mapCount = 0
     for (entry in map) {
         println("${entry.first} = ${entry.second}")
+        mapCount++
     }
+    if (mapCount != 3) error("FAIL map count=$mapCount")
     map.dispose()
 
     // Test MapIterator via mutableMapOf

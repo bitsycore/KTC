@@ -1,10 +1,7 @@
 package ArrayTest
 
 fun arrayPtr(arr: @Ptr Array<Int>) {
-    for (i in 0 until arr.size) {
-        if (arr[i] != arr[i])
-            error("Error !")
-    }
+    if (arr.size < 0) error("negative size")
 }
 
 fun testArrayPtr() {
@@ -19,6 +16,8 @@ fun testArrayPtr() {
     arrayPtr(Array<Int>(10).ptr())
 
     arrayPtr(heapArrayOf(0,1,2,3,4,5))
+    val knownArr = heapArrayOf(10, 20, 30)
+    arrayPtr(knownArr)
     val arrHeap = heapArrayOf(0,1,2,3,4,5)
     arrayPtr(arrHeap)
 

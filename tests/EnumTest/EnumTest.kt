@@ -42,14 +42,16 @@ fun testEnumName() {
 fun testEnumWhen() {
     val values = enumValues<Color>()
     var value = 0
+    var redSeen = false; var greenSeen = false; var blueSeen = false
     repeat(values.size) {
         when (values[value]) {
-            Color.RED -> println("Fire ! the color is RED")
-            Color.GREEN -> println("Leafy ! the color is GREEN")
-            Color.BLUE -> println("Sad ! the color is BLUE")
+            Color.RED   -> { println("Fire ! the color is RED");   redSeen   = true }
+            Color.GREEN -> { println("Leafy ! the color is GREEN"); greenSeen = true }
+            Color.BLUE  -> { println("Sad ! the color is BLUE");   blueSeen  = true }
         }
         value++
     }
+    if (!redSeen || !greenSeen || !blueSeen) error("FAIL testEnumWhen: not all colors seen")
 }
 
 fun main(args: Array<String>) {

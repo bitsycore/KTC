@@ -10,22 +10,28 @@ fun main() {
     val b = Vec2(1.0f, 2.0f)
     val c = Vec2(3.0f, 4.0f)
 
-    println("same value -> same hash: ${a.hashCode() == b.hashCode()}")
-    println("diff value -> diff hash: ${a.hashCode() != c.hashCode()}")
+    if (a.hashCode() != b.hashCode()) error("FAIL same value -> same hash")
+    println("same value -> same hash: ok")
+    if (a.hashCode() == c.hashCode()) error("FAIL diff value -> diff hash (may be acceptable collision)")
+    println("diff value -> diff hash: ok")
 
     val p1 = Point3D(1.0f, 2.0f, 3.0f)
     val p2 = Point3D(1.0f, 2.0f, 3.0f)
-    println("Point3D same -> same hash: ${p1.hashCode() == p2.hashCode()}")
+    if (p1.hashCode() != p2.hashCode()) error("FAIL Point3D same -> same hash")
+    println("Point3D same -> same hash: ok")
 
     val pl1 = Player("Alice", 100)
     val pl2 = Player("Alice", 100)
     val pl3 = Player("Bob", 100)
-    println("Player same -> same hash: ${pl1.hashCode() == pl2.hashCode()}")
-    println("Player diff -> diff hash: ${pl1.hashCode() != pl3.hashCode()}")
+    if (pl1.hashCode() != pl2.hashCode()) error("FAIL Player same -> same hash")
+    println("Player same -> same hash: ok")
+    if (pl1.hashCode() == pl3.hashCode()) error("FAIL Player diff -> diff hash (may be acceptable collision)")
+    println("Player diff -> diff hash: ok")
 
     val r1 = RegularClass(1)
     val r2 = RegularClass(2)
-    println("RegularClass different because diff address: ${r1.hashCode() != r2.hashCode()}")
+    if (r1.hashCode() == r2.hashCode()) error("FAIL RegularClass should differ by address")
+    println("RegularClass different because diff address: ok")
 
     println("done")
 }

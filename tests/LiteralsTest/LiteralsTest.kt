@@ -116,54 +116,60 @@ fun main2() {
 }
 
 fun main() {
-    var ok = true
 
     // ── Decimal Int ───────────────────────────────────────────────────
     val decInt: Int = 42
-    if (decInt != 42) { println("FAIL: decInt"); ok = false } else println("OK: decInt")
+    if (decInt != 42) error("FAIL decInt")
+    println("OK: decInt")
 
     // ── Long ──────────────────────────────────────────────────────────
     val longVal: Long = 100L
-    if (longVal != 100L) { println("FAIL: longVal"); ok = false } else println("OK: longVal")
+    if (longVal != 100L) error("FAIL longVal")
+    println("OK: longVal")
 
     // ── Float ─────────────────────────────────────────────────────────
     val floatVal: Float = 3.14f
-    if (floatVal <= 3.13f || floatVal >= 3.15f) { println("FAIL: floatVal"); ok = false } else println("OK: floatVal")
+    if (floatVal <= 3.13f || floatVal >= 3.15f) error("FAIL floatVal")
+    println("OK: floatVal")
 
     // ── Double ────────────────────────────────────────────────────────
     val doubleVal: Double = 3.14
-    if (doubleVal <= 3.13 || doubleVal >= 3.15) { println("FAIL: doubleVal"); ok = false } else println("OK: doubleVal")
+    if (doubleVal <= 3.13 || doubleVal >= 3.15) error("FAIL doubleVal")
+    println("OK: doubleVal")
 
     // ── Boolean ───────────────────────────────────────────────────────
     val t = true; val f = false
-    if (t != true || f != false) { println("FAIL: bool"); ok = false } else println("OK: bool")
+    if (t != true || f != false) error("FAIL bool")
+    println("OK: bool")
 
     // ── Char ──────────────────────────────────────────────────────────
     val ch = 'A'
-    if (ch != 'A') { println("FAIL: char"); ok = false } else println("OK: char")
+    if (ch != 'A') error("FAIL char")
+    println("OK: char")
 
     val chEsc = '\n'
-    if (chEsc != '\n') { println("FAIL: charEscape"); ok = false } else println("OK: charEscape")
+    if (chEsc != '\n') error("FAIL charEscape")
+    println("OK: charEscape")
 
     // ── String ────────────────────────────────────────────────────────
     val s = "Hello"
-    if (s != "Hello") { println("FAIL: string"); ok = false } else println("OK: string")
+    if (s != "Hello") error("FAIL string")
+    println("OK: string")
 
     // ── Null ──────────────────────────────────────────────────────────
     val n: String? = null
-    if (n != null) { println("FAIL: null"); ok = false } else println("OK: null")
+    if (n != null) error("FAIL null")
+    println("OK: null")
 
     // ── Hex Int ───────────────────────────────────────────────────────
     val hexVal: Int = 0xFF
-    if (hexVal != 255) { println("FAIL: hexInt"); ok = false } else println("OK: hexInt")
+    if (hexVal != 255) error("FAIL hexInt")
+    println("OK: hexInt")
 
     // ── Binary Int ────────────────────────────────────────────────────
     val binVal: Int = 0b1010
-    if (binVal != 10) { println("FAIL: binInt"); ok = false } else println("OK: binInt")
+    if (binVal != 10) error("FAIL binInt")
+    println("OK: binInt")
 
-    if (ok) {
-        println("ALL OK")
-    } else {
-        println("SOME FAILED")
-    }
+    println("ALL OK")
 }

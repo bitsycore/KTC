@@ -41,13 +41,18 @@ class TestCompanion {
 
 fun main() {
     println("Value: ${Config2.buffer.size}")
-    println("first: ${Config.next()}")
-    println("second: ${Config.next()}")
+    val first = Config.next()
+    if (first != 1) error("FAIL Config.next first=$first")
+    println("first: $first")
+    val second = Config.next()
+    if (second != 2) error("FAIL Config.next second=$second")
+    println("second: $second")
 
     Greeter.greeterEnabled = false
     Greeter.greet("World")
     Greeter.greeterEnabled = true
     Greeter.greet("Kotlin")
+    if (Greeter.greeterEnabled == false) error("FAIL Greeter.greeterEnabled should be true")
 
     val test = TestCompanion()
     TestCompanion.testMe()
