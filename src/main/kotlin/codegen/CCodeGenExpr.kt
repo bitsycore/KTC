@@ -2,6 +2,7 @@ package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
 import com.bitsycore.ktc.codegen.mapping.arrayElementCType
+import com.bitsycore.ktc.codegen.mapping.arrayElementCTypeKtc
 import com.bitsycore.ktc.types.KtcType
 
 /**
@@ -1078,8 +1079,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             typeSubst = genFun.typeParams.zip(typeArgNames).toMap()
             // Check for @Size array return
             if (genFun.returnType != null && isSizedArrayTypeRef(genFun.returnType)) {
-                val retType = resolveTypeName(genFun.returnType).toInternalStr
-                val elemCType = arrayElementCType(retType)
+                val vRetKtcSized = resolveTypeName(genFun.returnType)
+                val retType = vRetKtcSized.toInternalStr
+                val elemCType = arrayElementCTypeKtc(vRetKtcSized)
                 val size = getSizeAnnotation(genFun.returnType)!!
                 val t = tmp()
                 preStmts += "$elemCType ${t}[$size];"
@@ -1148,8 +1150,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
                 // @Size(N) return → out-parameter ABI
                 if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-                    val retType = resolveTypeName(methodDecl.returnType).toInternalStr
-                    val elemCType = arrayElementCType(retType)
+                val vRetKtcSize = resolveTypeName(methodDecl.returnType)
+                val retType = vRetKtcSize.toInternalStr
+                val elemCType = arrayElementCTypeKtc(vRetKtcSize)
                     val size = getSizeAnnotation(methodDecl.returnType)!!
                     val t = tmp()
                     preStmts += "$elemCType ${t}[$size];"
@@ -1749,8 +1752,10 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_$overloadedName" else overloadedName
         // @Size(N) return → out-parameter ABI
         if (methodDecl?.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-            val retType = resolveTypeName(methodDecl.returnType).toInternalStr
-            val elemCType = arrayElementCType(retType)
+                val vRetKtcSz = resolveTypeName(methodDecl.returnType)
+                val retType = vRetKtcSz.toInternalStr
+                val elemCType = arrayElementCTypeKtc(vRetKtcSz)
+
             val size = getSizeAnnotation(methodDecl.returnType)!!
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"

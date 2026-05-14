@@ -3,6 +3,7 @@ package com.bitsycore.ktc.codegen
 import com.bitsycore.ktc.ast.*
 import com.bitsycore.ktc.ast.Annotation
 import com.bitsycore.ktc.codegen.mapping.arrayElementCType
+import com.bitsycore.ktc.codegen.mapping.arrayElementCTypeKtc
 import com.bitsycore.ktc.codegen.mapping.arrayElementKtType
 import com.bitsycore.ktc.types.KtcType
 
@@ -233,7 +234,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
             }
             // ── Nullable array (Array<T>?) ──
             isNullableArray -> {
-                val elemCType = arrayElementCType(t)
+                val elemCType = arrayElementCTypeKtc(vKtcCore)
                 if (s.init is NullLit) {
                     impl.appendLine("$ind$mutComment$elemCType* ${s.name} = NULL;")
                     impl.appendLine("${ind}const ktc_Int ${s.name}\$len = 0;")
@@ -315,7 +316,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                 flushPreStmts(ind)
                 // Array type: deep copy from source (value semantics, not alias)
                 if (vKtcCore is KtcType.Arr && s.init !is NullLit) {
-                    val elemCType = arrayElementCType(t)
+                    val elemCType = arrayElementCTypeKtc(vKtcCore)
                     val lenExpr = if (s.init is NameExpr) "${s.init.name}\$len" else "${expr}\$len"
                     impl.appendLine("${ind}$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
                     impl.appendLine("${ind}memcpy(${s.name}, $expr, sizeof($elemCType) * $lenExpr);")
