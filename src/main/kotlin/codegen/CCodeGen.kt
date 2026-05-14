@@ -693,6 +693,10 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     }
 
     fun generate(): COutput {
+        /* @file:DocumentationOnly files provide type information to other files but
+        produce no C output themselves — the real implementations live in ktc_intrinsic. */
+        if (file.documentationOnly) return COutput("", "")
+
         collectDecls()
 
         hdr.appendLine("#pragma once")
@@ -974,6 +978,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         tlsProps.clear()
         // Collect from all files for cross-reference resolution
         for (f in allFiles) {
+            if (f.documentationOnly) continue
             val fpfx = f.pkg?.replace('.', '_')?.plus("_") ?: ""
             for (d in f.decls) {
                 collectDecl(d)

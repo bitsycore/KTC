@@ -12,12 +12,27 @@ class Parser(private val tokens: List<Token>) {
 
     fun parseFile(): KtFile {
         skipNL()
+        /* @file:DocumentationOnly — must be the first thing in the file.
+        Marks the file as documentation-only: declarations are visible to other files
+        but no C code is generated for this file. Consumes the 4-token sequence and
+        sets documentationOnly = true on the resulting KtFile. */
+        val documentationOnly = pos + 3 < tokens.size
+            && tokens[pos].type     == TokenType.AT
+            && tokens[pos + 1].type == TokenType.IDENT && tokens[pos + 1].value == "file"
+            && tokens[pos + 2].type == TokenType.COLON
+            && tokens[pos + 3].type == TokenType.IDENT && tokens[pos + 3].value == "DocumentationOnly"
+        if (documentationOnly) { repeat(4) { advance() }; skipTerminator() }
         val pkg = if (at(TokenType.PACKAGE)) { advance(); parseQualifiedName().also { skipTerminator() } } else null
         val imports = mutableListOf<String>()
         while (at(TokenType.IMPORT)) { advance(); imports += parseQualifiedName(); skipTerminator() }
         val decls = mutableListOf<Decl>()
-        while (!at(TokenType.EOF)) { skipNL(); if (at(TokenType.EOF)) break; decls += parseDecl() }
-        return KtFile(pkg, imports, decls)
+        while (!at(TokenType.EOF)) {
+            skipNL()
+            if (at(TokenType.EOF)) break
+            if (at(TokenType.COMMENT)) { advance(); skipTerminator(); continue }
+            decls += parseDecl()
+        }
+        return KtFile(pkg, imports, decls, documentationOnly = documentationOnly)
     }
 
     // ═══════════════════════════ Declarations ═════════════════════════
@@ -44,6 +59,9 @@ class Parser(private val tokens: List<Token>) {
             at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate, isInline = isInline, isOverride = isOverride, isInfix = isInfix)
             at(TokenType.DATA)   -> { if (isPrivate) error("private with data not supported"); advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
+            at(TokenType.IDENT) && cur().value == "annotation" && peek().type == TokenType.CLASS -> {
+                advance(); advance(); parseClassDecl(isData = false)
+            }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
             at(TokenType.INTERFACE) -> parseInterfaceDecl()
             at(TokenType.IDENT) && cur().value == "companion" && peek().type == TokenType.OBJECT -> {

@@ -18,7 +18,8 @@ data class KtFile(
     val pkg: String?,
     val imports: List<String>,
     val decls: List<Decl>,
-    val sourceFile: String = ""
+    val sourceFile: String = "",
+    val documentationOnly: Boolean = false  // true when file starts with @file:DocumentationOnly
 )
 
 // ═══════════════════════════ Declarations ═══════════════════════════
