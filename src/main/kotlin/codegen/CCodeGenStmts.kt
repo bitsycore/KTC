@@ -42,17 +42,25 @@ internal fun CCodeGen.emitStmt(s: Stmt, ind: String, insideMethod: Boolean = fal
     if (s.line > 0) currentStmtLine = s.line
     currentInd = ind
     when (s) {
-        is VarDeclStmt  -> emitVarDecl(s, ind, insideMethod)
-        is AssignStmt   -> emitAssign(s, ind, insideMethod)
-        is ReturnStmt   -> emitReturn(s, ind)
-        is ExprStmt     -> emitExprStmt(s, ind, insideMethod)
-        is ForStmt      -> emitFor(s, ind, insideMethod)
-        is WhileStmt    -> { impl.appendLine("${ind}while (${genExpr(s.cond)}) {"); emitBlock(s.body, ind, insideMethod); impl.appendLine("$ind}") }
-        is DoWhileStmt  -> { impl.appendLine("${ind}do {"); emitBlock(s.body, ind, insideMethod); impl.appendLine("$ind} while (${genExpr(s.cond)});") }
-        is BreakStmt    -> impl.appendLine("${ind}break;")
+        is VarDeclStmt -> emitVarDecl(s, ind, insideMethod)
+        is AssignStmt -> emitAssign(s, ind, insideMethod)
+        is ReturnStmt -> emitReturn(s, ind)
+        is ExprStmt -> emitExprStmt(s, ind, insideMethod)
+        is ForStmt -> emitFor(s, ind, insideMethod)
+        is WhileStmt -> {
+            impl.appendLine("${ind}while (${genExpr(s.cond)}) {"); emitBlock(s.body, ind, insideMethod); impl.appendLine("$ind}")
+        }
+
+        is DoWhileStmt -> {
+            impl.appendLine("${ind}do {"); emitBlock(s.body, ind, insideMethod); impl.appendLine("$ind} while (${genExpr(s.cond)});")
+        }
+
+        is BreakStmt -> impl.appendLine("${ind}break;")
         is ContinueStmt -> impl.appendLine("${ind}continue;")
-        is DeferStmt    -> deferStack.add(s.body)
-        is CommentStmt  -> { impl.appendLine("$ind${s.text}") }
+        is DeferStmt -> deferStack.add(s.body)
+        is CommentStmt -> {
+            impl.appendLine("$ind${s.text}")
+        }
     }
     // Smart cast: if (x == null) return/break/continue → narrow x to non-null after
     applyGuardSmartCast(s)
@@ -110,13 +118,15 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
     val isInferredPtr = inferredPtr
 
     // Register type in scope
-    defineVar(s.name, when {
-        isPtrNullable  -> "${t}?"
-        isValueNullable -> "${t}?"
-        isNullableArray -> "${t}?"
-        isAnyNullable   -> "${t}?"
-        else -> t
-    })
+    defineVar(
+        s.name, when {
+            isPtrNullable -> "${t}?"
+            isValueNullable -> "${t}?"
+            isNullableArray -> "${t}?"
+            isAnyNullable -> "${t}?"
+            else -> t
+        }
+    )
     if (s.mutable) markMutable(s.name)
     val mutComment = if (s.mutable) "/*VAR*/ " else "/*VAL*/ "
 
@@ -137,7 +147,8 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
     val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t)
         && !t.endsWith("*")
         && !isArrayType(t)
-        && !isPointer && !isValueNullable && !isPtrNullable) "const " else ""
+        && !isPointer && !isValueNullable && !isPtrNullable
+    ) "const " else ""
 
     if (s.init != null) {
         val arrayInit = tryArrayOfInit(s.name, s.init, ct, t, ind)
@@ -298,7 +309,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                         val srcName = (s.init as NameExpr).name
                         // Skip $len copy if source is a @Ptr RawArray<T> field (which has no $len companion)
                         val isRawArrayField = currentClass != null &&
-                            classes[currentClass]?.props?.any { it.first == srcName && it.second.name == "RawArray" } == true
+                                classes[currentClass]?.props?.any { it.first == srcName && it.second.name == "RawArray" } == true
                         if (!isRawArrayField) {
                             impl.appendLine("${ind}ktc_Int ${s.name}\$len = ${srcName}\$len;")
                         }
@@ -311,10 +322,12 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
             isPtrNullable -> {
                 impl.appendLine("$ind$mutComment$ct ${s.name} = NULL;")
             }
+
             isNullableArray -> {
                 impl.appendLine("$ind$mutComment${arrayElementCType(t)}* ${s.name} = NULL;")
                 impl.appendLine("${ind}const ktc_Int ${s.name}\$len = 0;")
             }
+
             else -> {
                 if (isValueNullable) {
                     val optType = optCTypeName("${t}?")
@@ -351,14 +364,17 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         val optCType = optCTypeName("${elemName}?")
         val size = if (init.args.isNotEmpty()) genExpr(init.args[0].expr) else "0"
         return "${ind}$optCType* ${varName} = ($optCType*)ktc_alloca(sizeof($optCType) * (size_t)($size));\n" +
-               "${ind}memset($varName, 0, sizeof($optCType) * (size_t)($size));\n" +
-               "${ind}const ktc_Int ${varName}\$len = $size;"
+                "${ind}memset($varName, 0, sizeof($optCType) * (size_t)($size));\n" +
+                "${ind}const ktc_Int ${varName}\$len = $size;"
     }
     // Array<T>(size), IntArray(size) etc. — fresh stack allocation, emit directly into varName
-    if (callee in setOf("IntArray", "LongArray", "FloatArray", "DoubleArray",
-        "BooleanArray", "CharArray", "ByteArray", "ShortArray",
-        "UByteArray", "UShortArray", "UIntArray", "ULongArray") ||
-        (callee == "Array" && init.typeArgs.isNotEmpty())) {
+    if (callee in setOf(
+            "IntArray", "LongArray", "FloatArray", "DoubleArray",
+            "BooleanArray", "CharArray", "ByteArray", "ShortArray",
+            "UByteArray", "UShortArray", "UIntArray", "ULongArray"
+        ) ||
+        (callee == "Array" && init.typeArgs.isNotEmpty())
+    ) {
         val elemC = if (callee == "Array") {
             cTypeStr(resolveTypeName(init.typeArgs[0]))  // KtcType for element type emission
         } else when (callee) {
@@ -390,20 +406,24 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
                     isLast && stmt is ExprStmt -> {
                         sb.appendLine("${ind}    $varName[$itName] = ${genExpr(stmt.expr)};")
                     }
+
                     stmt is ExprStmt -> {
                         // Non-last expression statement: evaluate for side effects and discard
                         sb.appendLine("${ind}    (void)${genExpr(stmt.expr)};")
                     }
+
                     stmt is VarDeclStmt -> {
                         // Local val/var inside the loop body
-                        val vTypeKtc = stmt.type?.let { resolveTypeName(it) } ?: parseResolvedTypeName(inferExprType(stmt.init) ?: "Int") // KtcType for emission
-                        val vType    = vTypeKtc.toInternalStr                                                                              // string type
+                        val vTypeKtc =
+                            stmt.type?.let { resolveTypeName(it) } ?: parseResolvedTypeName(inferExprType(stmt.init) ?: "Int") // KtcType for emission
+                        val vType = vTypeKtc.toInternalStr                                                                              // string type
                         defineVarKtc(stmt.name, vTypeKtc)
                         val vCT = cTypeStr(vTypeKtc)  // C type from KtcType
                         val mut = if (stmt.mutable) "" else "const "
                         val initExpr = stmt.init?.let { genExpr(it) } ?: "0"
                         sb.appendLine("${ind}    ${mut}$vCT ${stmt.name} = $initExpr;")
                     }
+
                     stmt is AssignStmt -> {
                         val lhs = genLValue(stmt.target, false)
                         val rhs = genExpr(stmt.value)
@@ -417,6 +437,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
                             sb.appendLine("${ind}    $lhs = $rhs;")
                         }
                     }
+
                     else -> codegenError("Unsupported statement in Array init lambda body")
                 }
             }
@@ -426,7 +447,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         }
         flushPreStmts(ind)
         return "${ind}$elemC* ${varName} = ($elemC*)ktc_alloca(sizeof($elemC) * (size_t)($size));\n" +
-               "${ind}const ktc_Int ${varName}\$len = $size;"
+                "${ind}const ktc_Int ${varName}\$len = $size;"
     }
     // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
     if (callee == "arrayOf") {
@@ -434,7 +455,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         val vIsNullableElem = vTypeArg?.nullable == true || t.endsWith("OptArray")
         if (vIsNullableElem) {
             val vOptCType = if (t.endsWith("OptArray")) arrayElementCType(t)
-                            else optCTypeName("${typeSubst[vTypeArg!!.name] ?: vTypeArg.name}?")
+            else optCTypeName("${typeSubst[vTypeArg!!.name] ?: vTypeArg.name}?")
             val vArgs = init.args.joinToString(", ") { vArg ->
                 if (vArg.expr is NullLit) "($vOptCType){ktc_NONE}"
                 else "($vOptCType){ktc_SOME, ${genExpr(vArg.expr)}}"
@@ -445,10 +466,10 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
     // heapArrayOf<T>(e1, e2, ...) → heap allocation, returns pointer, safe to return from functions
     if (callee == "heapArrayOf") {
         val elemType = if (init.typeArgs.isNotEmpty()) cTypeStr(typeSubst[init.typeArgs[0].name] ?: init.typeArgs[0].name)
-                       else if (init.args.isNotEmpty()) {
-                           val inferred = inferExprType(init.args[0].expr) ?: "Int"
-                           cTypeStr(inferred)
-                       } else "ktc_Int"
+        else if (init.args.isNotEmpty()) {
+            val inferred = inferExprType(init.args[0].expr) ?: "Int"
+            cTypeStr(inferred)
+        } else "ktc_Int"
         val n = init.args.size
         val sb = StringBuilder()
         flushPreStmts(ind)
@@ -460,16 +481,25 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         return sb.toString().trimEnd()
     }
     val elemType = when (callee) {
-        "byteArrayOf" -> "ktc_Byte"; "shortArrayOf" -> "ktc_Short"
-        "intArrayOf" -> "ktc_Int"; "longArrayOf" -> "ktc_Long"
-        "floatArrayOf" -> "ktc_Float"; "doubleArrayOf" -> "ktc_Double"
-        "booleanArrayOf" -> "ktc_Bool"; "charArrayOf" -> "ktc_Char"
-        "ubyteArrayOf" -> "ktc_UByte"; "ushortArrayOf" -> "ktc_UShort"
-        "uintArrayOf" -> "ktc_UInt"; "ulongArrayOf" -> "ktc_ULong"
+        "byteArrayOf" -> "ktc_Byte"
+        "shortArrayOf" -> "ktc_Short"
+        "intArrayOf" -> "ktc_Int"
+        "longArrayOf" -> "ktc_Long"
+        "floatArrayOf" -> "ktc_Float"
+        "doubleArrayOf" -> "ktc_Double"
+        "booleanArrayOf" -> "ktc_Bool"
+        "charArrayOf" -> "ktc_Char"
+        "ubyteArrayOf" -> "ktc_UByte"
+        "ushortArrayOf" -> "ktc_UShort"
+        "uintArrayOf" -> "ktc_UInt"
+        "ulongArrayOf" -> "ktc_ULong"
         "arrayOf" -> {
             if (init.typeArgs.isNotEmpty()) cTypeStr(typeSubst[init.typeArgs[0].name] ?: init.typeArgs[0].name)
-            else { val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"; cTypeStr(elemKt) }
+            else {
+                val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"; cTypeStr(elemKt)
+            }
         }
+
         else -> return null
     }
     val args = init.args.joinToString(", ") { genExpr(it.expr) }
@@ -531,11 +561,11 @@ internal fun CCodeGen.extractAllocSize(e: Expr?): Expr? {
     if (inner !is CallExpr) return null
     val name = (inner.callee as? NameExpr)?.name ?: return null
     return when (name) {
-        "HeapAlloc"  -> inner.args.firstOrNull()?.expr  // HeapAlloc<Array<T>>(size)
-        "HeapArrayZero"  -> inner.args.firstOrNull()?.expr  // HeapArrayZero<Array<T>>(size)
+        "HeapAlloc" -> inner.args.firstOrNull()?.expr  // HeapAlloc<Array<T>>(size)
+        "HeapArrayZero" -> inner.args.firstOrNull()?.expr  // HeapArrayZero<Array<T>>(size)
         "HeapArrayResize" -> inner.args.getOrNull(1)?.expr   // HeapArrayResize<Array<T>>(ptr, size)
         "heapArrayOf" -> IntLit(inner.args.size.toLong())  // heapArrayOf<T>(...) — size = number of args
-        else      -> null
+        else -> null
     }
 }
 
@@ -572,21 +602,18 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
 
 /* If a body prop is an array type, emit $self.name$len = allocSize after assignment. */
 internal fun CCodeGen.emitBodyPropLenIfArray(inProp: PropertyDef) {
-	val vKtcProp = resolveTypeName(inProp.typeRef)  // resolved KtcType
-	if (!vKtcProp.isArrayLike) return
-	if (hasSizeAnnotation(inProp.typeRef)) return
-	val vFieldName = if (inProp.isPrivate) "PRIV_${inProp.name}" else inProp.name  // C field name
-	val vAllocSize = extractAllocSize(inProp.initExpr)  // extracted allocation size expr
-	if (vAllocSize != null)
-		{
-		impl.appendLine("    \$self.$vFieldName\$len = ${genExpr(vAllocSize)};")
-		}
-	else if (inProp.initExpr is NameExpr)
-		{
-		val vInitName = (inProp.initExpr as NameExpr).name  // source variable name
-		impl.appendLine("    \$self.$vFieldName\$len = ${vInitName}\$len;")
-		}
-	}
+    val vKtcProp = resolveTypeName(inProp.typeRef)  // resolved KtcType
+    if (!vKtcProp.isArrayLike) return
+    if (hasSizeAnnotation(inProp.typeRef)) return
+    val vFieldName = if (inProp.isPrivate) "PRIV_${inProp.name}" else inProp.name  // C field name
+    val vAllocSize = extractAllocSize(inProp.initExpr)  // extracted allocation size expr
+    if (vAllocSize != null) {
+        impl.appendLine("    \$self.$vFieldName\$len = ${genExpr(vAllocSize)};")
+    } else if (inProp.initExpr is NameExpr) {
+        val vInitName = (inProp.initExpr as NameExpr).name  // source variable name
+        impl.appendLine("    \$self.$vFieldName\$len = ${vInitName}\$len;")
+    }
+}
 
 /** Generate a call expression that returns nullable, appending &outVar as extra arg.
  *  The function returns bool (has value), and writes the value through the out pointer. */
@@ -675,7 +702,7 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
         else "${recv}\$has"
         val recvVal = if (isValueNullRecv) "$recv.value" else recv
         val fieldExpr = if (anyIndirectClassName(recvType) != null) "$recvVal->${s.target.name}"
-                        else "$recvVal.${s.target.name}"
+        else "$recvVal.${s.target.name}"
         val value = genExpr(s.value)
         flushPreStmts(ind)
         impl.appendLine("${ind}if ($guard) { $fieldExpr ${s.op} $value; }")
@@ -811,7 +838,8 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
             flushPreStmts(ind)
             val valueType = inferExprType(s.value)
             if (varType != null && varType.endsWith("?") && isValueNullableType(varType)
-                    && varName != null && isOptional(varName)) {
+                && varName != null && isOptional(varName)
+            ) {
                 val optType = optCTypeName(varType)
                 val alreadyOpt = valueType != null && valueType.endsWith("?") && isValueNullableType(valueType)
                 if (alreadyOpt) {
@@ -936,7 +964,8 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                 val retIface = currentFnReturnType
                 if (retIface.isNotEmpty() && interfaces.containsKey(retIface)
                     && exprType != null && classes.containsKey(exprType)
-                    && classInterfaces[exprType]?.contains(retIface) == true) {
+                    && classInterfaces[exprType]?.contains(retIface) == true
+                ) {
                     val cExprType = typeFlatName(exprType)
                     val cIface = typeFlatName(retIface)
                     val impls = interfaceImplementors[retIface] ?: emptyList()
@@ -976,16 +1005,24 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
 internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
     val e = s.expr
     // if / when used as statements
-    if (e is IfExpr) { emitIfStmt(e, ind, method); return }
-    if (e is WhenExpr) { emitWhenStmt(e, ind, method); return }
+    if (e is IfExpr) {
+        emitIfStmt(e, ind, method); return
+    }
+    if (e is WhenExpr) {
+        emitWhenStmt(e, ind, method); return
+    }
     // Inline function call — expand body at call site
     if (e is CallExpr && e.callee is NameExpr) {
         val name = e.callee.name
         val inlineDecl = inlineFunDecls[name]
-        if (inlineDecl != null) { emitInlineCall(inlineDecl, e.args, ind, method); return }
+        if (inlineDecl != null) {
+            emitInlineCall(inlineDecl, e.args, ind, method); return
+        }
         // Active lambda call (inside an inline body expansion)
         val lambda = activeLambdas[name]
-        if (lambda != null) { emitLambdaCall(lambda, e.args, ind); return }
+        if (lambda != null) {
+            emitLambdaCall(lambda, e.args, ind); return
+        }
     }
     // Inline extension function call — expand body at call site (callee is DotExpr or SafeDotExpr)
     if (e is CallExpr && (e.callee is DotExpr || e.callee is SafeDotExpr)) {
@@ -1023,8 +1060,12 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
     // println / print as statements — avoid GCC statement-expressions
     if (e is CallExpr && e.callee is NameExpr) {
         val name = e.callee.name
-        if (name == "println") { emitPrintlnStmt(e.args, ind); return }
-        if (name == "print")   { emitPrintStmt(e.args, ind); return }
+        if (name == "println") {
+            emitPrintlnStmt(e.args, ind); return
+        }
+        if (name == "print") {
+            emitPrintStmt(e.args, ind); return
+        }
     }
     // Heap/Ptr/Value .set(val) as statement — only when class has no own set() method
     if (e is CallExpr && e.callee is DotExpr && e.callee.name == "set") {
@@ -1058,6 +1099,7 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
                 // Heap<T?>/Ptr<T?>/Value<T?> or other nullable
                 recvType.endsWith("?") ->
                     "${recvName}\$has"
+
                 else -> null
             }
             if (guard != null) {
@@ -1083,7 +1125,15 @@ resultVar: when non-null, `return` inside the body assigns here (value position)
            when null, the body is expanded for side effects (statement position).
 A unique goto label is emitted after the block so that `return` inside the body
 jumps to the end without exiting the enclosing C function. */
-internal fun CCodeGen.emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: String, method: Boolean, receiverExpr: String? = null, receiverType: String? = null, resultVar: String? = null) {
+internal fun CCodeGen.emitInlineCall(
+    decl: FunDecl,
+    callArgs: List<Arg>,
+    ind: String,
+    method: Boolean,
+    receiverExpr: String? = null,
+    receiverType: String? = null,
+    resultVar: String? = null
+) {
     val body = decl.body ?: return
     val labelName = "\$end_ir_${inlineCounter++}"
     // Build comment with template types (clear typeSubst so type params appear unsubstituted)
@@ -1190,7 +1240,9 @@ internal fun CCodeGen.emitLambdaCall(active: ActiveLambda, callArgs: List<Arg>, 
 
 /** Emit println as C statements. */
 internal fun CCodeGen.emitPrintlnStmt(args: List<Arg>, ind: String) {
-    if (args.isEmpty()) { impl.appendLine("${ind}printf(\"\\n\");"); return }
+    if (args.isEmpty()) {
+        impl.appendLine("${ind}printf(\"\\n\");"); return
+    }
     emitPrintStmtInner(args, ind, newline = true)
 }
 
@@ -1225,14 +1277,14 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         val isValNull = isValueNullableType(t)
         val isPtrNull = !isValNull && t.endsWith("*?")
         val hasExpr = when {
-            isValNull  -> "$expr.tag == ktc_SOME"
-            isPtrNull  -> "$expr != NULL"
-            else       -> "${expr}\$has"
+            isValNull -> "$expr.tag == ktc_SOME"
+            isPtrNull -> "$expr != NULL"
+            else -> "${expr}\$has"
         }
         val valExpr = if (isValNull) "$expr.value" else expr
         // data class → use StrBuf toString with null guard
         val dataClass = if (classes.containsKey(baseT) && classes[baseT]!!.isData) baseT
-                       else anyIndirectClassName(baseT)?.takeIf { classes[it]?.isData == true }
+        else anyIndirectClassName(baseT)?.takeIf { classes[it]?.isData == true }
         if (dataClass != null) {
             val buf = tmp()
             val recv = if (dataClass != baseT) valExpr else "&($valExpr)"
@@ -1333,7 +1385,9 @@ internal fun CCodeGen.templateNeedsStrBuf(tmpl: StrTemplateExpr): Boolean {
 /** Emit a println/print of a complex string template via ktc_StrBuf. */
 internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: String, newline: Boolean) {
     val buf = tmp()
+
     data class PartData(val lit: String? = null, val sbAppend: String? = null)
+
     val parts = mutableListOf<PartData>()
     for (part in tmpl.parts) {
         when (part) {
@@ -1342,6 +1396,7 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
                 if (last?.lit != null) parts[parts.lastIndex] = PartData(lit = last.lit + part.text)
                 else parts += PartData(lit = part.text)
             }
+
             is ExprPart -> {
                 val t = inferExprType(part.expr) ?: "Int"
                 val expr = genExpr(part.expr)
@@ -1406,22 +1461,26 @@ internal fun CCodeGen.extractSmartCasts(cond: Expr): List<Pair<String, String>> 
             casts.add(name to type.dropLast(1))
         }
     }
+
     fun tryThisSmartCast() {
         val type = currentExtRecvType
         if (type != null && type.endsWith("?")) {
             casts.add("\$self" to type.dropLast(1))
         }
     }
+
     fun tryCastTo(name: String, targetType: String) {
         if (isMutable(name)) return
         val currentType = lookupVar(name)
         // Don't narrow pointer types (Any* etc.) — they need original type for ->data dereference.
         // But DO narrow trampoline types (Any) — genName handles .data dereference after narrowing.
         if (currentType != null && currentType != targetType
-            && !currentType.endsWith("*")) {
+            && !currentType.endsWith("*")
+        ) {
             casts.add(name to targetType)
         }
     }
+
     fun tryThisCastTo(targetType: String) {
         val currentType = currentExtRecvType ?: return
         if (currentType != targetType) {
@@ -1466,15 +1525,18 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
             casts.add(name to type.dropLast(1))
         }
     }
+
     fun tryCastTo(name: String, targetType: String) {
         if (isMutable(name)) return
         val currentType = lookupVar(name)
         // Don't narrow pointer types
         if (currentType != null && currentType != targetType
-            && !currentType.endsWith("*")) {
+            && !currentType.endsWith("*")
+        ) {
             casts.add(name to targetType)
         }
     }
+
     fun tryThisCastTo(targetType: String) {
         val currentType = currentExtRecvType ?: return
         if (currentType != targetType) {
@@ -1485,6 +1547,7 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
         // x == null → in else branch, x is non-null
         cond is BinExpr && cond.op == "==" && cond.right is NullLit && cond.left is NameExpr ->
             trySmartCast(cond.left.name)
+
         cond is BinExpr && cond.op == "==" && cond.left is NullLit && cond.right is NameExpr ->
             trySmartCast(cond.right.name)
         // x !is Type → in else branch, x IS Type
@@ -1579,14 +1642,15 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
     val subj = if (subject != null) genExpr(subject) else ""
     return when (c) {
         is ExprCond -> if (subject != null) "$subj == ${genExpr(c.expr)}" else genExpr(c.expr)
-        is InCond   -> {
+        is InCond -> {
             val range = c.expr
             val neg = if (c.negated) "!" else ""
             if (range is BinExpr && range.op == "..") {
                 "${neg}($subj >= ${genExpr(range.left)} && $subj <= ${genExpr(range.right)})"
             } else "${neg}(/* in ${genExpr(range)} */)"   // fallback
         }
-        is IsCond   -> {
+
+        is IsCond -> {
             val target = resolveTypeName(c.type).toInternalStr
             val exprType = if (subject != null) inferExprType(subject) else null
             val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
