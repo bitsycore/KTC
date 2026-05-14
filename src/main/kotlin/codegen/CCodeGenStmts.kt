@@ -708,15 +708,10 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
         val recvTypeKtc = inferExprTypeKtc(s.target.obj)
         val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc
         val recv = genExpr(s.target.obj)
-        val recvName = (s.target.obj as? NameExpr)?.name
+        val recvName = (s.target.obj as? NameExpr)?.name ?: recv
         val isThis = s.target.obj is ThisExpr
         val isValueNullRecv = recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)
-        val guard = if (isThis) {
-            if (isValueNullRecv) "\$self.tag == ktc_SOME" else "\$self\$has"
-        } else if (recvName != null && recvTypeKtc is KtcType.Nullable) {
-            if (isValueNullRecv) "$recvName.tag == ktc_SOME" else "${recvName}\$has"
-        } else if (recvName != null) "${recvName}\$has"
-        else "${recv}\$has"
+        val guard = if (recvTypeKtc != null) nullGuardExpr(recvTypeKtc, recv, recvName, isThis) else "${recv}\$has"
         val recvVal = if (isValueNullRecv) "$recv.value" else recv
         val fieldExpr = if (recvTypeCoreKtc is KtcType.Ptr) "$recvVal->${s.target.name}"
         else "$recvVal.${s.target.name}"
@@ -770,18 +765,12 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
         }
     }
 
-    // Object property write: ensure lazy init before assignment
-    if (s.target is DotExpr && s.target.obj is NameExpr && objects.containsKey(s.target.obj.name)) {
-        val vObjWriteInfo = objects[s.target.obj.name]!!               // ObjInfo for C name
-        impl.appendLine("$ind${vObjWriteInfo.flatName}_\$ensure_init();")
-    }
-    // Companion object property write: ensure lazy init before assignment
-    if (s.target is DotExpr && s.target.obj is NameExpr && classCompanions.containsKey(s.target.obj.name)) {
-        val vClassName = s.target.obj.name
-        val vCompanionName = classCompanions[vClassName]!!
-        val vCompWriteObjInfo = objects[vCompanionName]                               // companion ObjInfo (null-safe fallback)
-        val vCompWriteCName = vCompWriteObjInfo?.flatName ?: typeFlatName(vCompanionName) // C name with package prefix
-        impl.appendLine("$ind${vCompWriteCName}_\$ensure_init();")
+    // Object / Companion property write: ensure lazy init before assignment
+    if (s.target is DotExpr) {
+        val vObjWriteCName = resolveDotObjCName(s.target as DotExpr)
+        if (vObjWriteCName != null) {
+            impl.appendLine("$ind${vObjWriteCName}_\$ensure_init();")
+        }
     }
 
     val target = genLValue(s.target, method)

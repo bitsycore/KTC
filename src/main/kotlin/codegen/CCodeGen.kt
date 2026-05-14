@@ -251,6 +251,32 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal fun enumInfoFor(inType: KtcType?): EnumInfo? =      // EnumInfo if type is an enum class
         (inType as? KtcType.User)?.decl as? EnumInfo
 
+    /** Returns the ObjInfo for a DotExpr, resolving through companion objects if needed. */
+    internal fun resolveDotObjInfo(dot: DotExpr): ObjInfo? {
+        val name = (dot.obj as? NameExpr)?.name ?: return null
+        return when {
+            objects.containsKey(name) -> objects[name]
+            classCompanions.containsKey(name) -> objects[classCompanions[name]!!]
+            else -> null
+        }
+    }
+    /** Returns the C flat name for a DotExpr receiver (object or companion). Null if not an object/companion. */
+    internal fun resolveDotObjCName(dot: DotExpr): String? {
+        val name = (dot.obj as? NameExpr)?.name ?: return null
+        return objects[name]?.flatName
+            ?: classCompanions[name]?.let { objects[it]?.flatName ?: typeFlatName(it) }
+    }
+
+    /** Shared null-guard expression for safe-call dispatch. */
+    internal fun nullGuardExpr(recvKtc: KtcType, recvExpr: String, recvName: String, isThis: Boolean): String = when {
+        recvKtc is KtcType.Nullable && recvKtc.inner is KtcType.Ptr -> "$recvName != NULL"
+        recvKtc is KtcType.Nullable && isValueNullableKtc(recvKtc) ->
+            if (isThis) "\$self.tag == ktc_SOME" else "$recvName.tag == ktc_SOME"
+        recvKtc is KtcType.Nullable ->
+            if (isThis) "\$self\$has" else "${recvName}\$has"
+        else -> "${recvExpr}\$has"
+    }
+
     // Track mutable (var) variables — smart casts are only valid on val, val reassignment is an error.
     // Scoped: each pushScope() adds a new set, popScope() removes it.
     internal val mutableVarScopes = ArrayDeque<MutableSet<String>>()

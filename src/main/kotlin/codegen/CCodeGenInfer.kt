@@ -485,17 +485,11 @@ internal fun CCodeGen.inferDotTypeKtc(e: DotExpr): KtcType? {
     // C package: can't infer type of C constants/macros
     if (e.obj is NameExpr && e.obj.name == "c" && lookupVar("c") == null) return null
     if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return parseResolvedTypeName(e.obj.name)
-    if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
-        val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
-        val baseObj = if (prop != null) resolveTypeName(prop.second) else null
-        return if (baseObj != null && prop!!.second.nullable) KtcType.Nullable(baseObj) else baseObj
-    }
-    // Companion object property: Foo.bar → look up in companion's ObjInfo
-    if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
-        val vCompanionName = classCompanions[e.obj.name]!!
-        val vProp = objects[vCompanionName]?.props?.find { it.first == e.name }
-        val baseComp = if (vProp != null) resolveTypeName(vProp.second) else null
-        return if (baseComp != null && vProp!!.second.nullable) KtcType.Nullable(baseComp) else baseComp
+    val vDotObjInfo = resolveDotObjInfo(e)
+    if (vDotObjInfo != null) {
+        val prop = vDotObjInfo.props.find { it.first == e.name }
+        val base = if (prop != null) resolveTypeName(prop.second) else null
+        return if (base != null && prop!!.second.nullable) KtcType.Nullable(base) else base
     }
     val recvType = inferExprType(e.obj) ?: return null
     val recvTypeKtc = inferExprTypeKtc(e.obj)

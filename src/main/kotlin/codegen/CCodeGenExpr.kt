@@ -750,23 +750,15 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         "HeapAlloc" -> {
             if (e.typeArgs.isNotEmpty()) {
                 val ta = e.typeArgs[0]
-                // HeapAlloc<RawArray<T>>(n) → raw typed pointer allocation (no $len)
-                if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty()) {
+                // HeapAlloc<RawArray<T>>(n) / HeapAlloc<Array<T>>(n) → typed allocation
+                if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty() ||
+                    ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
                     val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
                     val elemC = cTypeStr(elemName)
                     val sizeExpr = genExpr(args[0].expr)
                     val t = tmp()
                     preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
-                    return t
-                }
-                // HeapAlloc<Array<T>>(n) → typed array allocation: (elemC*)malloc(sizeof(elemC) * (size_t)(n))
-                if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
-                    val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
-                    val elemC = cTypeStr(elemName)
-                    val sizeExpr = genExpr(args[0].expr)
-                    val t = tmp()
-                    preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
-                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
+                    if (ta.name == "Array") preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                     return t
                 }
                 var typeName = typeSubst[ta.name] ?: ta.name
@@ -793,21 +785,14 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             }
             if (heapAllocTargetType != null) {
                 val tt = heapAllocTargetType!!
-                if (tt.name == "RawArray" && tt.typeArgs.isNotEmpty()) {
+                if (tt.name == "RawArray" && tt.typeArgs.isNotEmpty() ||
+                    tt.name == "Array" && tt.typeArgs.isNotEmpty()) {
                     val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
                     val elemC = cTypeStr(elemName)
                     val sizeExpr = genExpr(args[0].expr)
                     val t = tmp()
                     preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
-                    return t
-                }
-                if (tt.name == "Array" && tt.typeArgs.isNotEmpty()) {
-                    val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
-                    val elemC = cTypeStr(elemName)
-                    val sizeExpr = genExpr(args[0].expr)
-                    val t = tmp()
-                    preStmts += "$elemC* $t = ($elemC*)${tMalloc("sizeof($elemC) * (size_t)($sizeExpr)")};"
-                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
+                    if (tt.name == "Array") preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                     return t
                 }
                 var typeName = typeSubst[tt.name] ?: tt.name
@@ -832,8 +817,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         }
 
         "HeapArrayZero" -> {
-            if (e.typeArgs.isNotEmpty()) {
-                val ta = e.typeArgs[0]
+            fun genHeapArrayZeroBranch(ta: TypeRef): String {
                 val isArray = ta.name == "Array" && ta.typeArgs.isNotEmpty()
                 val isRawArray = ta.name == "RawArray" && ta.typeArgs.isNotEmpty()
                 val elemName = if (isArray || isRawArray) {
@@ -845,29 +829,11 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val sizeExpr = genExpr(args[0].expr)
                 val t = tmp()
                 preStmts += "$elemC* $t = ($elemC*)${tCalloc("(size_t)($sizeExpr)", "sizeof($elemC)")};"
-                if (isArray) {
-                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
-                }
+                if (isArray) preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
                 return t
             }
-            if (heapAllocTargetType != null) {
-                val tt = heapAllocTargetType!!
-                val isArray = tt.name == "Array" && tt.typeArgs.isNotEmpty()
-                val isRawArray = tt.name == "RawArray" && tt.typeArgs.isNotEmpty()
-                val elemName = if (isArray || isRawArray) {
-                    typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
-                } else {
-                    typeSubst[tt.name] ?: tt.name
-                }
-                val elemC = cTypeStr(elemName)
-                val sizeExpr = genExpr(args[0].expr)
-                val t = tmp()
-                preStmts += "$elemC* $t = ($elemC*)${tCalloc("(size_t)($sizeExpr)", "sizeof($elemC)")};"
-                if (isArray) {
-                    preStmts += "const ktc_Int ${t}\$len = $sizeExpr;"
-                }
-                return t
-            }
+            if (e.typeArgs.isNotEmpty()) return genHeapArrayZeroBranch(e.typeArgs[0])
+            if (heapAllocTargetType != null) return genHeapArrayZeroBranch(heapAllocTargetType!!)
             return tCalloc("(size_t)(${genExpr(args[0].expr)})", "(size_t)(${genExpr(args[1].expr)})")
         }
 
@@ -1799,11 +1765,12 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
         return "${vClassInfo.flatName}_$fnPrefix($allArgs)"
     }
-    // Object method
-    val vObjInfo = objInfoFor(recvTypeKtc)                                            // non-null if receiver is a singleton object
-    if (vObjInfo != null) {
-        val vObjMethod = findOverload(method, args, vObjInfo.methods)
-        val overloadedMethod = vObjMethod?.let { methodName(it, vObjInfo.methods) } ?: method
+    // Object / Companion method
+    val vDotObjInfo = resolveDotObjInfo(dot)
+    val vDotObjCName = resolveDotObjCName(dot)
+    if (vDotObjInfo != null && vDotObjCName != null) {
+        val vObjMethod = findOverload(method, args, vDotObjInfo.methods)
+        val overloadedMethod = vObjMethod?.let { methodName(it, vDotObjInfo.methods) } ?: method
         val vObjArgs = if (vObjMethod != null) {
             val filled = fillDefaults(args, vObjMethod.params, vObjMethod.params.associate { it.name to it.default }, vObjMethod.name, strict = true)
             expandCallArgs(filled, vObjMethod.params)
@@ -1816,37 +1783,11 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
             preStmts += "const ktc_Int ${t}\$len = $size;"
-            preStmts += "${vObjInfo.flatName}_$overloadedMethod($vObjArgs, $t);"
+            preStmts += "${vDotObjCName}_$overloadedMethod($vObjArgs, $t);"
             defineVar(t, retType)
             return t
         }
-        return "${vObjInfo.flatName}_$overloadedMethod($vObjArgs)"
-    }
-    // Companion object method: Foo.bar() where Foo has a companion object
-    val vDotObjName = (dot.obj as? NameExpr)?.name
-    if (vDotObjName != null && classCompanions.containsKey(vDotObjName)) {
-        val vCompanionName = classCompanions[vDotObjName]!!
-        val vCompObjInfo = objects[vCompanionName]                                    // ObjInfo for the companion (may differ from recvTypeKtc path)
-        val vCompMethod = vCompObjInfo?.let { findOverload(method, args, it.methods) }
-        val overloadedComp = vCompMethod?.let { methodName(it, vCompObjInfo.methods) } ?: method
-        val vCompArgs = if (vCompMethod != null) {
-            val filled = fillDefaults(args, vCompMethod.params, vCompMethod.params.associate { it.name to it.default }, vCompMethod.name, strict = true)
-            expandCallArgs(filled, vCompMethod.params)
-        } else argStr
-        val vCompCName = vCompObjInfo?.flatName ?: typeFlatName(vCompanionName)       // C name with package prefix
-        // @Size(N) return → out-parameter ABI
-        if (vCompMethod?.returnType != null && isSizedArrayTypeRef(vCompMethod.returnType)) {
-            val retType = resolveTypeName(vCompMethod.returnType).toInternalStr
-            val elemCType = arrayElementCType(retType)
-            val size = getSizeAnnotation(vCompMethod.returnType)!!
-            val t = tmp()
-            preStmts += "$elemCType ${t}[$size];"
-            preStmts += "const ktc_Int ${t}\$len = $size;"
-            preStmts += "${vCompCName}_$overloadedComp($vCompArgs, $t);"
-            defineVar(t, retType)
-            return t
-        }
-        return "${vCompCName}_$overloadedComp($vCompArgs)"
+        return "${vDotObjCName}_$overloadedMethod($vObjArgs)"
     }
     // Enum → static method/field access
     val vEnumInfo = enumInfoFor(recvTypeKtc)                                          // non-null if receiver is a known enum
@@ -2000,13 +1941,7 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
 
     val call = genMethodCall(dotExpr, args)
     // Determine the null guard expression
-    val guard = when {
-        recvTypeKtc is KtcType.Nullable && recvTypeKtc.inner is KtcType.Ptr ->
-            "$recvName != NULL"
-
-        isValueNullRecv -> "$recvName.tag == ktc_SOME"
-        else -> "${recvName}\$has"
-    }
+    val guard = if (recvName != null && recvTypeKtc != null) nullGuardExpr(recvTypeKtc, recvName, recvName, isThis = false) else "${recvName}\$has"
     // Determine the return type
     val retType = inferMethodReturnType(dotExpr, args)
     if (retType == null || retType == "Unit") {
@@ -2059,19 +1994,11 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
         val vDotEnumInfo = enums[e.obj.name]!!                                        // EnumInfo for C name
         return "${vDotEnumInfo.flatName}_${e.name}"
     }
-    // Object field: Config.debug → game_Config.debug (with lazy init guard)
-    if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
-        val vDotObjInfo = objects[e.obj.name]!!                                       // ObjInfo for C name
-        preStmts += "${vDotObjInfo.flatName}_\$ensure_init();"
-        return "${vDotObjInfo.flatName}.${e.name}"
-    }
-    // Companion object field: Foo.bar → game_Foo$Companion.bar (with lazy init guard)
-    if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
-        val vCompanionName = classCompanions[e.obj.name]!!
-        val vDotCompObjInfo = objects[vCompanionName]                                 // companion ObjInfo (null-safe fallback to pfx)
-        val vDotCompCName = vDotCompObjInfo?.flatName ?: typeFlatName(vCompanionName) // C name with package prefix
-        preStmts += "${vDotCompCName}_\$ensure_init();"
-        return "${vDotCompCName}.${e.name}"
+    // Object / Companion field: ensure lazy init, then return flatName.field
+    val vDotObjCName = resolveDotObjCName(e)
+    if (vDotObjCName != null) {
+        preStmts += "${vDotObjCName}_\$ensure_init();"
+        return "${vDotObjCName}.${e.name}"
     }
     // Array .size → trampolined param uses trampoline struct field; others use $len
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"
@@ -2147,20 +2074,7 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
     val isValueNullRecv = recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)
 
     // Determine the null guard expression
-    val guard = if (isThis) {
-        if (isValueNullRecv) "\$self.tag == ktc_SOME" else "\$self\$has"
-    } else if (recvName != null) {
-        when {
-            recvTypeKtc is KtcType.Nullable && recvTypeKtc.inner is KtcType.Ptr ->
-                "$recvName != NULL"
-
-            isValueNullRecv -> "$recvName.tag == ktc_SOME"
-            recvTypeKtc is KtcType.Nullable ->
-                "${recvName}\$has"
-
-            else -> "${recv}\$has"
-        }
-    } else "${recv}\$has"
+    val guard = if (isThis || recvName != null) nullGuardExpr(recvTypeKtc ?: KtcType.Prim(KtcType.PrimKind.Int), recv, recvName ?: recv, isThis) else "${recv}\$has"
 
     // Unwrapped receiver expression for field access (unwrap Optional if needed)
     val recvVal = if (isValueNullRecv) "$recv.value" else recv
