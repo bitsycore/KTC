@@ -4,7 +4,7 @@ import com.bitsycore.ktc.ast.*
 import com.bitsycore.ktc.ast.Annotation
 import com.bitsycore.ktc.codegen.mapping.arrayElementCType
 import com.bitsycore.ktc.codegen.mapping.arrayElementCTypeKtc
-import com.bitsycore.ktc.codegen.mapping.arrayElementKtType
+import com.bitsycore.ktc.codegen.mapping.arrayElementKtTypeKtc
 import com.bitsycore.ktc.types.KtcType
 
 /**
@@ -355,7 +355,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
             }
 
             isNullableArray -> {
-                impl.appendLine("$ind$mutComment${arrayElementCType(t)}* ${s.name} = NULL;")
+                impl.appendLine("$ind$mutComment${arrayElementCTypeKtc(vKtcCore)}* ${s.name} = NULL;")
                 impl.appendLine("${ind}const ktc_Int ${s.name}\$len = 0;")
             }
 
@@ -1791,6 +1791,7 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
         // for (item in array/collection)  — iterate over elements
         else -> {
             val arrType = inferExprType(rangeExpr)
+            val arrTypeKtc = inferExprTypeKtc(rangeExpr)
             val iterInfo = findOperatorIterator(arrType)
             if (iterInfo != null) {
                 // Iterator-based: val $it = obj.iterator(); while($it.hasNext()) { val item = $it.next(); ... }
@@ -1827,13 +1828,13 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
                 // Array: use $len / trampoline size and direct indexing
                 val arrExpr = genExpr(rangeExpr)
                 val idx = tmp()
-                val elemType = arrayElementCType(arrType)
+                val elemType = if (arrTypeKtc != null) arrayElementCTypeKtc(arrTypeKtc) else "ktc_Int"
                 val arrOrigName = (rangeExpr as? NameExpr)?.name
                 val sizeExpr = if (arrOrigName != null && arrOrigName in trampolinedParams)
                     "$arrOrigName.size" else "${arrExpr}\$len"
                 impl.appendLine("${ind}for (ktc_Int $idx = 0; $idx < $sizeExpr; $idx++) {")
                 impl.appendLine("$ind    $elemType ${s.varName} = ${arrExpr}[$idx];")
-                pushScope(); defineVar(s.varName, arrayElementKtType(arrType))
+                pushScope(); defineVar(s.varName, if (arrTypeKtc != null) arrayElementKtTypeKtc(arrTypeKtc) else "Int")
                 emitBlock(s.body, ind, method)
                 popScope()
                 impl.appendLine("$ind}")

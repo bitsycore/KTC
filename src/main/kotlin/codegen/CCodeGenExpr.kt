@@ -1,7 +1,6 @@
 package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
-import com.bitsycore.ktc.codegen.mapping.arrayElementCType
 import com.bitsycore.ktc.codegen.mapping.arrayElementCTypeKtc
 import com.bitsycore.ktc.types.KtcType
 
@@ -1127,8 +1126,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val allArgs = if (expandedArgs2.isEmpty()) selfArg else "$selfArg, $expandedArgs2"
             // @Size(N) return → out-parameter ABI
             if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-                val retType = resolveTypeName(methodDecl.returnType).toInternalStr
-                val elemCType = arrayElementCType(retType)
+                val vRetKtcSz2 = resolveTypeName(methodDecl.returnType)
+                val retType = vRetKtcSz2.toInternalStr
+                val elemCType = arrayElementCTypeKtc(vRetKtcSz2)
                 val size = getSizeAnnotation(methodDecl.returnType)!!
                 val t = tmp()
                 preStmts += "$elemCType ${t}[$size];"
@@ -1189,8 +1189,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val expandedArgs2 = expandCallArgs(filledArgs, methodDecl.params)
             // @Size(N) return → out-parameter ABI
             if (methodDecl.returnType != null && isSizedArrayTypeRef(methodDecl.returnType)) {
-                val retType = resolveTypeName(methodDecl.returnType).toInternalStr
-                val elemCType = arrayElementCType(retType)
+                val vRetKtcSz2 = resolveTypeName(methodDecl.returnType)
+                val retType = vRetKtcSz2.toInternalStr
+                val elemCType = arrayElementCTypeKtc(vRetKtcSz2)
                 val size = getSizeAnnotation(methodDecl.returnType)!!
                 val t = tmp()
                 preStmts += "$elemCType ${t}[$size];"
@@ -1211,8 +1212,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
 
     // Top-level @Size(N) return → out-parameter ABI
     if (sig?.returnType != null && isSizedArrayTypeRef(sig.returnType)) {
-        val retType = resolveTypeName(sig.returnType).toInternalStr
-        val elemCType = arrayElementCType(retType)
+        val vRetKtcTop = resolveTypeName(sig.returnType)
+        val retType = vRetKtcTop.toInternalStr
+        val elemCType = arrayElementCTypeKtc(vRetKtcTop)
         val size = getSizeAnnotation(sig.returnType)!!
         val t = tmp()
         preStmts += "$elemCType ${t}[$size];"
@@ -1233,8 +1235,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         val expandedArgs2 = expandCallArgs(filledArgs, topOvr.params)
         // @Size(N) return → out-parameter ABI
         if (topOvr.returnType != null && isSizedArrayTypeRef(topOvr.returnType)) {
-            val retType = resolveTypeName(topOvr.returnType).toInternalStr
-            val elemCType = arrayElementCType(retType)
+            val vRetKtcOvr = resolveTypeName(topOvr.returnType)
+            val retType = vRetKtcOvr.toInternalStr
+            val elemCType = arrayElementCTypeKtc(vRetKtcOvr)
             val size = getSizeAnnotation(topOvr.returnType)!!
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"
@@ -1624,7 +1627,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
     // Array .toHeap() → malloc + memcpy to heap
     if (method == "toHeap" && recvTypeKtc != null && recvTypeKtc.isArrayLike) {
-        val elemC = arrayElementCType(recvType)
+        val elemC = arrayElementCTypeKtc(recvTypeKtc)
         val lenExpr = when {
             dot.obj is NameExpr && dot.obj.name in trampolinedParams -> "${dot.obj.name}.size"
             else -> "${recv}\$len"
@@ -1782,8 +1785,9 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         } else argStr
         // @Size(N) return → out-parameter ABI
         if (vObjMethod?.returnType != null && isSizedArrayTypeRef(vObjMethod.returnType)) {
-            val retType = resolveTypeName(vObjMethod.returnType).toInternalStr
-            val elemCType = arrayElementCType(retType)
+            val vRetKtcObj = resolveTypeName(vObjMethod.returnType)
+            val retType = vRetKtcObj.toInternalStr
+            val elemCType = arrayElementCTypeKtc(vRetKtcObj)
             val size = getSizeAnnotation(vObjMethod.returnType)!!
             val t = tmp()
             preStmts += "$elemCType ${t}[$size];"

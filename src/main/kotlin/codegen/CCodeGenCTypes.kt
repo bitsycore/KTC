@@ -1,10 +1,7 @@
 package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
-import com.bitsycore.ktc.codegen.mapping.arrayElementCType
-import com.bitsycore.ktc.codegen.mapping.primitiveArraySet
-import com.bitsycore.ktc.codegen.mapping.primitiveToArrayOptionalType
-import com.bitsycore.ktc.codegen.mapping.primitiveToArrayType
+import com.bitsycore.ktc.codegen.mapping.*
 import com.bitsycore.ktc.types.BuiltinTypeDef
 import com.bitsycore.ktc.types.KtcType
 import com.bitsycore.ktc.types.TypeDef
@@ -369,9 +366,9 @@ internal fun CCodeGen.getSizedArrayReturnSize(e: CallExpr): Int? {
 internal fun CCodeGen.getSizedArrayReturnElemType(e: CallExpr): String? {
     val name = (e.callee as? NameExpr)?.name ?: return null
     val genFun = genericFunDecls.find { it.name == name }
-    if (genFun != null && genFun.returnType != null) return arrayElementCType(resolveTypeNameStr(genFun.returnType))
+    if (genFun != null && genFun.returnType != null) return arrayElementCTypeKtc(resolveTypeName(genFun.returnType))
     val sig = funSigs[name] ?: return null
-    if (sig.returnType != null) return arrayElementCType(resolveTypeNameStr(sig.returnType))
+    if (sig.returnType != null) return arrayElementCTypeKtc(resolveTypeName(sig.returnType))
     return null
 }
 
