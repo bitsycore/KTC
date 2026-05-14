@@ -37,6 +37,8 @@ ktc_UInt ktc_rand_range(
     ktc_ULong* inc,
     ktc_UInt bound
 ) {
+    if (bound == 0) return 0;
+
     ktc_UInt threshold = -bound % bound;
 
     for (;;) {
@@ -114,7 +116,14 @@ void ktc_time_sleep_ms(ktc_UInt ms)
 
 void ktc_time_sleep_seconds(ktc_Double seconds)
 {
+#if defined(_WIN32)
     ktc_time_sleep_ms((ktc_UInt)(seconds * 1000.0));
+#else
+    struct timespec req;
+    req.tv_sec  = (time_t)seconds;
+    req.tv_nsec = (long)((seconds - (ktc_Double)req.tv_sec) * 1e9);
+    while (nanosleep(&req, &req) == -1 && errno == EINTR) {}
+#endif
 }
 
 /* ═══════════════════════════ Initialization ═══════════════════════ */

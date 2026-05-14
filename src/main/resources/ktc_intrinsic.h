@@ -301,13 +301,15 @@ static inline ktc_Int ktc_string_cmp(ktc_String a, ktc_String b) {
 
 /* Concatenate two strings into a caller-provided buffer.
  * Usage:  ktc_Char buf[256]; ktc_String s = ktc_string_cat(buf, sizeof(buf), a, b);
+ * Clamps both halves independently so a.len > bufsz never overflows the buffer.
  */
 static inline ktc_String ktc_string_cat(ktc_Char* buf, ktc_Int bufsz, ktc_String a, ktc_String b) {
-    ktc_Int total = a.len + b.len;
-    if (total >= bufsz) total = bufsz - 1;
-    memcpy(buf, a.ptr, (ktc_ULong)a.len);
-    ktc_Int rest = total - a.len;
-    memcpy(buf + a.len, b.ptr, (ktc_ULong)rest);
+    ktc_Int room   = bufsz > 0 ? bufsz - 1 : 0;            /* max chars excl. NUL */
+    ktc_Int acopy  = a.len < room ? a.len : room;           /* how many bytes of a fit */
+    memcpy(buf, a.ptr, (ktc_ULong)acopy);
+    ktc_Int bcopy  = b.len < room - acopy ? b.len : room - acopy; /* remaining room for b */
+    memcpy(buf + acopy, b.ptr, (ktc_ULong)bcopy);
+    ktc_Int total  = acopy + bcopy;
     buf[total] = '\0';
     return (ktc_String){buf, total};
 }
@@ -503,9 +505,9 @@ static inline ktc_Rune ktc_str_runeAt(ktc_String s, ktc_Int pos) {
 static inline void ktc_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r) {
     ktc_Char enc[4];
     ktc_Int n = ktc_utf8_encode(r, enc);
+    if (!sb->ptr) { sb->len += n; return; }  /* counting mode: add byte count at once */
     for (ktc_Int i = 0; i < n; i++) {
-        if (sb->ptr && sb->len < sb->cap) sb->ptr[sb->len] = enc[i];
-        sb->len++;
+        if (sb->len < sb->cap) sb->ptr[sb->len++] = enc[i];
     }
 }
 
@@ -513,7 +515,7 @@ static inline void ktc_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r) {
 
 static inline ktc_Int ktc_hash_i8(ktc_Byte v)    { return (ktc_Int)v; }
 static inline ktc_Int ktc_hash_i16(ktc_Short v)  { return (ktc_Int)v; }
-static inline ktc_Int ktc_hash_i32(ktc_Int v)  { return (ktc_Int)(ktc_UInt)v; }
+static inline ktc_Int ktc_hash_i32(ktc_Int v)  { return v; }
 static inline ktc_Int ktc_hash_i64(ktc_Long v)  { ktc_ULong u = (ktc_ULong)v; return (ktc_Int)(ktc_UInt)(u ^ (u >> 32)); }
 static inline ktc_Int ktc_hash_f32(ktc_Float v)    { ktc_UInt b; memcpy(&b, &v, 4); return (ktc_Int)b; }
 static inline ktc_Int ktc_hash_f64(ktc_Double v)   { ktc_ULong b; memcpy(&b, &v, 8); return (ktc_Int)(ktc_UInt)(b ^ (b >> 32)); }
@@ -562,22 +564,22 @@ static inline ktc_String ktc_bool_to_string(ktc_Bool v) {
 
 /* ═══════════════════════════ String → Number parsing ═════════════════ */
 
-/* Parse ktc_String to ktc_Int (simple atoi-like, stops at non-digit). */
+/* Parse ktc_String to ktc_Int. Uses strtol (defined on overflow, no UB). */
 static inline ktc_Int ktc_str_toInt(ktc_String s) {
     ktc_Char buf[32];
     ktc_Int n = s.len < 31 ? s.len : 31;
     memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
-    return (ktc_Int)atoi(buf);
+    return (ktc_Int)strtol(buf, NULL, 10);
 }
 
-/* Parse ktc_String to ktc_Long. */
+/* Parse ktc_String to ktc_Long. Uses strtoll (defined on overflow, no UB). */
 static inline ktc_Long ktc_str_toLong(ktc_String s) {
     ktc_Char buf[32];
     ktc_Int n = s.len < 31 ? s.len : 31;
     memcpy(buf, s.ptr, (ktc_ULong)n);
     buf[n] = '\0';
-    return (ktc_Long)atoll(buf);
+    return (ktc_Long)strtoll(buf, NULL, 10);
 }
 
 /* Parse ktc_String to double. */
