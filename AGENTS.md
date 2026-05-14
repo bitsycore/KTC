@@ -7,7 +7,10 @@ Kotlin source → Lexer → Parser → AST → CCodeGen → .h + .c files
 ```
 
 - **Language features, syntax, and C mapping** → [KOTLIN_TO_C.md](KOTLIN_TO_C.md)
+@KOTLIN_TO_C.md
+
 - **Transpiler internals, architecture, how to add features** → [TRANSPILER.md](TRANSPILER.md)
+@TRANSPILER.md
 
 ---
 
