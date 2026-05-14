@@ -478,6 +478,27 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         }
     }
 
+    /* Print a non-fatal warning with the same source-context display as codegenError. */
+    internal fun codegenWarning(msg: String) {
+        val line = currentStmtLine
+        val sb = StringBuilder()
+        sb.append("warning: $msg")
+        if (line > 0 && sourceLines.isNotEmpty()) {
+            sb.appendLine()
+            val from = maxOf(0, line - 3)
+            val to = minOf(sourceLines.size, line + 2)
+            for (i in from until to) {
+                val lineNum = i + 1
+                val marker = if (lineNum == line) ">>>" else "   "
+                sb.appendLine("$marker %4d | %s".format(lineNum, sourceLines[i]))
+            }
+        }
+        System.err.print(sb.toString().trimEnd() + "\n")
+        diagnosticWarningCount++
+    }
+
+    internal var diagnosticWarningCount: Int = 0  // total warnings emitted this file
+
     // ── Defer stack (LIFO: last deferred = first to execute) ─────────
     internal val deferStack = mutableListOf<Block>()
 

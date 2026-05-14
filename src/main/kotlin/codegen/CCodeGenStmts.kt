@@ -97,7 +97,17 @@ internal fun CCodeGen.applyGuardSmartCast(s: Stmt) {
 }
 
 internal fun CCodeGen.emitBlock(b: Block, ind: String, insideMethod: Boolean = false) {
-    for (s in b.stmts) emitStmt(s, "$ind    ", insideMethod)
+    for ((idx, s) in b.stmts.withIndex()) {
+        emitStmt(s, "$ind    ", insideMethod)
+        // Check: unreachable code after unconditional exit
+        if (s is ReturnStmt || s is BreakStmt || s is ContinueStmt) {
+            val vRemaining = b.stmts.drop(idx + 1).filter { it !is CommentStmt }
+            if (vRemaining.isNotEmpty()) {
+                if (s.line > 0) currentStmtLine = s.line
+                codegenError("Unreachable code after '${if (s is ReturnStmt) "return" else if (s is BreakStmt) "break" else "continue"}'")
+            }
+        }
+    }
 }
 
 // ── var / val ────────────────────────────────────────────────────
@@ -879,6 +889,18 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
 
 internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
     val endLabel = inlineEndLabel
+    if (endLabel == null) {
+        // Check: return with a value from a Unit (void) function
+        val vRetBase = currentFnReturnBaseType()
+        if (s.value != null && s.value !is NullLit && vRetBase == "Unit") {
+            codegenError("Cannot return a value from a Unit function")
+        }
+        // Check: bare 'return' (no value) from a non-Unit non-Any function
+        if (s.value == null && vRetBase != "" && vRetBase != "Unit" && vRetBase != "Any" &&
+            !currentFnReturnsArray && !currentFnReturnsSizedArray && !currentFnIsMain) {
+            codegenError("A 'return' expression must return a value of type '$vRetBase'")
+        }
+    }
     if (endLabel != null) {
         // Inside an inline body expansion: assign result (if any), then jump to end label
         val retVar = inlineReturnVar ?: ""
@@ -1593,6 +1615,11 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
 }
 
 internal fun CCodeGen.emitIfStmt(e: IfExpr, ind: String, method: Boolean) {
+    // Warn: constant boolean condition
+    if (e.cond is BoolLit) {
+        val vVal = (e.cond as BoolLit).value
+        codegenWarning("Condition is always ${if (vVal) "true" else "false"}")
+    }
     impl.appendLine("${ind}if (${genExpr(e.cond)}) {")
     // Smart cast: narrow types in then-branch
     val thenCasts = extractSmartCasts(e.cond)

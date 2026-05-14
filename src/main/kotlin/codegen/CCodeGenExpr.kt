@@ -404,6 +404,12 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     // null comparison
     if ((e.op == "==" || e.op == "!=") && (e.left is NullLit || e.right is NullLit)) {
         val nonNull = if (e.left is NullLit) e.right else e.left
+        // Warn: comparing a non-nullable type to null — always true/false
+        val nonNullType = inferExprType(nonNull)
+        if (nonNullType != null && !nonNullType.endsWith("?")) {
+            val always = if (e.op == "==") "false" else "true"
+            codegenWarning("Null check on non-nullable '$nonNullType' is always $always")
+        }
         // this == null / this != null inside nullable-receiver extension
         if (nonNull is ThisExpr) {
             val thisType = inferExprType(nonNull)
@@ -533,6 +539,10 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         if (leftType == "Long") return "(((ktc_ULong)$l) >> $r)"
         // Default: cast to unsigned equivalent
         return "(((ktc_UInt)$l) >> $r)"
+    }
+    // Check: division or modulo by constant zero
+    if ((e.op == "/" || e.op == "%") && e.right is IntLit && (e.right as IntLit).value == 0L) {
+        codegenError("Division by zero: constant 0 used as divisor in '${e.op}' expression")
     }
     return "(${genExpr(e.left)} ${e.op} ${genExpr(e.right)})"
 }
@@ -1893,7 +1903,12 @@ internal fun CCodeGen.genDataClassCopy(recv: String, className: String, args: Li
 
 internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): String {
     val recvName = (dot.obj as? NameExpr)?.name
-    val recvType = if (recvName != null) lookupVar(recvName) else null
+    val recvType = if (recvName != null) lookupVar(recvName) else inferExprType(dot.obj)
+    // Warn: ?. method call on a non-nullable receiver
+    if (recvType != null && !recvType.endsWith("?") && !recvType.endsWith("*")) {
+        val vSrc = recvName ?: "expression"
+        codegenWarning("Safe call '?.' on non-nullable '$recvType' ($vSrc.${dot.name}) is redundant; use '.' instead")
+    }
     val isValueNullRecv = recvType != null && recvType.endsWith("?") && isValueNullableType(recvType)
     val dotExpr = DotExpr(dot.obj, dot.name)
 
@@ -2054,6 +2069,11 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
 
 internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
     val recvType = inferExprType(e.obj)
+    // Warn: ?. on a receiver that is already non-nullable
+    if (recvType != null && !recvType.endsWith("?") && !recvType.endsWith("*")) {
+        val vSrc = (e.obj as? NameExpr)?.name ?: "expression"
+        codegenWarning("Safe call '?.' on non-nullable '$recvType' ($vSrc) is redundant; use '.' instead")
+    }
     val recv = genExpr(e.obj)
     val recvName = (e.obj as? NameExpr)?.name
     val isThis = e.obj is ThisExpr
