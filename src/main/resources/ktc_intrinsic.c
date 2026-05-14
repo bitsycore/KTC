@@ -1,6 +1,8 @@
 #include "ktc_intrinsic.h"
 
-/* ═══════════════════════════ Rand ══════════════════════════ */
+// ══════════════════════════════════════════════════════════════════
+// MARK: Rand
+// ══════════════════════════════════════════════════════════════════
 
 void ktc_srand(
     ktc_ULong* state,
@@ -51,7 +53,9 @@ ktc_UInt ktc_rand_range(
     }
 }
 
-/* ═══════════════════════════ Time ══════════════════════════ */
+// ══════════════════════════════════════════════════════════════════
+// MARK: Time
+// ══════════════════════════════════════════════════════════════════
 
 ktc_Double ktc_time_seconds(void)
 {
@@ -130,7 +134,9 @@ void ktc_time_sleep_seconds(ktc_Double seconds)
 #endif
 }
 
-/* ═══════════════════════════ Stack Trace ══════════════════════════ */
+// ══════════════════════════════════════════════════════════════════
+// MARK: Stack Trace
+// ══════════════════════════════════════════════════════════════════
 
 /* Maximum number of frames to capture */
 #define KTC_ST_MAX_FRAMES  32
@@ -385,7 +391,236 @@ void ktc_stacktrace_print(const char* message, int message_len)
 
 #endif
 
-/* ═══════════════════════════ Initialization ═══════════════════════ */
+// ══════════════════════════════════════════════════════════════════
+// MARK: String
+// ══════════════════════════════════════════════════════════════════
+
+ktc_String ktc_string_cat(
+    ktc_Char* buf,
+    ktc_Int   bufsz,
+    ktc_String a,
+    ktc_String b
+) {
+    ktc_Int vALen = a.len < bufsz     ? a.len     : bufsz;
+    ktc_Int vBLen = b.len < bufsz - vALen ? b.len : bufsz - vALen;
+    memcpy(buf,          a.ptr, (size_t)vALen);
+    memcpy(buf + vALen,  b.ptr, (size_t)vBLen);
+    return (ktc_String){buf, vALen + vBLen};
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MARK: StrBuf
+// ══════════════════════════════════════════════════════════════════
+
+void ktc_sb_append_str(ktc_StrBuf* sb, ktc_String s) {
+    if (!sb->ptr) { sb->len += s.len; return; }
+    ktc_Int vRoom = sb->cap - sb->len;
+    ktc_Int vCopy = s.len < vRoom ? s.len : vRoom;
+    memcpy(sb->ptr + sb->len, s.ptr, (size_t)vCopy);
+    sb->len += vCopy;
+}
+
+void ktc_sb_append_cstr(ktc_StrBuf* sb, const ktc_Char* s) {
+    ktc_sb_append_str(sb, (ktc_String){s, (ktc_Int)strlen(s)});
+}
+
+void ktc_sb_append_int(ktc_StrBuf* sb, ktc_Int v) {
+    ktc_Char vBuf[24]; // enough for any int32
+    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRId32, v);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+void ktc_sb_append_long(ktc_StrBuf* sb, ktc_Long v) {
+    ktc_Char vBuf[24]; // enough for any int64
+    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRId64, v);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+void ktc_sb_append_double(ktc_StrBuf* sb, ktc_Double v) {
+    ktc_Char vBuf[32]; // enough for any double
+    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%g", v);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+void ktc_sb_append_byte(ktc_StrBuf* sb, ktc_Byte v) {
+    ktc_sb_append_int(sb, (ktc_Int)v);
+}
+
+void ktc_sb_append_short(ktc_StrBuf* sb, ktc_Short v) {
+    ktc_sb_append_int(sb, (ktc_Int)v);
+}
+
+void ktc_sb_append_ubyte(ktc_StrBuf* sb, ktc_UByte v) {
+    ktc_Char vBuf[8];
+    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu8, v);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+void ktc_sb_append_ushort(ktc_StrBuf* sb, ktc_UShort v) {
+    ktc_Char vBuf[8];
+    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu16, v);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+void ktc_sb_append_uint(ktc_StrBuf* sb, ktc_UInt v) {
+    ktc_Char vBuf[16];
+    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu32, v);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+void ktc_sb_append_ulong(ktc_StrBuf* sb, ktc_ULong v) {
+    ktc_Char vBuf[24];
+    ktc_Int  vLen = snprintf(vBuf, sizeof(vBuf), "%" PRIu64, v);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+void ktc_sb_append_rune(ktc_StrBuf* sb, ktc_Rune r) {
+    ktc_Char vBuf[4]; // max 4 bytes for a UTF-8 code point
+    ktc_Int  vLen = ktc_utf8_encode(r, vBuf);
+    ktc_sb_append_str(sb, (ktc_String){vBuf, vLen});
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MARK: UTF-8
+// ══════════════════════════════════════════════════════════════════
+
+ktc_Rune ktc_utf8_decode(const ktc_Char* p, ktc_Int* byteLen) {
+    unsigned char vC = (unsigned char)*p;
+    if (vC < 0x80) { *byteLen = 1; return (ktc_Rune)vC; }
+    if (vC < 0xC0) { *byteLen = 1; return 0xFFFD; } // continuation byte, invalid start
+    if (vC < 0xE0) {
+        *byteLen = 2;
+        if ((unsigned char)p[1] < 0x80) return 0xFFFD;
+        return ((ktc_Rune)(vC & 0x1F) << 6) | (p[1] & 0x3F);
+    }
+    if (vC < 0xF0) {
+        *byteLen = 3;
+        if ((unsigned char)p[1] < 0x80 || (unsigned char)p[2] < 0x80) return 0xFFFD;
+        return ((ktc_Rune)(vC & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+    }
+    *byteLen = 4;
+    if ((unsigned char)p[1] < 0x80 || (unsigned char)p[2] < 0x80 || (unsigned char)p[3] < 0x80)
+        return 0xFFFD;
+    return ((ktc_Rune)(vC & 0x07) << 18) | ((p[1] & 0x3F) << 12) |
+           ((p[2] & 0x3F) <<  6) | (p[3] & 0x3F);
+}
+
+ktc_Int ktc_utf8_encode(ktc_Rune r, ktc_Char* out) {
+    if (r < 0x80)    { out[0] = (ktc_Char)r; return 1; }
+    if (r < 0x800)   { out[0] = (ktc_Char)(0xC0 | (r >> 6));
+                        out[1] = (ktc_Char)(0x80 | (r & 0x3F)); return 2; }
+    if (r < 0x10000) { out[0] = (ktc_Char)(0xE0 | (r >> 12));
+                        out[1] = (ktc_Char)(0x80 | ((r >> 6) & 0x3F));
+                        out[2] = (ktc_Char)(0x80 | (r & 0x3F)); return 3; }
+    out[0] = (ktc_Char)(0xF0 | (r >> 18));
+    out[1] = (ktc_Char)(0x80 | ((r >> 12) & 0x3F));
+    out[2] = (ktc_Char)(0x80 | ((r >>  6) & 0x3F));
+    out[3] = (ktc_Char)(0x80 | (r & 0x3F));
+    return 4;
+}
+
+ktc_Int ktc_str_runeLen(ktc_String s) {
+    ktc_Int vCount = 0;
+    ktc_Int vI     = 0;
+    while (vI < s.len) {
+        ktc_Int vBLen;
+        ktc_utf8_decode(s.ptr + vI, &vBLen);
+        vI += vBLen;
+        vCount++;
+    }
+    return vCount;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MARK: Conversion
+// ══════════════════════════════════════════════════════════════════
+
+ktc_String ktc_int_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Int v) {
+    ktc_Int vLen = snprintf(buf, (size_t)bufsz, "%" PRId32, v);
+    if (vLen < 0 || vLen >= bufsz) vLen = bufsz - 1;
+    return (ktc_String){buf, vLen};
+}
+
+ktc_String ktc_long_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Long v) {
+    ktc_Int vLen = snprintf(buf, (size_t)bufsz, "%" PRId64, v);
+    if (vLen < 0 || vLen >= bufsz) vLen = bufsz - 1;
+    return (ktc_String){buf, vLen};
+}
+
+ktc_String ktc_double_to_string(ktc_Char* buf, ktc_Int bufsz, ktc_Double v) {
+    ktc_Int vLen = snprintf(buf, (size_t)bufsz, "%g", v);
+    if (vLen < 0 || vLen >= bufsz) vLen = bufsz - 1;
+    return (ktc_String){buf, vLen};
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MARK: Number Parsing
+// ══════════════════════════════════════════════════════════════════
+
+ktc_Int ktc_str_toInt(ktc_String s) {
+    ktc_Int vOut = 0;
+    ktc_str_toIntOrNull(s, &vOut);
+    return vOut;
+}
+
+ktc_Long ktc_str_toLong(ktc_String s) {
+    ktc_Long vOut = 0;
+    ktc_str_toLongOrNull(s, &vOut);
+    return vOut;
+}
+
+ktc_Double ktc_str_toDouble(ktc_String s) {
+    ktc_Double vOut = 0.0;
+    ktc_str_toDoubleOrNull(s, &vOut);
+    return vOut;
+}
+
+ktc_Bool ktc_str_toIntOrNull(ktc_String s, ktc_Int* out) {
+    if (s.len == 0) return false;
+    // strtol needs a null-terminated string; copy if needed
+    ktc_Char  vBuf[24];
+    ktc_Int   vLen = s.len < 23 ? s.len : 23;
+    memcpy(vBuf, s.ptr, (size_t)vLen);
+    vBuf[vLen] = '\0';
+    ktc_Char* vEnd;
+    errno      = 0;
+    long vVal  = strtol(vBuf, &vEnd, 10);
+    if (vEnd == vBuf || *vEnd != '\0' || errno == ERANGE) return false;
+    *out = (ktc_Int)vVal;
+    return true;
+}
+
+ktc_Bool ktc_str_toLongOrNull(ktc_String s, ktc_Long* out) {
+    if (s.len == 0) return false;
+    ktc_Char  vBuf[24];
+    ktc_Int   vLen = s.len < 23 ? s.len : 23;
+    memcpy(vBuf, s.ptr, (size_t)vLen);
+    vBuf[vLen] = '\0';
+    ktc_Char* vEnd;
+    errno          = 0;
+    long long vVal = strtoll(vBuf, &vEnd, 10);
+    if (vEnd == vBuf || *vEnd != '\0' || errno == ERANGE) return false;
+    *out = (ktc_Long)vVal;
+    return true;
+}
+
+ktc_Bool ktc_str_toDoubleOrNull(ktc_String s, ktc_Double* out) {
+    if (s.len == 0) return false;
+    ktc_Char vBuf[64];
+    ktc_Int  vLen = s.len < 63 ? s.len : 63;
+    memcpy(vBuf, s.ptr, (size_t)vLen);
+    vBuf[vLen] = '\0';
+    ktc_Char* vEnd;
+    errno            = 0;
+    double    vVal   = strtod(vBuf, &vEnd);
+    if (vEnd == vBuf || *vEnd != '\0' || errno == ERANGE) return false;
+    *out = (ktc_Double)vVal;
+    return true;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MARK: Initialization
+// ══════════════════════════════════════════════════════════════════
 
 static void ktc_console_init(void) {
 #if defined(_WIN32)
