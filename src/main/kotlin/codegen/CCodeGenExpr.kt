@@ -445,22 +445,49 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
                 return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
             }
         }
+        // DotExpr on nullable field (e.g. np.x == null)
+        if (nonNull is DotExpr && nonNullType != null && nonNullType.endsWith("?") && isValueNullableType(nonNullType)) {
+            val dotExpr = genExpr(nonNull)
+            return if (e.op == "==") "$dotExpr.tag == ktc_NONE" else "$dotExpr.tag == ktc_SOME"
+        }
     }
-    // Check: comparing a value-nullable T? directly against a non-nullable value (not null literal)
+    // Nullable T? vs non-null value: generate Optional-aware comparison
     if (e.op in setOf("==", "!=", "<", ">", "<=", ">=")) {
         val rt = inferExprType(e.right)
+        // Left is nullable value type, right is non-null → wrap in tag check
         if (lt != null && lt.endsWith("?") && isValueNullableType(lt) &&
             rt != null && !rt.endsWith("?") && e.right !is NullLit) {
-            codegenError("Cannot compare nullable '$lt' directly with non-nullable '$rt'; use a null check to unwrap first")
+            val leftExpr = genExpr(e.left)
+            val rightExpr = genExpr(e.right)
+            return when (e.op) {
+                "==" -> "($leftExpr.tag == ktc_SOME && $leftExpr.value == $rightExpr)"
+                "!=" -> "($leftExpr.tag != ktc_SOME || $leftExpr.value != $rightExpr)"
+                else -> "($leftExpr.tag == ktc_SOME && $leftExpr.value ${e.op} $rightExpr)"
+            }
         }
+        // Right is nullable value type, left is non-null
         if (rt != null && rt.endsWith("?") && isValueNullableType(rt) &&
             lt != null && !lt.endsWith("?") && e.left !is NullLit) {
-            codegenError("Cannot compare non-nullable '$lt' directly with nullable '$rt'; use a null check to unwrap first")
+            val leftExpr = genExpr(e.left)
+            val rightExpr = genExpr(e.right)
+            return when (e.op) {
+                "==" -> "($rightExpr.tag == ktc_SOME && $leftExpr == $rightExpr.value)"
+                "!=" -> "($rightExpr.tag != ktc_SOME || $leftExpr != $rightExpr.value)"
+                else -> "($rightExpr.tag == ktc_SOME && $leftExpr ${e.op} $rightExpr.value)"
+            }
         }
     }
     // Class == / != → ClassName_equals (all classes, not just data)
-    if ((e.op == "==" || e.op == "!=") && lt != null && classes.containsKey(lt)) {
-        val eq = "${typeFlatName(lt)}_equals(${genExpr(e.left)}, ${genExpr(e.right)})"
+    // Also handles @Ptr types (Type*) by resolving to base class and dereferencing pointers
+    val classKeyPtr = pointerClassName(lt)
+    val classKey = classKeyPtr ?: lt?.takeIf { classes.containsKey(it) }
+    if ((e.op == "==" || e.op == "!=") && classKey != null) {
+        val leftExpr = genExpr(e.left)
+        val rightExpr = genExpr(e.right)
+        // Dereference if the operands are pointers (e.g. @Ptr Vec2)
+        val l = if (classKeyPtr != null) "(*$leftExpr)" else leftExpr
+        val r = if (classKeyPtr != null) "(*$rightExpr)" else rightExpr
+        val eq = "${typeFlatName(classKey)}_equals($l, $r)"
         return if (e.op == "==") eq else "!$eq"
     }
     // String == → ktc_string_eq
@@ -1578,7 +1605,15 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                 "UInt" -> "ktc_hash_u32($recv)"
                 "ULong" -> "ktc_hash_u64($recv)"
                 "String" -> "ktc_hash_str($recv)"
-                else -> "${typeFlatName(rt)}_hashCode(&($recv))"
+                else -> {
+                    // @Ptr class pointer → call ClassName_hashCode(pointer)
+                    val pointerBase = pointerClassName(rt)
+                    if (pointerBase != null) {
+                        "${typeFlatName(pointerBase)}_hashCode($recv)"
+                    } else {
+                        "${typeFlatName(rt)}_hashCode(&($recv))"
+                    }
+                }
             }
         }
     }
@@ -1894,10 +1929,20 @@ internal fun CCodeGen.genDataClassCopy(recv: String, className: String, args: Li
     // copy(field = val, ...) — hoist to temp, override named fields
     val t = tmp()
     preStmts += "$cName $t = $src;"
+    val ci = classes[className]
+    val props = ci?.props?.associate { it.first to it.second } ?: emptyMap()
     for (arg in args) {
         val fieldName = arg.name ?: continue
+        val fieldType = props[fieldName]
         val value = genExpr(arg.expr)
-        preStmts += "$t.$fieldName = $value;"
+        if (fieldType != null && fieldType.nullable) {
+            val baseType = resolveTypeName(fieldType).toInternalStr.removeSuffix("?")
+            val optType = optCTypeName("${baseType}?")
+            val optExpr = if (arg.expr is NullLit) optNone(optType) else optSome(optType, value)
+            preStmts += "$t.$fieldName = $optExpr;"
+        } else {
+            preStmts += "$t.$fieldName = $value;"
+        }
     }
     return t
 }

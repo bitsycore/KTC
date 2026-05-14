@@ -63,6 +63,12 @@ fun passMutablePointPtr(p: @Ptr MutablePoint) {
     println("passMutablePointPtr after set: $p")
 }
 
+fun passMutablePoint(p: MutablePoint) {
+    println("passMutablePoint before set: $p")
+    p.x = p.x + 99
+    println("passMutablePoint after set: $p")
+}
+
 fun main() {
     // =================================
     // 1. Vec2 - basic val data class
@@ -238,22 +244,20 @@ fun main() {
     println("NullablePoint toString (none): $np3")
     println("NullablePoint toString (mixed): $np4")
 
-    // TODO: Direct nullable-vs-literal field access comparison (e.g. np1.x != 42)
-    //       generates broken C — the codegen doesn't wrap Optional-tag accesses.
-    //       Re-enable the checks below when fixed:
-    //   if (np1.x != 42 || np1.y != 3.14f) error("FAIL NullablePoint field access")
-    //   if (np3.x != null || np3.y != null) error("FAIL NullablePoint null access")
+    // field access - non-null and null value checks
+    if (np1.x != 42 || np1.y != 3.14f) error("FAIL NullablePoint field access (some)")
+    if (np3.x != null || np3.y != null) error("FAIL NullablePoint null access")
+    println("NullablePoint field access: ok")
 
-    // TODO: copy() with partial override on nullable fields (e.g. np3.copy(x = 99))
-    //       assigns a plain int to ktc_Int_Optional, producing invalid C.
-    //       Re-enable when fixed:
-    //   val npCopy = np3.copy(x = 99)
-    //   if (npCopy.x != 99 || npCopy.y != null) error("FAIL NullablePoint copy")
+    // copy with partial override on nullable fields
+    val npCopyOverride = np3.copy(x = 99)
+    if (npCopyOverride.x != 99 || npCopyOverride.y != null) error("FAIL NullablePoint copy(x=99) on null fields")
+    println("NullablePoint copy override: ok")
 
     // copy on nullable fields - no-arg copy works
     val npCopy = np1.copy()
     if (npCopy != np1) error("FAIL NullablePoint copy no-args")
-    println("NullablePoint copy: ok")
+    println("NullablePoint copy no-arg: ok")
 
     // =================================
     // 7. Rect - nested data class
@@ -325,6 +329,13 @@ fun main() {
     println("Vec3 copy: ok")
 
     // =================================
+    // 8. passMutablePoint - verify that passing a mutable data class to a function allows mutation of the original object
+    // =================================
+    val pointShouldNotMutate = MutablePoint(10, 20)
+    passMutablePoint(pointShouldNotMutate)
+    if (pointShouldNotMutate.x != 10 || pointShouldNotMutate.y != 20) error("FAIL passMutablePoint should not mutate original")
+
+    // =================================
     // 9. WithDefaults - default values
     // =================================
     val wd1 = WithDefaults()
@@ -358,14 +369,6 @@ fun main() {
 
     // =================================
     // 10. @Ptr data class tests
-    //
-    // TODO(known limitations):
-    //   - .ptr() on rvalues (e.g. Vec2(1,2).ptr()) takes address of temporary — invalid C.
-    //     Always assign to a val first.
-    //   - .hashCode() on @Ptr generates malformed C function name.
-    //   - ==/!= on @Ptr uses pointer comparison, not structural ClassName_equals.
-    //   - copy() with named args on nullable fields in @Ptr not tested.
-    // =================================
     val vec = Vec2(100.0f, 200.0f)
 
     // ptr() -> pointer
@@ -413,27 +416,27 @@ fun main() {
     if (copied.x != 10.0f || copied.y != 2.0f) error("FAIL @Ptr copy()")
     println("@Ptr copy(): ok")
 
-    // TODO: @Ptr ==/!= uses pointer comparison, not structural. Re-enable when
-    //       the codegen dispatches to ClassName_equals for @Ptr types.
-    // @Ptr equals
-    // val eqA = Vec2(10.0f, 20.0f)
-    // val eqB = Vec2(10.0f, 20.0f)
-    // val eqPtrA = eqA.ptr()
-    // val eqPtrB = eqB.ptr()
-    // if (eqPtrA != eqPtrB) error("FAIL @Ptr equals (same struct)")
-    // println("@Ptr equals: ok")
+    // @Ptr equals (structural via ClassName_equals)
+    val eqA = Vec2(10.0f, 20.0f)
+    val eqB = Vec2(10.0f, 20.0f)
+    val eqPtrA = eqA.ptr()
+    val eqPtrB = eqB.ptr()
+    if (eqPtrA != eqPtrB) error("FAIL @Ptr equals (same struct)")
+    // verify different values are not equal
+    val eqC = Vec2(30.0f, 40.0f)
+    val eqPtrC = eqC.ptr()
+    if (eqPtrA == eqPtrC) error("FAIL @Ptr equals (different struct)")
+    println("@Ptr equals: ok")
 
-    // TODO: hashCode() on @Ptr generates invalid C (DataClassTest_Vec2*_hashCode).
-    //       Re-enable when fixed.
     // @Ptr hashCode
-    // val hashSrc = Vec2(7.0f, 8.0f)
-    // val hashPtr = hashSrc.ptr()
-    // println("@Ptr hashCode: ${hashPtr.hashCode()}")
+    val hashSrc = Vec2(7.0f, 8.0f)
+    val hashPtr = hashSrc.ptr()
+    println("@Ptr hashCode: ${hashPtr.hashCode()}")
 
     // @Ptr toString
-    val eqA = Vec2(10.0f, 20.0f)
-    val eqPtrA = eqA.ptr()
-    println("@Ptr toString: $eqPtrA")
+    val displayVec = Vec2(10.0f, 20.0f)
+    val displayVecPtr = displayVec.ptr()
+    println("@Ptr toString: $displayVecPtr")
 
     // @Ptr with nested data class
     val rect = Rect(Vec2(1.0f, 1.0f), Vec2(2.0f, 2.0f))

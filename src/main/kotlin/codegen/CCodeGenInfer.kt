@@ -482,13 +482,15 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
     if (e.obj is NameExpr && enums.containsKey(e.obj.name)) return e.obj.name
     if (e.obj is NameExpr && objects.containsKey(e.obj.name)) {
         val prop = objects[e.obj.name]?.props?.find { it.first == e.name }
-        return if (prop != null) resolveTypeName(prop.second).toInternalStr else null
+        val baseObj = if (prop != null) resolveTypeName(prop.second).toInternalStr else null
+        return if (baseObj != null && prop!!.second.nullable && !baseObj.endsWith("?")) "${baseObj}?" else baseObj
     }
     // Companion object property: Foo.bar → look up in companion's ObjInfo
     if (e.obj is NameExpr && classCompanions.containsKey(e.obj.name)) {
         val vCompanionName = classCompanions[e.obj.name]!!
         val vProp = objects[vCompanionName]?.props?.find { it.first == e.name }
-        return if (vProp != null) resolveTypeName(vProp.second).toInternalStr else null
+        val baseComp = if (vProp != null) resolveTypeName(vProp.second).toInternalStr else null
+        return if (baseComp != null && vProp!!.second.nullable && !baseComp.endsWith("?")) "${baseComp}?" else baseComp
     }
     val recvType = inferExprType(e.obj) ?: return null
     // StringBuffer field types
@@ -525,11 +527,13 @@ internal fun CCodeGen.inferDotType(e: DotExpr): String? {
     if (indirectBase != null) {
         val ci = classes[indirectBase] ?: return null
         val prop = ci.props.find { it.first == e.name }
-        return if (prop != null) resolveTypeName(prop.second).toInternalStr else null
+        val baseIndirect = if (prop != null) resolveTypeName(prop.second).toInternalStr else null
+        return if (baseIndirect != null && prop!!.second.nullable && !baseIndirect.endsWith("?")) "${baseIndirect}?" else baseIndirect
     }
     val ci = classes[recvType] ?: return null
     val prop = ci.props.find { it.first == e.name }
-    return if (prop != null) resolveTypeName(prop.second).toInternalStr else null
+    val baseDirect = if (prop != null) resolveTypeName(prop.second).toInternalStr else null
+    return if (baseDirect != null && prop!!.second.nullable && !baseDirect.endsWith("?")) "${baseDirect}?" else baseDirect
 }
 
 internal fun CCodeGen.inferDotTypeSafe(e: SafeDotExpr): String? {
