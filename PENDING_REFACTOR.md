@@ -6,7 +6,7 @@ The KtcType hierarchy (`src/main/kotlin/types/CoreTypes.kt`) is well-designed bu
 used as a thin bridge layer.  The core codegen still operates mostly on raw strings.
 This file tracks remaining work to complete the migration.
 
-Currently: **~30% migrated**.  ~60 string checks eliminated so far.
+Currently: **~40% migrated**.  ~105 string checks eliminated so far.
 
 ## Completed (this session)
 

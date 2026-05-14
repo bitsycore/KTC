@@ -116,30 +116,38 @@ internal fun CCodeGen.emitBlock(b: Block, ind: String, insideMethod: Boolean = f
 
 internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) {
     val vKtc = if (s.type != null) resolveTypeName(s.type) else parseResolvedTypeName(inferExprType(s.init) ?: "Int") // KtcType (for C type emission)
-    val tRaw = vKtc.toInternalStr                                                                    // string type (for structural checks)
-    val inferredNullable = s.type == null && tRaw.endsWith("?")
-    val inferredPtr = s.type == null && (tRaw.endsWith("*") || tRaw.endsWith("*?"))
+    val vKtcCore = (vKtc as? KtcType.Nullable)?.inner ?: vKtc
+    val tRaw = vKtc.toInternalStr                                                                    // string type (for structural checks — retained during migration)
+    val inferredNullable = s.type == null && vKtc is KtcType.Nullable
+    val inferredPtr = s.type == null && vKtcCore is KtcType.Ptr
     val t = if (inferredNullable) tRaw.removeSuffix("?") else tRaw
     // malloc/calloc/realloc return nullable pointers (may return NULL)
     val isAlloc = s.type == null && isAllocCall(s.init)
 
     // Is this a pointer type? (@Ptr annotation adds * suffix)
-    val isPointer = t.endsWith("*")
+    // Only user-class pointers (Vec2*), not typed-array pointers (IntArray which is Ptr<Arr<Int>>)
+    val isPointer = vKtcCore is KtcType.Ptr && vKtcCore.inner !is KtcType.Arr
 
     // Nullable pointer (@Ptr T?): can be NULL
     val isPtrNullable = isPointer &&
             (s.type?.nullable == true || s.init is NullLit || inferredNullable || isAlloc)
 
     // Value nullable (T? without pointer): uses Optional struct
-    val isValueNullable = t != "Any" && !isPointer && !isFuncType(t) && !isArrayType(t) &&
-            (s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init) || inferredNullable)
+    val isValueNullable = when {
+        isPointer -> false
+        vKtcCore is KtcType.Func -> false
+        vKtcCore.isArrayLike -> false
+        vKtcCore is KtcType.User && vKtcCore.baseName == "Any" -> false
+        else -> s.type?.nullable == true || s.init is NullLit || isNullableReturningCall(s.init) || inferredNullable
+    }
 
     // Nullable array (Array<T>?): uses pointer + $len, null = NULL
     val isNullableArray = isArrayType(t) && !isPointer &&
             (s.type?.nullable == true || s.init is NullLit || inferredNullable)
 
     // Nullable Any: trampoline, null = data == NULL
-    val isAnyNullable = t == "Any" && (s.type?.nullable == true || s.init is NullLit || inferredNullable)
+    val isAnyNullable = vKtcCore is KtcType.User && vKtcCore.baseName == "Any" &&
+            (s.type?.nullable == true || s.init is NullLit || inferredNullable)
 
     val isInferredPtr = inferredPtr
 
@@ -157,7 +165,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
     val mutComment = if (s.mutable) "/*VAR*/ " else "/*VAL*/ "
 
     // ── Function pointer type: special declaration syntax ──
-    if (isFuncType(t)) {
+    if (vKtc is KtcType.Func) {
         if (s.init != null) {
             val expr = genExpr(s.init)
             flushPreStmts(ind)
@@ -170,9 +178,8 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
 
     val ct = cTypeStr(vKtc)  // C type string derived from KtcType
     // Don't const class types, typed pointers, nullable, arrays, or interface types
-    val qual = if (!s.mutable && !classes.containsKey(t) && !interfaces.containsKey(t)
-        && !t.endsWith("*")
-        && !isArrayType(t)
+    val qual = if (!s.mutable && vKtcCore !is KtcType.User
+        && !vKtcCore.isArrayLike
         && !isPointer && !isValueNullable && !isPtrNullable
     ) "const " else ""
 
@@ -181,7 +188,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
         if (arrayInit != null) {
             impl.appendLine(arrayInit)
             // Emit $has for nullable array variables so safe-calls work
-            val isNullableArray = (s.type?.nullable == true || inferredNullable) && isArrayType(t) && !isPtrNullable
+            val isNullableArray = (s.type?.nullable == true || inferredNullable) && vKtcCore.isArrayLike && !isPtrNullable
             if (isNullableArray) {
                 impl.appendLine("${ind}bool ${s.name}\$has = true;")
             }
@@ -204,7 +211,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     if (allocSize != null) {
                         impl.appendLine("${ind}ktc_Int ${s.name}\$len = ${genExpr(allocSize)};")
                     }
-                } else if (isArrayType(t) && s.init is NameExpr) {
+                } else if (vKtcCore.isArrayLike && s.init is NameExpr) {
                     val lenVar = (s.init as NameExpr).name + "\$len"
                     impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenVar;")
                 }
@@ -300,7 +307,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     return
                 }
                 // Array-returning function call: declare $len first, pass &$len as out-param
-                if (isArrayType(t) && isArrayReturningCall(s.init)) {
+                if (vKtcCore.isArrayLike && isArrayReturningCall(s.init)) {
                     impl.appendLine("${ind}ktc_Int ${s.name}\$len;")
                     val expr = genExprWithArrayLenOut(s.init, s.name)
                     flushPreStmts(ind)
@@ -310,7 +317,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                 val expr = genExpr(s.init)
                 flushPreStmts(ind)
                 // Array type: deep copy from source (value semantics, not alias)
-                if (isArrayType(t) && !t.endsWith("*") && !t.endsWith("*?") && s.init !is NullLit) {
+                if (vKtcCore is KtcType.Arr && s.init !is NullLit) {
                     val elemCType = arrayElementCType(t)
                     val lenExpr = if (s.init is NameExpr) "${(s.init as NameExpr).name}\$len" else "${expr}\$len"
                     impl.appendLine("${ind}$elemCType* ${s.name} = ($elemCType*)ktc_alloca(sizeof($elemCType) * $lenExpr);")
@@ -328,10 +335,10 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String, method: Boolean) 
                     } else {
                         impl.appendLine("$ind$mutComment$qual$ct ${s.name} = $expr;")
                     }
-                    if (isArrayType(t) && !t.endsWith("*?") && (t.endsWith("*") || isArrayType(t))) {
+                    if (vKtcCore.isArrayLike) {
                         val lenInit = if (s.init is NullLit) "0" else "${expr}\$len"
                         impl.appendLine("${ind}const ktc_Int ${s.name}\$len = $lenInit;")
-                    } else if (t.endsWith("*") && !t.endsWith("*?") && s.init is NameExpr) {
+                    } else if (vKtcCore is KtcType.Ptr && s.init is NameExpr) {
                         val srcName = (s.init as NameExpr).name
                         // Skip $len copy if source is a @Ptr RawArray<T> field (which has no $len companion)
                         val isRawArrayField = currentClass != null &&
@@ -715,19 +722,20 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
 
     // safe dot assignment: this?.x = value → if ($self$has) { (*$self).x = value; }
     if (s.target is SafeDotExpr) {
-        val recvType = inferExprType(s.target.obj)
+        val recvTypeKtc = inferExprTypeKtc(s.target.obj)
+        val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc
         val recv = genExpr(s.target.obj)
         val recvName = (s.target.obj as? NameExpr)?.name
         val isThis = s.target.obj is ThisExpr
-        val isValueNullRecv = recvType != null && recvType.endsWith("?") && isValueNullableType(recvType)
+        val isValueNullRecv = recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)
         val guard = if (isThis) {
             if (isValueNullRecv) "\$self.tag == ktc_SOME" else "\$self\$has"
-        } else if (recvName != null && recvType != null && recvType.endsWith("?")) {
+        } else if (recvName != null && recvTypeKtc is KtcType.Nullable) {
             if (isValueNullRecv) "$recvName.tag == ktc_SOME" else "${recvName}\$has"
         } else if (recvName != null) "${recvName}\$has"
         else "${recv}\$has"
         val recvVal = if (isValueNullRecv) "$recv.value" else recv
-        val fieldExpr = if (anyIndirectClassName(recvType) != null) "$recvVal->${s.target.name}"
+        val fieldExpr = if (recvTypeCoreKtc is KtcType.Ptr) "$recvVal->${s.target.name}"
         else "$recvVal.${s.target.name}"
         val value = genExpr(s.value)
         flushPreStmts(ind)
@@ -753,8 +761,9 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
                 return
             }
         }
-        if (objType != null && anyIndirectClassName(objType)?.let { classes.containsKey(it) } == true) {
-            val baseClass = anyIndirectClassName(objType)!!
+        if (objTypeCoreKtc is KtcType.Ptr) {
+            val baseName = (objTypeCoreKtc as KtcType.Ptr).inner
+            val baseClass = (baseName as? KtcType.User)?.baseName ?: baseName.toInternalStr
             val setMethod = classes[baseClass]?.methods?.find { it.name == "set" && it.isOperator }
             if (setMethod != null) {
                 val recv = genExpr(s.target.obj)
@@ -797,7 +806,8 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
     val varName = (s.target as? NameExpr)?.name
     val varType = if (varName != null) lookupVar(varName) else null
     val isAnyValNullVar = false
-    val isAnyPtrNullVar = varType != null && varType.endsWith("*?")
+    val varKtc = if (varType != null) parseResolvedTypeName(varType) else null
+    val isAnyPtrNullVar = varKtc is KtcType.Nullable && varKtc.inner is KtcType.Ptr
 
     // Val reassignment check
     if (varName != null) {
@@ -813,10 +823,10 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
     // Class property via obj.field
     if (s.target is DotExpr) {
         val dotTarget = s.target as DotExpr
-        val recvType = inferExprType(dotTarget.obj)
-        val className = if (recvType != null) {
-            classes[recvType]?.let { recvType } ?: anyIndirectClassName(recvType)
-        } else null
+        val recvTypeKtc = inferExprTypeKtc(dotTarget.obj)
+        val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc
+        val className = (recvTypeCoreKtc as? KtcType.User)?.baseName
+            ?: ((recvTypeCoreKtc as? KtcType.Ptr)?.inner as? KtcType.User)?.baseName
         if (className != null) {
             val ci = classes[className]
             if (ci != null) {
@@ -854,8 +864,8 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
             impl.appendLine("$ind$target ${s.op} $value;")
         }
         // Value nullable = null → Optional{NONE}
-        varType != null && varType.endsWith("?") && s.value is NullLit && isValueNullableType(varType) -> {
-            val optType = optCTypeName(varType)
+        varKtc is KtcType.Nullable && s.value is NullLit && isValueNullableKtc(varKtc) -> {
+            val optType = optCTypeName(varType!!)
             impl.appendLine("$ind$target = ${optNone(optType)};")
         }
         // General case
@@ -863,10 +873,10 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
             val value = genExpr(s.value)
             flushPreStmts(ind)
             val valueType = inferExprType(s.value)
-            if (varType != null && varType.endsWith("?") && isValueNullableType(varType)
+            if (varKtc is KtcType.Nullable && isValueNullableKtc(varKtc)
                 && varName != null && isOptional(varName)
             ) {
-                val optType = optCTypeName(varType)
+                val optType = optCTypeName(varType!!)
                 val alreadyOpt = valueType != null && valueType.endsWith("?") && isValueNullableType(valueType)
                 if (alreadyOpt) {
                     impl.appendLine("$ind$target = $value;")
@@ -877,7 +887,7 @@ internal fun CCodeGen.emitAssign(s: AssignStmt, ind: String, method: Boolean) {
                 impl.appendLine("$ind$target ${s.op} $value;")
             }
             // Update array $len when assigning from malloc/realloc
-            if (varType != null && isArrayType(varType) && s.op == "=") {
+            if (varKtc != null && varKtc.isArrayLike && s.op == "=") {
                 val allocSize = extractAllocSize(s.value)
                 if (allocSize != null) {
                     impl.appendLine("$ind${target}\$len = ${genExpr(allocSize)};")
@@ -1306,14 +1316,16 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     }
 
     val t = inferExprType(arg) ?: "Int"
+    val tKtc = inferExprTypeKtc(arg)
+    val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
     var expr = genExpr(arg)
     flushPreStmts(ind)
 
     // Nullable → if (tag == ktc_SOME) print(value) else print("null")
-    if (t.endsWith("?")) {
+    if (tKtc is KtcType.Nullable) {
         val baseT = t.removeSuffix("?")
-        val isValNull = isValueNullableType(t)
-        val isPtrNull = !isValNull && t.endsWith("*?")
+        val isValNull = isValueNullableKtc(tKtc)
+        val isPtrNull = !isValNull && tKtc.inner is KtcType.Ptr
         // Materialize only when complex to avoid repeated evaluation
         if (!isSimpleCExpr(expr)) {
             val vTmp = tmp()
@@ -1327,11 +1339,12 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         }
         val valExpr = if (isValNull) "$expr.value" else expr
         // data class → use StrBuf toString with null guard
-        val dataClass = if (classes.containsKey(baseT) && classes[baseT]!!.isData) baseT
-        else anyIndirectClassName(baseT)?.takeIf { classes[it]?.isData == true }
+        val dataClass = (tKtcCore as? KtcType.User)?.takeIf { it.kind == KtcType.UserKind.DataClass }?.baseName
+            ?: ((tKtcCore as? KtcType.Ptr)?.inner as? KtcType.User)?.takeIf { it.kind == KtcType.UserKind.DataClass }?.baseName
         if (dataClass != null) {
             val buf = tmp()
-            val recv = if (dataClass != baseT) valExpr else "&($valExpr)"
+            val isIndirect = tKtcCore is KtcType.Ptr
+            val recv = if (isIndirect) valExpr else "&($valExpr)"
             val maxLen = toStringMaxLen(dataClass)
             if (maxLen != null && maxLen <= 512) {
                 impl.appendLine("${ind}char ${buf}[$maxLen];")
@@ -1358,7 +1371,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     }
 
     // data class → toString into StrBuf, then printf (fixed buffer if bounded)
-    if (classes.containsKey(t) && classes[t]!!.isData) {
+    if (tKtcCore is KtcType.User && (tKtcCore as KtcType.User).kind == KtcType.UserKind.DataClass) {
         val buf = tmp()
         val vTmp = tmp()
         val maxLen = toStringMaxLen(t)
@@ -1381,7 +1394,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     }
 
     // Heap/Ptr/Value pointer to data class → pass pointer directly
-    val indirectBase = anyIndirectClassName(t)
+    val indirectBase = (tKtcCore as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (indirectBase != null && classes[indirectBase]?.isData == true) {
         val buf = tmp()
         val maxLen = toStringMaxLen(indirectBase)
@@ -1402,7 +1415,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     }
 
     // Non-data class/object/interface → use toString()
-    if (classes.containsKey(t) || objects.containsKey(t) || interfaces.containsKey(t)) {
+    if (tKtcCore is KtcType.User) {
         val str = genToString(expr, t)
         flushPreStmts(ind)
         val tmpStr = tmp()
@@ -1717,29 +1730,29 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
         }
 
         is IsCond -> {
-            val target = resolveTypeName(c.type).toInternalStr
-            val exprType = if (subject != null) inferExprType(subject) else null
-            val memOp = if (exprType != null && (exprType.endsWith("*") || exprType.endsWith("*?"))) "->" else "."
+            val targetKtc = resolveTypeName(c.type)
+            val target = targetKtc.toInternalStr
+            val exprKtc = if (subject != null) inferExprTypeKtc(subject) else null
+            val exprKtcCore = (exprKtc as? KtcType.Nullable)?.inner ?: exprKtc
+            val memOp = if (exprKtcCore is KtcType.Ptr) "->" else "."
             val check = if (classes.containsKey(target)) {
                 "$subj${memOp}__type_id == ${typeFlatName(target)}_TYPE_ID"
             } else if (interfaces.containsKey(target)) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
                 else impls.joinToString(" || ") { "$subj${memOp}__type_id == ${typeFlatName(it)}_TYPE_ID" }
-            } else if (isArrayType(target)) {
-                val exprBase = exprType?.removeSuffix("?")
-                if (exprBase != null && isArrayType(exprBase)) {
-                    if (exprBase == target) "true" else "false"
+            } else if (targetKtc.isArrayLike) {
+                if (exprKtcCore != null && exprKtcCore.isArrayLike) {
+                    if (exprKtcCore.toInternalStr == target) "true" else "false"
                 } else {
                     val arrayId = getTypeId(target)
                     "($subj${memOp}__array_type_id == $arrayId)"
                 }
             } else if (isBuiltinType(target)) {
-                val exprBase = exprType?.removeSuffix("?")
-                val isSourceNullable = exprType?.endsWith("?") == true
-                if (exprBase != null && exprBase != "Any" && !exprBase.endsWith("*")) {
-                    if (exprBase == target) {
-                        if (isSourceNullable && isValueNullableType(exprType!!)) "($subj.tag == ktc_SOME)"
+                val isSourceNullable = exprKtc is KtcType.Nullable
+                if (exprKtcCore != null && exprKtcCore !is KtcType.Ptr) {
+                    if (exprKtcCore.toInternalStr == target) {
+                        if (isSourceNullable && isValueNullableKtc(exprKtc!!)) "($subj.tag == ktc_SOME)"
                         else if (isSourceNullable) "($subj != NULL)"
                         else "true"
                     } else "false"
