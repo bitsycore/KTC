@@ -537,14 +537,14 @@ internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null
 /** C type string from KtcType, uses pfx for user types. */
 internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Prim -> ktc.toCType()
-    is KtcType.Str -> "ktc_String"
-    is KtcType.Void -> "void"
+    is KtcType.Str -> ktc.toCType()
+    is KtcType.Void -> ktc.toCType()
     is KtcType.User -> {
         val bn = ktc.baseName // base name (no package prefix)
         when (bn) {
             "Any" -> "ktc_Any"
             "ktc_StrBuf" -> "ktc_StrBuf"
-            else -> ktc.flatName
+            else -> ktc.toCType()
         }
     }
 
