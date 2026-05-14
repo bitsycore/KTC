@@ -2568,13 +2568,12 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
     }
 
     val t = inferExprType(arg) ?: "Int"
-    val tKtc = inferExprTypeKtc(arg)
+    val tKtc = inferExprTypeKtc(arg) ?: KtcType.Prim(KtcType.PrimKind.Int)
     val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
     val expr = genExpr(arg)
 
     // Nullable → ternary: $has ? printf(value) : printf("null")
     if (tKtc is KtcType.Nullable) {
-        val baseT = t.removeSuffix("?")
         // Materialize only when complex to avoid repeated evaluation
         val safeExpr = if (!isSimpleCExpr(expr)) {
             val vTmp = tmp(); preStmts += "${cTypeStr(t)} $vTmp = ($expr);"; vTmp
@@ -2582,7 +2581,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         val isPtrNull = tKtc.inner is KtcType.Ptr && !isValueNullableKtc(tKtc)
         val hasExpr = if (isPtrNull) "$safeExpr != NULL" else if (isValueNullableKtc(tKtc)) "$safeExpr.tag == ktc_SOME" else "${safeExpr}\$has"
         val fmt = printfFmt(tKtcCore ?: KtcType.Prim(KtcType.PrimKind.Int)) + nl
-        val a = printfArg(safeExpr, baseT)
+        val a = printfArg(safeExpr, tKtcCore)
         return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
     }
 
@@ -2646,7 +2645,7 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
         return "printf(\"%.*s$nl\", (ktc_Int)${cName}_names[$safeExpr].len, ${cName}_names[$safeExpr].ptr)"
     }
     val fmt = printfFmt(tKtcCore!!) + nl
-    val a = printfArg(expr, t)
+    val a = printfArg(expr, tKtcCore)
     return "printf(\"$fmt\", $a)"
 }
 
@@ -2663,15 +2662,15 @@ internal fun CCodeGen.genPrintfFromTemplate(tmpl: StrTemplateExpr, nl: String): 
                 fmt.append(printfFmt(tKtcCore))
                 val exprStr = genExpr(part.expr)
                 // String / enum: materialize if complex to avoid double-evaluation
-                if (t == "String") {
+                if (tKtcCore is KtcType.Str) {
                     val s = if (!isSimpleCExpr(exprStr)) { val v = tmp(); preStmts += "ktc_String $v = ($exprStr);"; v } else exprStr
                     argsList += "(ktc_Int)($s).len, ($s).ptr"
-                } else if (t in enums) {
-                    val cName = typeFlatName(t)
+                } else if (tKtcCore is KtcType.User && (tKtcCore as KtcType.User).kind == KtcType.UserKind.Enum) {
+                    val cName = typeFlatName((tKtcCore as KtcType.User).baseName)
                     val s = if (!isSimpleCExpr(exprStr)) { val v = tmp(); preStmts += "$cName $v = ($exprStr);"; v } else exprStr
                     argsList += "(ktc_Int)${cName}_names[$s].len, ${cName}_names[$s].ptr"
                 } else {
-                    argsList += printfArg(exprStr, t)
+                    argsList += printfArg(exprStr, tKtcCore)
                 }
             }
         }

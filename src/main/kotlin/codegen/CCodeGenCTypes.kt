@@ -402,14 +402,13 @@ internal fun CCodeGen.printfFmt(ktc: KtcType): String = when (ktc) {
     else -> "%.*s"
 }
 
-internal fun CCodeGen.printfArg(expr: String, t: String): String = when (t) {
-    "Boolean" -> "($expr) ? \"true\" : \"false\""
-    "String" -> "(ktc_Int)($expr).len, ($expr).ptr"
-    in enums -> {
-        val cName = typeFlatName(t)
+internal fun CCodeGen.printfArg(expr: String, ktc: KtcType): String = when {
+    ktc is KtcType.Prim && ktc.kind == KtcType.PrimKind.Boolean -> "($expr) ? \"true\" : \"false\""
+    ktc is KtcType.Str -> "(ktc_Int)($expr).len, ($expr).ptr"
+    ktc is KtcType.User && ktc.kind == KtcType.UserKind.Enum -> {
+        val cName = typeFlatName(ktc.baseName)
         "(ktc_Int)${cName}_names[($expr)].len, ${cName}_names[($expr)].ptr"
     }
-
     else -> expr
 }
 

@@ -1322,20 +1322,19 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     }
 
     val t = inferExprType(arg) ?: "Int"
-    val tKtc = inferExprTypeKtc(arg)
+    val tKtc = inferExprTypeKtc(arg) ?: KtcType.Prim(KtcType.PrimKind.Int)
     val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
     var expr = genExpr(arg)
     flushPreStmts(ind)
 
     // Nullable → if (tag == ktc_SOME) print(value) else print("null")
     if (tKtc is KtcType.Nullable) {
-        val baseT = t.removeSuffix("?")
         val isValNull = isValueNullableKtc(tKtc)
         val isPtrNull = !isValNull && tKtc.inner is KtcType.Ptr
         // Materialize only when complex to avoid repeated evaluation
         if (!isSimpleCExpr(expr)) {
             val vTmp = tmp()
-            impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+            impl.appendLine("${ind}${tKtc.toCType()} $vTmp = ($expr);")
             expr = vTmp
         }
         val hasExpr = when {
@@ -1368,8 +1367,8 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
                 impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
             }
         } else {
-            val fmt = printfFmt(tKtcCore ?: KtcType.Prim(KtcType.PrimKind.Int)) + nl
-            val a = printfArg(valExpr, baseT)
+            val fmt = printfFmt(tKtcCore) + nl
+            val a = printfArg(valExpr, tKtcCore)
             impl.appendLine("${ind}if ($hasExpr) { printf(\"$fmt\", $a); }")
             impl.appendLine("${ind}else { printf(\"null$nl\"); }")
         }
@@ -1377,23 +1376,24 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
     }
 
     // data class → toString into StrBuf, then printf (fixed buffer if bounded)
-    if (tKtcCore is KtcType.User && (tKtcCore as KtcType.User).kind == KtcType.UserKind.DataClass) {
+    if (tKtcCore is KtcType.User && tKtcCore.kind == KtcType.UserKind.DataClass) {
         val buf = tmp()
         val vTmp = tmp()
-        val maxLen = toStringMaxLen(t)
+        val baseName = tKtcCore.baseName
+        val maxLen = toStringMaxLen(baseName)
         if (maxLen != null && maxLen <= 512) {
-            impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+            impl.appendLine("${ind}${tKtcCore.toCType()} $vTmp = ($expr);")
             impl.appendLine("${ind}char ${buf}[$maxLen];")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {${buf}, 0, $maxLen};")
-            impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(baseName)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
         } else {
-            impl.appendLine("${ind}${cTypeStr(t)} $vTmp = ($expr);")
+            impl.appendLine("${ind}${tKtcCore.toCType()} $vTmp = ($expr);")
             impl.appendLine("${ind}ktc_StrBuf ${buf}_sb = {NULL, 0, 0};")
-            impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(baseName)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}char* ${buf} = (char*)ktc_alloca(${buf}_sb.len + 1);")
             impl.appendLine("${ind}${buf}_sb = (ktc_StrBuf){${buf}, 0, ${buf}_sb.len + 1};")
-            impl.appendLine("${ind}${typeFlatName(t)}_toString(&$vTmp, &${buf}_sb);")
+            impl.appendLine("${ind}${typeFlatName(baseName)}_toString(&$vTmp, &${buf}_sb);")
             impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${buf}_sb.len, ${buf}_sb.ptr);")
         }
         return
@@ -1422,7 +1422,7 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
 
     // Non-data class/object/interface → use toString()
     if (tKtcCore is KtcType.User) {
-        val str = genToString(expr, t)
+        val str = genToStringKtc(expr, tKtcCore)
         flushPreStmts(ind)
         val tmpStr = tmp()
         impl.appendLine("${ind}ktc_String $tmpStr = $str;")
@@ -1430,20 +1430,21 @@ internal fun CCodeGen.emitPrintStmtInner(args: List<Arg>, ind: String, newline: 
         return
     }
 
-    // String / enum: printfArg expands expr twice (.len + .ptr or names[x] twice) — materialize if complex
-    if (t == "String") {
+    // String: printf(".*s") needs .len + .ptr — materialize if complex
+    if (tKtcCore is KtcType.Str) {
         val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); impl.appendLine("${ind}ktc_String $vTmp = ($expr);"); vTmp } else expr
         impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)($safeExpr).len, ($safeExpr).ptr);")
         return
     }
-    if (t in enums) {
-        val cName = typeFlatName(t)
+    // Enum: printf via names array
+    if (tKtcCore is KtcType.User && (tKtcCore as KtcType.User).kind == KtcType.UserKind.Enum) {
+        val cName = typeFlatName((tKtcCore as KtcType.User).baseName)
         val safeExpr = if (!isSimpleCExpr(expr)) { val vTmp = tmp(); impl.appendLine("${ind}$cName $vTmp = ($expr);"); vTmp } else expr
         impl.appendLine("${ind}printf(\"%.*s$nl\", (ktc_Int)${cName}_names[$safeExpr].len, ${cName}_names[$safeExpr].ptr);")
         return
     }
-    val fmt = printfFmt(tKtcCore ?: KtcType.Prim(KtcType.PrimKind.Int)) + nl
-    val a = printfArg(expr, t)
+    val fmt = printfFmt(tKtcCore) + nl
+    val a = printfArg(expr, tKtcCore)
     impl.appendLine("${ind}printf(\"$fmt\", $a);")
 }
 
