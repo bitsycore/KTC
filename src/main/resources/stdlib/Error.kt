@@ -1,6 +1,6 @@
 package ktc.std
 
 fun error(message: String): Nothing {
-    c.fprintf(c.stderr, "%.*s\n", message.len, message.ptr);
+    c.ktc_stacktrace_print(message.ptr, message.len);
     c.exit(c.EXIT_FAILURE);
 }

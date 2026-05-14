@@ -34,15 +34,36 @@ typedef uint32_t ktc_UInt;
 typedef uint64_t ktc_ULong;
 
 /* ═══════════════════════════ Initialization ═════════════════════ */
+
 void ktc_mainInit(void);
 
+/* ═══════════════════════════ Stack trace ════════════════════════ */
+
+/** Print a Java-style stack trace to stderr, then return.
+ * The caller (error()) is responsible for calling exit().
+ * ┌─────────────────┬───────────────────────────────────────────────────┐
+ * │    Platform     │                 Extra requirement                 │
+ * ├─────────────────┼───────────────────────────────────────────────────┤
+ * │ Windows / MSVC  │ automatic via #pragma comment(lib, "dbghelp.lib") │
+ * ├─────────────────┼───────────────────────────────────────────────────┤
+ * │ Windows / MinGW │ add -ldbghelp to linker                           │
+ * ├─────────────────┼───────────────────────────────────────────────────┤
+ * │ Linux           │ add -rdynamic (keeps symbol names) and -ldl       │
+ * ├─────────────────┼───────────────────────────────────────────────────┤
+ * │ macOS           │ nothing extra needed                              │
+ * └─────────────────┴───────────────────────────────────────────────────┘
+ */
+void ktc_stacktrace_print(const char* message, int message_len);
+
 /* ═══════════════════════════ time ═══════════════════════════ */
+
 ktc_ULong ktc_time_ms(void);
 ktc_Double ktc_time_seconds(void);
 void ktc_time_sleep_seconds(ktc_Double seconds);
 void ktc_time_sleep_ms(ktc_UInt ms);
 
 /* ═══════════════════════════ random ═══════════════════════════ */
+
 #define KTC_RAND_MAX UINT32_MAX  // 4294967295
 
 void ktc_srand(
@@ -63,6 +84,7 @@ ktc_UInt ktc_rand_range(
 );
 
 /* ═══════════════════════════ alloca compat ═══════════════════════════ */
+
 #if defined(_MSC_VER)
     #include <malloc.h>
     #define ktc_alloca(size) _alloca(size)
