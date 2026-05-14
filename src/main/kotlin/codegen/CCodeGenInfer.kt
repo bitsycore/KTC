@@ -374,8 +374,8 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
     if (method == "hashCode") return "Int"
     if (method == "inv") return recvType  // bitwise NOT returns same type
     // Array methods (including pointer-to-array)
-    val isArrayPtr = recvType.endsWith("Array") ||
-        (recvType.removeSuffix("?").endsWith("*") && isArrayType(recvType))
+    val recvKtc = parseResolvedTypeName(recvType)
+    val isArrayPtr = recvKtc.isArrayLike
     if (isArrayPtr) {
         return when (method) {
             "size" -> "Int"

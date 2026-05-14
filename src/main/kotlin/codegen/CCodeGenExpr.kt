@@ -172,9 +172,10 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             return t
         }
         val r = genExpr(e.right)
-        if (lt != null && isValueNullableType(lt)) {
+        val ltKtc = inferExprTypeKtc(e.left)
+        if (ltKtc != null && isValueNullableKtc(ltKtc)) {
             "($l.tag == ktc_SOME ? $l.value : $r)"
-        } else if (lt != null && lt.endsWith("*?")) {
+        } else if (ltKtc is KtcType.Nullable && ltKtc.inner is KtcType.Ptr) {
             "($l != NULL ? $l : $r)"
         } else {
             "($l != NULL ? $l : $r)"
@@ -427,18 +428,18 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             }
         }
         val varName = (nonNull as? NameExpr)?.name
-        val varType = if (varName != null) lookupVar(varName) else null
-        if (varType != null) {
-            // @Ptr T? → compare pointer to NULL
-            if (varType.endsWith("*?")) {
+        val varKtc = if (varName != null) lookupVarKtc(varName) else null
+        if (varKtc != null) {
+            // @Ptr T? → compare pointer to NULL (exclude typed array pointers like IntArray)
+            if (varKtc is KtcType.Nullable && varKtc.inner is KtcType.Ptr && (varKtc.inner as KtcType.Ptr).inner !is KtcType.Arr) {
                 return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
             }
             // Any? nullable → compare data pointer to NULL
-            if (varType == "Any?") {
+            if (varKtc is KtcType.Nullable && varKtc.inner is KtcType.Any) {
                 return if (e.op == "==") "$varName.data == NULL" else "$varName.data != NULL"
             }
             // Value nullable → use Optional tag
-            if (varType.endsWith("?") && isValueNullableType(varType)) {
+            if (isValueNullableKtc(varKtc)) {
                 return if (e.op == "==") "$varName.tag == ktc_NONE" else "$varName.tag == ktc_SOME"
             }
             // Trampolined array param: null is data == NULL — use local copy for consistency
@@ -446,7 +447,7 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
                 return if (e.op == "==") "local\$$varName == NULL" else "local\$$varName != NULL"
             }
             // Fallback for other nullable
-            if (varType.endsWith("?")) {
+            if (varKtc is KtcType.Nullable) {
                 return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
             }
         }
@@ -681,12 +682,13 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         }
         // Reject non-safe call on nullable receiver (unless the extension accepts nullable receiver,
         // or the nullable is a Ptr/Heap/Value<Array<T>> where deref() etc. are valid on nullable)
-        val recvType = inferExprType(e.callee.obj)
-        if (recvType != null && recvType.endsWith("?")) {
-            val baseType = recvType.removeSuffix("?")
-            val isIndirectArray = baseType.endsWith("*") && isArrayType(baseType)
-            if (!hasNullableReceiverExt(baseType, e.callee.name) && !isIndirectArray && !isArrayType(baseType)) {
+        val recvKtc = inferExprTypeKtc(e.callee.obj)
+        if (recvKtc is KtcType.Nullable) {
+            val innerKtc = recvKtc.inner
+            val isIndirectArray = innerKtc is KtcType.Ptr && (innerKtc as KtcType.Ptr).inner is KtcType.Arr
+            if (!hasNullableReceiverExt(innerKtc.toInternalStr, e.callee.name) && !isIndirectArray && innerKtc !is KtcType.Arr) {
                 val recvSrc = (e.callee.obj as? NameExpr)?.name ?: e.callee.obj.toString()
+                val recvType = recvKtc.toInternalStr
                 codegenError("Only safe (?.) calls are allowed on a nullable receiver of type '$recvType': $recvSrc.${e.callee.name}()")
             }
         }
@@ -1420,8 +1422,10 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     parts += "(ktc_Any){0}"
                 } else {
                     val argType = inferExprType(arg.expr)?.removeSuffix("?") ?: "Int"
+                    val argKtc = inferExprTypeKtc(arg.expr)
+                    val argKtcCore = (argKtc as? KtcType.Nullable)?.inner ?: argKtc
                     // If already Any/Any?, pass directly (no re-wrap)
-                    if (argType == "Any") {
+                    if (argKtcCore is KtcType.Any) {
                         parts += expr
                     } else {
                         val typeId = getTypeId(argType)
@@ -2951,7 +2955,7 @@ internal fun CCodeGen.genToString(recv: String, type: String): String {
             if (hasHash) {
                 val cName = typeFlatName(base)
                 val buf = tmp()
-                val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) recv else "&$recv"
+                val selfExpr = if (parseResolvedTypeName(type) is KtcType.Ptr) recv else "&$recv"
                 preStmts += "ktc_Char ${buf}[$sz];"
                 preStmts += "snprintf($buf, $sz, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
                 "ktc_str($buf)"
@@ -2997,7 +3001,7 @@ internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): S
             val hasIface = interfaces.containsKey(base)
             if (hasHash) {
                 val cName = typeFlatName(base)
-                val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) recv else "&$recv"
+                val selfExpr = if (parseResolvedTypeName(type) is KtcType.Ptr) recv else "&$recv"
                 val buf = tmp()
                 preStmts += "ktc_Char ${buf}[64];"
                 preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
