@@ -153,7 +153,7 @@ open class TranspilerTestBase {
     Stdlib is loaded (and prescanned for infix names) BEFORE parsing the user source
     so stdlib infix operators like toStd are recognized during parsing.
     */
-    protected fun transpileWithStdlib(src: String): TranspileResult {
+    protected fun transpileWithStdlib(@Language("kotlin") src: String): TranspileResult {
         val vSource = src.trimIndent()
         val vStdlibAsts = loadStdlibAsts()  // prescans stdlib infix names into Parser.INFIX_IDS
         prescanInfix(vSource)                // also prescan user source for any user-defined infix
@@ -196,7 +196,7 @@ open class TranspilerTestBase {
     Shorthand: wrap body in a test package + main, transpile with stdlib context.
     */
     protected fun transpileMainWithStdlib(
-        body: String,
+        @Language("kotlin") body: String,
         decls: String = "",
         pkg: String = "test.Main"
     ): TranspileResult {
