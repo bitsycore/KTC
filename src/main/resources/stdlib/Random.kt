@@ -1,27 +1,14 @@
 package ktc.std
 
-/**
-Kotlin Random singleton implementation.
-Delegates to C stdlib rand() / srand(), seeded once from the system clock.
-Mirrors the Kotlin standard library Random API.
-
-Method naming note: the transpiler does not support C-level overloading, so
-variants with different arities use distinct names:
-  nextInt(until)         — Kotlin: Random.nextInt(until)
-  nextIntBetween(f, u)   — Kotlin: Random.nextInt(from, until)
-  nextLong(until)        — Kotlin: Random.nextLong(until)
-  nextLongBetween(f, u)  — Kotlin: Random.nextLong(from, until)
-  nextDouble()           — Kotlin: Random.nextDouble()
-  nextDoubleBetween(f,u) — Kotlin: Random.nextDouble(from, until)
-*/
 @Tls
 object Random {
 
 	private var state: ULong = 0x853c49e6748fea9bUL;
 	private var inc: ULong = 0xda3e39cb94b95bdbUL;
-	/***
+
+    /**
 	Seeded once at program start via srand(time(NULL)).
-	All methods share this global PRNG state.
+	All methods share this thread-local PRNG state.te.
 	*/
 	init {
 		c.ktc_srand(state.ptr(), inc.ptr(), c.time(c.NULL))
