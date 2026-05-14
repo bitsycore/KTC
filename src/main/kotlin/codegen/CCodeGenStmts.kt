@@ -1091,7 +1091,8 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
                 // Safe call: guard the inline block with a null check
                 val recvName = (recvObj as? NameExpr)?.name
                 val recvType = if (recvName != null) lookupVar(recvName) else null
-                val guard = if (recvType != null && recvType.removeSuffix("?").let { isValueNullableType(it) })
+                val recvTypeKtc = if (recvType != null) parseResolvedTypeName(recvType) else null
+                val guard = if (recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc))
                     "$recvExpr.tag == ktc_SOME"
                 else
                     "$recvExpr != NULL"
@@ -1117,8 +1118,9 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
     }
     // Heap/Ptr/Value .set(val) as statement — only when class has no own set() method
     if (e is CallExpr && e.callee is DotExpr && e.callee.name == "set") {
-        val recvType = inferExprType(e.callee.obj)
-        val baseClass = anyIndirectClassName(recvType)
+        val recvTypeKtc = inferExprTypeKtc(e.callee.obj)
+        val recvTypeCoreKtc = (recvTypeKtc as? KtcType.Nullable)?.inner ?: recvTypeKtc
+        val baseClass = (recvTypeCoreKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
         if (baseClass != null && classes[baseClass]?.methods?.any { it.name == "set" } != true) {
             val recv = genExpr(e.callee.obj)
             val argStr = e.args.joinToString(", ") { genExpr(it.expr) }
@@ -1136,16 +1138,17 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
         val safe = e.callee
         val recvName = (safe.obj as? NameExpr)?.name
         val recvType = if (recvName != null) lookupVar(recvName) else null
+        val recvTypeKtc = if (recvType != null) parseResolvedTypeName(recvType) else null
         if (recvType != null) {
             val guard = when {
                 // Pointer-nullable (Heap<T>?, Ptr<T>?, Value<T>?, raw T*?) → NULL check
-                recvType.endsWith("*?") ->
+                recvTypeKtc is KtcType.Nullable && recvTypeKtc.inner is KtcType.Ptr ->
                     "$recvName != NULL"
                 // Value-nullable Optional
-                recvType.endsWith("?") && isValueNullableType(recvType) ->
+                recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc) ->
                     "$recvName.tag == ktc_SOME"
                 // Heap<T?>/Ptr<T?>/Value<T?> or other nullable
-                recvType.endsWith("?") ->
+                recvTypeKtc is KtcType.Nullable ->
                     "${recvName}\$has"
 
                 else -> null

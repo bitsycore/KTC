@@ -210,13 +210,12 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
             impl.appendLine("    ktc_Int h = 0;")
             for ((name, type) in ci.props) {
                 val vKtcHash  = resolveTypeName(type)                                   // KtcType for hash dispatch
-                val vResolved = vKtcHash.toInternalStr                                  // string for hashFieldExpr
                 val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                val hashExpr = if (type.nullable && !vResolved.endsWith("*")) {
+                val hashExpr = if (type.nullable && vKtcHash !is KtcType.Ptr) {
                     val valueExpr = "\$self->$fieldName"
-                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(vResolved, "${valueExpr}.value")} : 0)"
+                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(vKtcHash, "${valueExpr}.value")} : 0)"
                 } else {
-                    hashFieldExpr(vResolved, "\$self->$fieldName")
+                    hashFieldExprKtc(vKtcHash, "\$self->$fieldName")
                 }
                 impl.appendLine("    h = h * 31 + $hashExpr;")
             }
@@ -439,13 +438,12 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
             impl.appendLine("    ktc_Int h = 0;")
             for ((name, type) in ci.props) {
                 val vKtcHash2  = resolveTypeName(type)          // KtcType for hash dispatch
-                val vResolved2 = vKtcHash2.toInternalStr        // string for hashFieldExpr
                 val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
-                val hashExpr = if (type.nullable && !vResolved2.endsWith("*")) {
+                val hashExpr = if (type.nullable && vKtcHash2 !is KtcType.Ptr) {
                     val valueExpr = "\$self->$fieldName"
-                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(vResolved2, "${valueExpr}.value")} : 0)"
+                    "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(vKtcHash2, "${valueExpr}.value")} : 0)"
                 } else {
-                    hashFieldExpr(vResolved2, "\$self->$fieldName")
+                    hashFieldExprKtc(vKtcHash2, "\$self->$fieldName")
                 }
                 impl.appendLine("    h = h * 31 + $hashExpr;")
             }
@@ -1386,28 +1384,32 @@ internal fun CCodeGen.collectAllIfaceProperties(info: IfaceInfo): List<PropDecl>
 internal fun CCodeGen.ifaceDataName(className: String): String = "${typeFlatName(className)}_data"
 
 /** Return the ktc_hash_* expression for a resolved field type and value expression. */
-internal fun CCodeGen.hashFieldExpr(resolvedType: String, valueExpr: String): String = when {
+internal fun CCodeGen.hashFieldExpr(resolvedType: String, valueExpr: String): String = hashFieldExprKtc(parseResolvedTypeName(resolvedType), valueExpr)
+
+/** KtcType-based overload. */
+internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String = when {
     // Nullable value types: hash tag + value (or 0 if null)
-    resolvedType.endsWith("?") && isValueNullableType(resolvedType) -> {
-        val base = resolvedType.removeSuffix("?")
-        "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExpr(base, "${valueExpr}.value")} : 0)"
+    ktc is KtcType.Nullable && isValueNullableKtc(ktc) -> {
+        "(${valueExpr}.tag == ktc_SOME ? ${hashFieldExprKtc(ktc.inner, "${valueExpr}.value")} : 0)"
     }
-    resolvedType == "Byte"    -> "ktc_hash_i8($valueExpr)"
-    resolvedType == "Short"   -> "ktc_hash_i16($valueExpr)"
-    resolvedType == "Int"     -> "ktc_hash_i32($valueExpr)"
-    resolvedType == "Long"    -> "ktc_hash_i64($valueExpr)"
-    resolvedType == "Float"   -> "ktc_hash_f32($valueExpr)"
-    resolvedType == "Double"  -> "ktc_hash_f64($valueExpr)"
-    resolvedType == "Boolean" -> "ktc_hash_bool($valueExpr)"
-    resolvedType == "Char"    -> "ktc_hash_char($valueExpr)"
-    resolvedType == "UByte"   -> "ktc_hash_u8($valueExpr)"
-    resolvedType == "UShort"  -> "ktc_hash_u16($valueExpr)"
-    resolvedType == "UInt"    -> "ktc_hash_u32($valueExpr)"
-    resolvedType == "ULong"   -> "ktc_hash_u64($valueExpr)"
-    resolvedType == "String"  -> "ktc_hash_str($valueExpr)"
-    resolvedType.endsWith("*") -> "((ktc_Int)(uintptr_t)($valueExpr))"
-    classes.containsKey(resolvedType) || interfaces.containsKey(resolvedType) || isArrayType(resolvedType) || resolvedType.endsWith("?") ->
-        "($valueExpr).__type_id"
+    ktc is KtcType.Prim -> when (ktc.kind) {
+        KtcType.PrimKind.Byte -> "ktc_hash_i8($valueExpr)"
+        KtcType.PrimKind.Short -> "ktc_hash_i16($valueExpr)"
+        KtcType.PrimKind.Int -> "ktc_hash_i32($valueExpr)"
+        KtcType.PrimKind.Long -> "ktc_hash_i64($valueExpr)"
+        KtcType.PrimKind.Float -> "ktc_hash_f32($valueExpr)"
+        KtcType.PrimKind.Double -> "ktc_hash_f64($valueExpr)"
+        KtcType.PrimKind.Boolean -> "ktc_hash_bool($valueExpr)"
+        KtcType.PrimKind.Char -> "ktc_hash_char($valueExpr)"
+        KtcType.PrimKind.UByte -> "ktc_hash_u8($valueExpr)"
+        KtcType.PrimKind.UShort -> "ktc_hash_u16($valueExpr)"
+        KtcType.PrimKind.UInt -> "ktc_hash_u32($valueExpr)"
+        KtcType.PrimKind.ULong -> "ktc_hash_u64($valueExpr)"
+        KtcType.PrimKind.Rune -> "ktc_hash_i32($valueExpr)"
+    }
+    ktc is KtcType.Str -> "ktc_hash_str($valueExpr)"
+    ktc is KtcType.Ptr -> "((ktc_Int)(uintptr_t)($valueExpr))"
+    ktc is KtcType.User || ktc is KtcType.Arr || ktc is KtcType.Nullable -> "($valueExpr).__type_id"
     else -> "($valueExpr).__type_id"
 }
 
