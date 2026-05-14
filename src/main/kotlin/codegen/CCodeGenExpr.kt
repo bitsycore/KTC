@@ -2564,16 +2564,18 @@ internal fun CCodeGen.genPrintCall(args: List<Arg>, newline: Boolean): String {
     }
 
     val t = inferExprType(arg) ?: "Int"
+    val tKtc = inferExprTypeKtc(arg)
     val expr = genExpr(arg)
 
     // Nullable → ternary: $has ? printf(value) : printf("null")
-    if (t.endsWith("?")) {
+    if (tKtc is KtcType.Nullable) {
         val baseT = t.removeSuffix("?")
         // Materialize only when complex to avoid repeated evaluation
         val safeExpr = if (!isSimpleCExpr(expr)) {
             val vTmp = tmp(); preStmts += "${cTypeStr(t)} $vTmp = ($expr);"; vTmp
         } else expr
-        val hasExpr = "${safeExpr}\$has"
+        val isPtrNull = tKtc.inner is KtcType.Ptr && !isValueNullableKtc(tKtc)
+        val hasExpr = if (isPtrNull) "$safeExpr != NULL" else if (isValueNullableKtc(tKtc)) "$safeExpr.tag == ktc_SOME" else "${safeExpr}\$has"
         val fmt = printfFmt(baseT) + nl
         val a = printfArg(safeExpr, baseT)
         return "($hasExpr ? printf(\"$fmt\", $a) : printf(\"null$nl\"))"
@@ -3024,6 +3026,9 @@ internal fun CCodeGen.genSbAppendKtc(sbRef: String, expr: String, type: KtcType)
         if (isValueNullableKtc(type)) {
             val inner = genSbAppendKtc(sbRef, "($expr).value", base).removeSuffix(";")
             return "if (($expr).tag == ktc_SOME) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
+        } else if (base is KtcType.Ptr) {
+            val inner = genSbAppendKtc(sbRef, expr, base).removeSuffix(";")
+            return "if ($expr != NULL) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
         } else {
             val inner = genSbAppendKtc(sbRef, expr, base).removeSuffix(";")
             return "if (${expr}\$has) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
@@ -3077,7 +3082,11 @@ internal fun CCodeGen.genSbAppendKtc(sbRef: String, expr: String, type: KtcType)
         is KtcType.Ptr -> {
             val base = type.inner
             val baseStr = base.toInternalStr
-            if (classes.containsKey(baseStr) || objects.containsKey(baseStr)) {
+            // Data class pointer → use proper toString
+            if (base is KtcType.User && base.kind == KtcType.UserKind.DataClass && classes.containsKey(baseStr)) {
+                val vTmp = tmp()
+                "{ ${base.toCType()} $vTmp = (*$expr); ${typeFlatName(baseStr)}_toString(&$vTmp, $sbRef); }"
+            } else if (classes.containsKey(baseStr) || objects.containsKey(baseStr)) {
                 val buf = tmp()
                 val cName = typeFlatName(baseStr)
                 preStmts += "ktc_Char ${buf}[64];"

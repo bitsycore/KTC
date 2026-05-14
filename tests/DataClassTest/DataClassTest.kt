@@ -63,10 +63,24 @@ fun passMutablePointPtr(p: @Ptr MutablePoint) {
     println("passMutablePointPtr after set: $p")
 }
 
+fun passMutablePointPtrNullable(p: @Ptr MutablePoint?) {
+    println("passMutablePointPtrNullable before set: $p")
+    p?.set(MutablePoint(99, 100))
+    println("passMutablePointPtrNullable after set: $p")
+}
+
 fun passMutablePoint(p: MutablePoint) {
     println("passMutablePoint before set: $p")
     p.x = p.x + 99
     println("passMutablePoint after set: $p")
+}
+
+fun passMutablePointNullable(p: MutablePoint?) {
+    println("passMutablePointNullable before set: $p")
+    if (p != null) {
+        p.x = p.x + 99
+    }
+    println("passMutablePointNullable after set: $p")
 }
 
 fun main() {
@@ -335,6 +349,11 @@ fun main() {
     passMutablePoint(pointShouldNotMutate)
     if (pointShouldNotMutate.x != 10 || pointShouldNotMutate.y != 20) error("FAIL passMutablePoint should not mutate original")
 
+    val pointShouldNotMutate2 = MutablePoint(10, 20)
+    passMutablePointNullable(pointShouldNotMutate2)
+    passMutablePointNullable(null)
+    if (pointShouldNotMutate2.x != 10 || pointShouldNotMutate2.y != 20) error("FAIL passMutablePoint should not mutate original")
+
     // =================================
     // 9. WithDefaults - default values
     // =================================
@@ -393,6 +412,16 @@ fun main() {
     val mutatedMp = mpPtr.value()
     if (mutatedMp.x != 99 || mutatedMp.y != 100) error("FAIL @Ptr set() mutation")
     println("@Ptr set() mutation verified: ok")
+
+    // @Ptr Nullable with var data class
+    val mpForPtrNullable = MutablePoint(50, 60)
+    val mpPtrNullable = mpForPtrNullable.ptr()
+    passMutablePointPtrNullable(mpPtrNullable)
+    passMutablePointPtrNullable(null)
+    // verify mutation through set()
+    val mutatedMpNullable = mpPtrNullable.value()
+    if (mutatedMpNullable.x != 99 || mutatedMpNullable.y != 100) error("FAIL @Ptr Nullable set() mutation")
+    println("@Ptr Nullable set() mutation verified: ok")
 
     // @Ptr .value() dereference
     val directVec = Vec2(300.0f, 400.0f)
