@@ -6,7 +6,7 @@ The KtcType hierarchy (`src/main/kotlin/types/CoreTypes.kt`) is well-designed bu
 used as a thin bridge layer.  The core codegen still operates mostly on raw strings.
 This file tracks remaining work to complete the migration.
 
-Currently: **~25% migrated**.  ~50 string checks eliminated so far.
+Currently: **~30% migrated**.  ~60 string checks eliminated so far.
 
 ## Completed (this session)
 
@@ -14,7 +14,11 @@ Currently: **~25% migrated**.  ~50 string checks eliminated so far.
 - Added `isValueNullableKtc(KtcType)` in `CCodeGen.kt`
 - `genBin` comparison/equality path: `endsWith("?")`, `endsWith("*")`, `isValueNullableType`, `pointerClassName`, `== "String"` → KtcType pattern matching
 - `genMethodCall`: `recvType == "String"` (~20 sites), `isArrayType`, hashCode `when(rt)` → KtcType
-- `genDot` + `genSafeDot`: `endsWith("?")`, `endsWith("*")`, `isArrayType`, `pointerClassName`, `anyIndirectClassName`, `== "String"` → KtcType (~15 sites)
+- `genSbAppend` → `genSbAppendKtc(KtcType)`: fully rewritten with KtcType dispatch.
+  String version now delegates via `parseResolvedTypeName`. All 3 external
+  callers migrated to `genSbAppendKtc`. (~15 string checks eliminated: endsWith("?"),
+  isValueNullableType, when(type) on String, endsWith("*"))
+- `emitDataClassToString` → uses `genSbAppendKtc` with native KtcType (no string roundtrip)
 
 ## Patterns to eliminate (string → KtcType)
 

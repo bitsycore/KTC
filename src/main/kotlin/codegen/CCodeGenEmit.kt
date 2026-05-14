@@ -507,11 +507,10 @@ internal fun CCodeGen.emitDataClassToString(ktName: String, cName: String, ci: C
         val (name, type) = prop
         val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
         val vKtcTs = resolveTypeName(type)                            // KtcType for toString dispatch
-        val tBase  = vKtcTs.toInternalStr                             // string for genSbAppend
-        val tFull  = if (type.nullable) "${tBase}?" else tBase
+        val tFull  = if (type.nullable) vKtcTs.nullable else vKtcTs   // KtcType, wrap nullable if needed
         val prefix = if (i == 0) "$ktName($name=" else ", $name="
         impl.appendLine("    ktc_sb_append_str(sb, ktc_str(\"$prefix\"));")
-        impl.appendLine("    ${genSbAppend("sb", "\$self->$fieldName", tFull)}")
+        impl.appendLine("    ${genSbAppendKtc("sb", "\$self->$fieldName", tFull)}")
     }
     impl.appendLine("    ktc_sb_append_char(sb, ')');")
     impl.appendLine("}")

@@ -2680,9 +2680,9 @@ internal fun CCodeGen.genStrTemplate(e: StrTemplateExpr): String {
             }
 
             is ExprPart -> {
-                val t = inferExprType(part.expr) ?: "Int"
+                val tKtc = inferExprTypeKtc(part.expr) ?: KtcType.Prim(KtcType.PrimKind.Int)
                 val expr = genExpr(part.expr)
-                parts += PartData(sbAppend = genSbAppend("&${buf}_sb", expr, t))
+                parts += PartData(sbAppend = genSbAppendKtc("&${buf}_sb", expr, tKtc))
             }
         }
     }
@@ -2999,57 +2999,80 @@ internal fun CCodeGen.genToStringInto(recv: String, type: String, sb: String): S
 
 // ── StrBuf append helper ─────────────────────────────────────────
 
-internal fun CCodeGen.genSbAppend(sbRef: String, expr: String, type: String): String {
+internal fun CCodeGen.genSbAppend(sbRef: String, expr: String, type: String): String = genSbAppendKtc(sbRef, expr, parseResolvedTypeName(type))
+
+/** KtcType-based overload — delegates to the same logic with pattern matching on KtcType. */
+internal fun CCodeGen.genSbAppendKtc(sbRef: String, expr: String, type: KtcType): String {
     // Nullable → conditionally append "null" or the value
-    if (type.endsWith("?")) {
-        val baseT = type.removeSuffix("?")
-        if (isValueNullableType(type)) {
-            val inner = genSbAppend(sbRef, "($expr).value", baseT).removeSuffix(";")
+    if (type is KtcType.Nullable) {
+        val base = type.inner
+        if (isValueNullableKtc(type)) {
+            val inner = genSbAppendKtc(sbRef, "($expr).value", base).removeSuffix(";")
             return "if (($expr).tag == ktc_SOME) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
         } else {
-            val inner = genSbAppend(sbRef, expr, baseT).removeSuffix(";")
+            val inner = genSbAppendKtc(sbRef, expr, base).removeSuffix(";")
             return "if (${expr}\$has) { $inner; } else { ktc_sb_append_str($sbRef, ktc_str(\"null\")); }"
         }
     }
     return when (type) {
-        "Byte" -> "ktc_sb_append_byte($sbRef, $expr);"
-        "Short" -> "ktc_sb_append_short($sbRef, $expr);"
-        "Int" -> "ktc_sb_append_int($sbRef, $expr);"
-        "Long" -> "ktc_sb_append_long($sbRef, $expr);"
-        "Float" -> "ktc_sb_append_double($sbRef, (ktc_Double)$expr);"
-        "Double" -> "ktc_sb_append_double($sbRef, $expr);"
-        "Boolean" -> "ktc_sb_append_bool($sbRef, $expr);"
-        "Char" -> "ktc_sb_append_char($sbRef, $expr);"
-        "UByte" -> "ktc_sb_append_ubyte($sbRef, $expr);"
-        "UShort" -> "ktc_sb_append_ushort($sbRef, $expr);"
-        "UInt" -> "ktc_sb_append_uint($sbRef, $expr);"
-        "ULong" -> "ktc_sb_append_ulong($sbRef, $expr);"
-        "String" -> "ktc_sb_append_str($sbRef, $expr);"
-        else -> {
-            if (classes.containsKey(type) && classes[type]!!.isData) {
-                // Copy to a named temp so we can legally take its address
-                // (expr may be an rvalue, e.g. a function call return value)
-                val vTmp = tmp()
-                "{ ${cTypeStr(type)} $vTmp = ($expr); ${typeFlatName(type)}_toString(&$vTmp, $sbRef); }"
+        is KtcType.Prim -> when (type.kind) {
+            KtcType.PrimKind.Byte -> "ktc_sb_append_byte($sbRef, $expr);"
+            KtcType.PrimKind.Short -> "ktc_sb_append_short($sbRef, $expr);"
+            KtcType.PrimKind.Int -> "ktc_sb_append_int($sbRef, $expr);"
+            KtcType.PrimKind.Long -> "ktc_sb_append_long($sbRef, $expr);"
+            KtcType.PrimKind.Float -> "ktc_sb_append_double($sbRef, (ktc_Double)$expr);"
+            KtcType.PrimKind.Double -> "ktc_sb_append_double($sbRef, $expr);"
+            KtcType.PrimKind.Boolean -> "ktc_sb_append_bool($sbRef, $expr);"
+            KtcType.PrimKind.Char -> "ktc_sb_append_char($sbRef, $expr);"
+            KtcType.PrimKind.UByte -> "ktc_sb_append_ubyte($sbRef, $expr);"
+            KtcType.PrimKind.UShort -> "ktc_sb_append_ushort($sbRef, $expr);"
+            KtcType.PrimKind.UInt -> "ktc_sb_append_uint($sbRef, $expr);"
+            KtcType.PrimKind.ULong -> "ktc_sb_append_ulong($sbRef, $expr);"
+            KtcType.PrimKind.Rune -> "ktc_sb_append_int($sbRef, $expr);"
+        }
+        is KtcType.Str -> "ktc_sb_append_str($sbRef, $expr);"
+        is KtcType.User -> {
+            if (type.kind == KtcType.UserKind.DataClass) {
+                val baseName = type.baseName
+                if (classes.containsKey(baseName)) {
+                    val vTmp = tmp()
+                    "{ ${type.toCType()} $vTmp = ($expr); ${typeFlatName(baseName)}_toString(&$vTmp, $sbRef); }"
+                } else {
+                    "ktc_sb_append_str($sbRef, ktc_str(\"<${type.toCType()}>\"));"
+                }
             } else {
-                val base = type.removeSuffix("*").removeSuffix("?")
-                if (classes.containsKey(base) || objects.containsKey(base)) {
+                val baseName = type.baseName
+                val typeStr = type.toCType()
+                if (classes.containsKey(baseName) || objects.containsKey(baseName)) {
                     val buf = tmp()
-                    val cName = typeFlatName(base)
-                    val selfExpr = if (type.endsWith("*") || type.endsWith("*?")) expr else "&$expr"
+                    val cName = typeFlatName(baseName)
                     preStmts += "ktc_Char ${buf}[64];"
-                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", ${cName}_hashCode($selfExpr));"
+                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(baseName)}\", ${cName}_hashCode(&$expr));"
                     "ktc_sb_append_cstr($sbRef, $buf);"
-                } else if (interfaces.containsKey(base)) {
+                } else if (interfaces.containsKey(baseName)) {
                     val buf = tmp()
                     preStmts += "ktc_Char ${buf}[64];"
-                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(base)}\", $expr.vt->hashCode(${ifaceVtableSelf(base, expr)}));"
+                    preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(baseName)}\", $expr.vt->hashCode(${ifaceVtableSelf(baseName, expr)}));"
                     "ktc_sb_append_cstr($sbRef, $buf);"
                 } else {
-                    "ktc_sb_append_str($sbRef, ktc_str(\"<$type>\"));"
+                    "ktc_sb_append_str($sbRef, ktc_str(\"<$typeStr>\"));"
                 }
             }
         }
+        is KtcType.Ptr -> {
+            val base = type.inner
+            val baseStr = base.toInternalStr
+            if (classes.containsKey(baseStr) || objects.containsKey(baseStr)) {
+                val buf = tmp()
+                val cName = typeFlatName(baseStr)
+                preStmts += "ktc_Char ${buf}[64];"
+                preStmts += "snprintf($buf, 64, \"%s@%x\", \"${ktDisplayName(baseStr)}\", ${cName}_hashCode($expr));"
+                "ktc_sb_append_cstr($sbRef, $buf);"
+            } else {
+                "ktc_sb_append_str($sbRef, ktc_str(\"<${baseStr}>\"));"
+            }
+        }
+        else -> "ktc_sb_append_str($sbRef, ktc_str(\"<${type.toCType()}>\"));"
     }
 }
 

@@ -1454,9 +1454,9 @@ internal fun CCodeGen.emitPrintTemplateViaStrBuf(tmpl: StrTemplateExpr, ind: Str
             }
 
             is ExprPart -> {
-                val t = inferExprType(part.expr) ?: "Int"
+                val tKtc = inferExprTypeKtc(part.expr) ?: KtcType.Prim(KtcType.PrimKind.Int)
                 val expr = genExpr(part.expr)
-                parts += PartData(sbAppend = genSbAppend("&${buf}_sb", expr, t))
+                parts += PartData(sbAppend = genSbAppendKtc("&${buf}_sb", expr, tKtc))
             }
         }
     }
