@@ -1212,6 +1212,7 @@ internal fun CCodeGen.emitInlineCall(
         } else {
             val cTypeName = cType(param.type)
             val cVal = genExpr(expr)
+            flushPreStmts(ind)
             impl.appendLine("$ind    $cTypeName ${param.name} = $cVal;")
             defineVarKtc(param.name, resolveTypeName(param.type))
         }
