@@ -566,6 +566,7 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     val prevSizedArraySize = currentFnSizedArraySize
     val prevSizedArrayElemType = currentFnSizedArrayElemType
     val prevReturnType = currentFnReturnType
+    val prevReturnKtc = currentFnReturnKtcType
     val prevOptRetCTypeName = currentFnOptReturnCTypeName
     currentFnReturnsNullable = returnsNullable
     currentFnReturnsArray = false
@@ -585,7 +586,7 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
             p.type.nullable -> "${vPStr}?"
             else -> vPStr
         })
-        if (p.type.nullable && isValueNullableType("${vPStr}?")) markOptional(p.name)
+        if (p.type.nullable && isValueNullableKtc(KtcType.Nullable(vKtcParam))) markOptional(p.name)
     }
     // class props accessible via self->
     val ci = classes[className]
@@ -612,6 +613,7 @@ internal fun CCodeGen.emitMethod(className: String, f: FunDecl, suppressHdr: Boo
     currentFnSizedArraySize = prevSizedArraySize
     currentFnSizedArrayElemType = prevSizedArrayElemType
     currentFnReturnType = prevReturnType
+    currentFnReturnKtcType = prevReturnKtc
     currentFnOptReturnCTypeName = prevOptRetCTypeName
 
     impl.appendLine("}")
@@ -697,7 +699,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
             p.type.nullable -> "${vExtPStr}?"
             else -> vExtPStr
         })
-        if (p.type.nullable && isValueNullableType("${vExtPStr}?")) markOptional(p.name)
+        if (p.type.nullable && isValueNullableKtc(KtcType.Nullable(vKtcExtParam))) markOptional(p.name)
     }
     if (isClassType) {
         val ci = classes[recvTypeName]!!
@@ -806,6 +808,7 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         currentFnReturnType = concreteRet
             ?: if (f.returnType != null) {
                 val vKtc = vRetKtcGen!!
+                currentFnReturnKtcType = if (f.returnType.nullable) KtcType.Nullable(vKtc) else vKtc
                 if (f.returnType.nullable) KtcType.Nullable(vKtc).toInternalStr else vKtc.toInternalStr
             } else ""
 
@@ -1214,7 +1217,8 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         val prevReturnType = currentFnReturnType
         currentFnReturnsArray = returnsArray
         currentFnReturnsSizedArray = returnsSizedArray
-        currentFnReturnType = retResolved
+    currentFnReturnType = retResolved
+    currentFnReturnKtcType = vRetKtcM
         if (returnsSizedArray) {
             currentFnSizedArraySize = getSizeAnnotation(m.returnType)!!
             currentFnSizedArrayElemType = cTypeStr(vRetKtcM!!.asArr!!.elem)
@@ -1666,6 +1670,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     val prevSizedArraySize = currentFnSizedArraySize
     val prevSizedArrayElemType = currentFnSizedArrayElemType
     val prevReturnType = currentFnReturnType
+    val prevReturnKtc = currentFnReturnKtcType
     val prevOptRetCTypeName = currentFnOptReturnCTypeName
     val prevIsMain = currentFnIsMain
     currentFnReturnsNullable = returnsNullable
@@ -1677,6 +1682,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
         currentFnSizedArrayElemType = cTypeStr(vRetKtcFun!!.asArr!!.elem)
     }
     currentFnReturnType = retResolved
+    currentFnReturnKtcType = vRetKtcFun
     currentFnIsMain = isMain
 
     pushScope()
@@ -1701,7 +1707,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
                 p.type.nullable -> "${vFunPStr}?"
                 else -> vFunPStr
             })
-            if (p.type.nullable && isValueNullableType("${vFunPStr}?")) markOptional(p.name)
+            if (p.type.nullable && isValueNullableKtc(KtcType.Nullable(vKtcFunParam))) markOptional(p.name)
         }
     }
     val savedTrampolined7 = trampolinedParams.toHashSet(); trampolinedParams.clear()
@@ -1738,6 +1744,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
     currentFnSizedArraySize = prevSizedArraySize
     currentFnSizedArrayElemType = prevSizedArrayElemType
     currentFnReturnType = prevReturnType
+    currentFnReturnKtcType = prevReturnKtc
     currentFnOptReturnCTypeName = prevOptRetCTypeName
     currentFnIsMain = prevIsMain
     impl.appendLine("}")

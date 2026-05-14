@@ -935,7 +935,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
     }
     if (currentFnReturnsNullable) {
         // Any? nullable return: uses ktc_Any with data==NULL for null (not Optional)
-        if (currentFnReturnBaseType() == "Any") {
+        if ((currentFnReturnKtcType as? KtcType.Nullable)?.inner is KtcType.Any || currentFnReturnKtcType is KtcType.Any) {
             if (s.value == null || s.value is NullLit) {
                 emitDeferredBlocks(ind)
                 impl.appendLine("${ind}return (ktc_Any){0};")
@@ -1032,7 +1032,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                     impl.appendLine("${ind}return $t;")
                 } else {
                     // Auto-wrap Any return → ktc_Any trampoline
-                    if (currentFnReturnType == "Any") {
+                    if (currentFnReturnKtcType is KtcType.Any) {
                         val srcTy = inferExprType(s.value)?.removeSuffix("?") ?: "Int"
                         val typeId = getTypeId(srcTy)
                         val ct = cTypeStr(srcTy)

@@ -358,6 +358,8 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
         return null
     }
     val recvType = inferExprType(dot.obj) ?: return null
+    val recvKtcPtr = inferExprTypeKtc(dot.obj)
+    val recvKtcCorePtr = (recvKtcPtr as? KtcType.Nullable)?.inner ?: recvKtcPtr
     val method = dot.name
     if (method == "toString") return "String"
     if (method == "trimIndent") return "String"
@@ -411,7 +413,7 @@ internal fun CCodeGen.inferMethodReturnType(dot: DotExpr, args: List<Arg>): Stri
         }
     }
     // @Ptr/@Heap/@Value pointer methods (type return inference)
-    val pointerBase = pointerClassName(recvType)
+    val pointerBase = (recvKtcCorePtr as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (pointerBase != null) {
         val classMethod = classes[pointerBase]?.methods?.find { it.name == method }
         if (classMethod != null) {

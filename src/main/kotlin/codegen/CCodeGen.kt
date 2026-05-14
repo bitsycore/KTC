@@ -457,6 +457,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal var currentFnSizedArraySize = 0
     internal var currentFnSizedArrayElemType = ""
     internal var currentFnReturnType: String = ""
+    internal var currentFnReturnKtcType: KtcType? = null  // KtcType counterpart for pattern matching
     internal var currentFnOptReturnCTypeName: String = ""  // Optional C type for nullable returns
     internal var currentFnIsMain = false
     internal fun currentFnReturnBaseType(): String = currentFnReturnType.removeSuffix("?")

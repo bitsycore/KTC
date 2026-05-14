@@ -544,8 +544,10 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
                 return if (negated) "!$call" else call
             }
         }
-        if (rt != null && anyIndirectClassName(rt)?.let { classes.containsKey(it) } == true) {
-            val baseClass = anyIndirectClassName(rt)!!
+        if (rtKtc is KtcType.Ptr || (rtKtc is KtcType.Nullable && rtKtc.inner is KtcType.Ptr)) {
+            val ptrKtc = (rtKtc as? KtcType.Nullable)?.inner ?: rtKtc
+            val baseName = (ptrKtc as KtcType.Ptr).inner
+            val baseClass = (baseName as? KtcType.User)?.baseName ?: baseName.toInternalStr
             val containsMethod = classes[baseClass]?.methods?.find { (it.name == "contains" || it.name == "containsKey") && it.isOperator }
             if (containsMethod != null) {
                 val recv = genExpr(e.right)
@@ -1639,7 +1641,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                     ktc is KtcType.Str -> "ktc_hash_str($recv)"
                     else -> {
                         // @Ptr class pointer → call ClassName_hashCode(pointer)
-                        val pointerBase = pointerClassName(recvType)
+                        val pointerBase = (recvTypeKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
                         if (pointerBase != null) {
                             "${typeFlatName(pointerBase)}_hashCode($recv)"
                         } else {
@@ -1687,7 +1689,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
 
     // @Ptr/@Heap/@Value-annotated class pointer methods
-    val pointerBase = pointerClassName(recvType)
+    val pointerBase = (recvTypeKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
     if (pointerBase != null) {
         // If class defines the method, delegate to it
         val classHasMethod = classes[pointerBase]?.methods?.any { it.name == method } == true
@@ -1916,13 +1918,13 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         // Implicit dispose — always emitted as no-op
         if (method == "dispose" && (classes.containsKey(recvType) || enums.containsKey(recvType) || objects.containsKey(recvType))) {
             val selfExpr = if (recvTypeKtc is KtcType.Ptr) recv else "&$recv"
-            val base = anyIndirectClassName(recvType) ?: recvType
+            val base = (recvTypeKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName ?: recvType
             return "${typeFlatName(base)}_dispose($selfExpr)"
         }
         // Per-class star-projection extension (e.g. fun Map<K,V>.tryDispose())
         if (classes.containsKey(recvType) && starExtFunDecls.any { it.name == method }) {
             val selfExpr = if (recvTypeKtc is KtcType.Ptr) recv else "&$recv"
-            val base = anyIndirectClassName(recvType) ?: recvType
+            val base = (recvTypeKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName ?: recvType
             val allArgs = if (argStr.isEmpty()) selfExpr else "$selfExpr, $argStr"
             return "${typeFlatName(base)}_$method($allArgs)"
         }
