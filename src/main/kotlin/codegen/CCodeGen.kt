@@ -1266,6 +1266,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     // Register as method on the class for inference
                     classes[recvName]?.methods?.add(d)
                     funSigs["${recvName}.${d.name}"] = FunSig(d.params, effectiveReturnType)
+                    // Non-generic infix extension → register for binary-op inline dispatch
+                    if (d.isInfix) inlineExtFunDecls[d.name] = d
                 } else {
                     funSigs[d.name] = FunSig(d.params, effectiveReturnType)
                     if (d.isInline) inlineFunDecls[d.name] = d

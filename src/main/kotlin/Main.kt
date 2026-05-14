@@ -67,11 +67,14 @@ fun main(args: Array<String>) {
     data class ParsedSource(val file: File, val ast: KtFile, val sourceLines: List<String>)
     val parsedFiles = mutableListOf<ParsedSource>()
 
-    // Load stdlib .kt files from resources (package ktc, auto-imported)
-    // Auto-discover all .kt files in /stdlib/ — no index.txt needed
+    // Collect raw sources first for infix prescan, then parse
+    data class RawSource(val vFile: File, val vName: String, val vSource: String, val vIsStdlib: Boolean) // file + text + origin flag
+    val vRawSources = mutableListOf<RawSource>() // all sources before parsing
+
+    // Collect stdlib .kt files from resources
     val stdlibDir = aClass.getResource("/stdlib") ?: aClass.getResource("/stdlib/")
     if (stdlibDir != null) {
-        val stdlibFiles = when (stdlibDir.protocol) {
+        val stdlibFiles = when (stdlibDir.protocol) { // discover stdlib file names
             "jar" -> {
                 val connection = stdlibDir.openConnection()
                 val jarFile = (connection as java.net.JarURLConnection).jarFile
@@ -90,38 +93,34 @@ fun main(args: Array<String>) {
         }
         for (name in stdlibFiles.sorted()) {
             val res = aClass.getResourceAsStream("/stdlib/$name")
-            if (res != null) {
-                val source = res.bufferedReader().readText()
-                try {
-                    val tokens = Lexer(source).tokenize()
-                    val ast = Parser(tokens).parseFile().copy(sourceFile = name)
-                    // Use a virtual File for the ParsedSource
-                    parsedFiles += ParsedSource(File("stdlib/$name"), ast, source.lines())
-                } catch (e: Exception) {
-                    System.err.println("Stdlib error in $name: ${e.message}")
-                    exitProcess(1)
-                }
-            }
+            if (res != null) vRawSources += RawSource(File("stdlib/$name"), name, res.bufferedReader().readText(), true)
         }
     }
 
+    // Collect user sources
     for (inputFile in inputFiles) {
-        val source = inputFile.readText()
-        val tokens: List<Token>
+        vRawSources += RawSource(inputFile, inputFile.name, inputFile.readText(), false)
+    }
+
+    // Pre-scan all sources for infix function names (must happen before any parsing)
+    val vInfixNameRx = Regex("""\binfix\s+fun\b[^(.]+\.(\w+)\s*\(""") // matches: infix fun <T> Recv.name(
+    for (vRaw in vRawSources) {
+        vInfixNameRx.findAll(vRaw.vSource).forEach { vMatch ->
+            Parser.INFIX_IDS.add(vMatch.groupValues[1]) // register as infix operator name
+        }
+    }
+
+    // Parse all collected sources
+    for (vRaw in vRawSources) {
         try {
-            tokens = Lexer(source).tokenize()
+            val vTokens = Lexer(vRaw.vSource).tokenize() // lex
+            val vAst = Parser(vTokens).parseFile().copy(sourceFile = vRaw.vName) // parse
+            parsedFiles += ParsedSource(vRaw.vFile, vAst, vRaw.vSource.lines())
         } catch (e: Exception) {
-            System.err.println("Lexer error in ${inputFile.name}: ${e.message}")
+            val vPrefix = if (vRaw.vIsStdlib) "Stdlib error" else "Error" // error origin label
+            System.err.println("$vPrefix in ${vRaw.vName}: ${e.message}")
             exitProcess(1)
         }
-        val ast: KtFile
-        try {
-            ast = Parser(tokens).parseFile().copy(sourceFile = inputFile.name)
-        } catch (e: Exception) {
-            System.err.println("Parser error in ${inputFile.name}: ${e.message}")
-            exitProcess(1)
-        }
-        parsedFiles += ParsedSource(inputFile, ast, source.lines())
     }
 
     // ── Dump AST if --ast flag is set ─────────────────────────────────

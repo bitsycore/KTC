@@ -996,6 +996,12 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
             val recvObj = if (isSafe) (e.callee as SafeDotExpr).obj else (e.callee as DotExpr).obj
             val recvExpr = genExpr(recvObj)
             val recvKtType = inferExprType(recvObj)?.removeSuffix("?")
+            // Set up typeSubst for generic inline extension functions
+            val vSavedSubst = typeSubst
+            if (inlineExt.typeParams.isNotEmpty()) {
+                val vArgTypes = (e as CallExpr).args.map { inferExprType(it.expr) } // concrete arg types
+                typeSubst = inferInlineFunSubst(inlineExt, recvKtType, vArgTypes)
+            }
             if (isSafe) {
                 // Safe call: guard the inline block with a null check
                 val recvName = (recvObj as? NameExpr)?.name
@@ -1010,6 +1016,7 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
             } else {
                 emitInlineCall(inlineExt, e.args, ind, method, receiverExpr = recvExpr, receiverType = recvKtType)
             }
+            typeSubst = vSavedSubst
             return
         }
     }
@@ -1079,6 +1086,9 @@ jumps to the end without exiting the enclosing C function. */
 internal fun CCodeGen.emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: String, method: Boolean, receiverExpr: String? = null, receiverType: String? = null, resultVar: String? = null) {
     val body = decl.body ?: return
     val labelName = "\$end_ir_${inlineCounter++}"
+    // Build comment with template types (clear typeSubst so type params appear unsubstituted)
+    val vSavedSubstForComment = typeSubst
+    typeSubst = emptyMap()
     val sig = buildString {
         if (receiverExpr != null) append("$receiverExpr.")
         append(decl.name)
@@ -1105,6 +1115,7 @@ internal fun CCodeGen.emitInlineCall(decl: FunDecl, callArgs: List<Arg>, ind: St
         append(")")
         decl.returnType?.let { append(": ${resolveTypeName(it).toInternalStr}") }
     }
+    typeSubst = vSavedSubstForComment
     impl.appendLine("$ind/* inline $sig */")
     impl.appendLine("$ind{")
     pushScope()

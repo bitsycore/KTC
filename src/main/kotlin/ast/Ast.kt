@@ -35,7 +35,8 @@ data class FunDecl(
     val isOperator: Boolean = false,
     val isPrivate: Boolean = false,
     val isInline: Boolean = false,
-    val isOverride: Boolean = false
+    val isOverride: Boolean = false,
+    val isInfix: Boolean = false
 ) : Decl()
 
 data class ClassDecl(

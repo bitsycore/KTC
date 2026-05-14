@@ -23,7 +23,7 @@ data class StdPair<A, B>(
  *
  * This can be useful for creating [Map] literals with less noise, for example:
  */
-//infix fun <A, B> A.to(that: B): Pair<A, B> = Pair(this, that)
+infix fun <A, B> A.toStd(that: B): StdPair<A, B> = StdPair(this, that)
 
 /**
  * Converts this pair into a list.

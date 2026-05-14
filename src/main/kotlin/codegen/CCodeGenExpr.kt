@@ -319,8 +319,8 @@ internal fun CCodeGen.genName(e: NameExpr): String {
 
 internal fun CCodeGen.genBin(e: BinExpr): String {
     val lt = inferExprType(e.left)
-    // `to` infix → Pair compound literal
-    if (e.op == "to") {
+    // `to` infix → Pair; use intrinsic path unless stdlib Pair is active
+    if (e.op == "to" && !(genericClassDecls.containsKey("Pair") && inlineExtFunDecls.containsKey("to"))) {
         val aType = inferExprType(e.left) ?: "Int"
         val bType = inferExprType(e.right) ?: "Int"
         pairTypes.add(Pair(aType, bType))
@@ -328,6 +328,32 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         ensurePairType(aType, bType)
         val pairCType = "ktc_Pair_${aType}_${bType}"
         return "($pairCType){${genExpr(e.left)}, ${genExpr(e.right)}}"
+    }
+    // User-defined infix inline extension function dispatch
+    val vInfixDecl = inlineExtFunDecls[e.op]
+    if (vInfixDecl != null) {
+        val vRecvType = inferExprType(e.left) // receiver type string
+        val vArgType = inferExprType(e.right) // single argument type string
+        val vSavedSubst = typeSubst // save outer typeSubst
+        if (vInfixDecl.typeParams.isNotEmpty()) {
+            typeSubst = inferInlineFunSubst(vInfixDecl, vRecvType, listOf(vArgType))
+        }
+        val vRetType = vInfixDecl.returnType // declared return TypeRef
+        if (vRetType != null) {
+            val vResultName = "\$ir${inlineCounter++}" // temp var for inline result
+            impl.appendLine("$currentInd${cType(vRetType)} $vResultName;")
+            val vRecvExpr = genExpr(e.left) // C expression for receiver
+            emitInlineCall(vInfixDecl, listOf(Arg(expr = e.right)), currentInd, false,
+                receiverExpr = vRecvExpr, receiverType = vRecvType?.removeSuffix("?"), resultVar = vResultName)
+            typeSubst = vSavedSubst
+            return vResultName
+        } else {
+            val vRecvExpr = genExpr(e.left)
+            emitInlineCall(vInfixDecl, listOf(Arg(expr = e.right)), currentInd, false,
+                receiverExpr = vRecvExpr, receiverType = vRecvType?.removeSuffix("?"))
+            typeSubst = vSavedSubst
+            return ""
+        }
     }
     // null comparison
     if ((e.op == "==" || e.op == "!=") && (e.left is NullLit || e.right is NullLit)) {
@@ -453,6 +479,31 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     return "(${genExpr(e.left)} ${e.op} ${genExpr(e.right)})"
 }
 
+/*
+Infers a typeSubst map for a generic inline extension function from the receiver
+and argument types at a call site. Handles only direct type-parameter references:
+when the receiver type IS a type param (e.g. receiver = "A") or when a param type
+IS a type param (e.g. param type = "B"). Nested generics require Phase-1 scanner work.
+*/
+internal fun CCodeGen.inferInlineFunSubst(
+    inDecl: FunDecl,
+    inReceiverType: String?,
+    inArgTypes: List<String?>
+): Map<String, String> {
+    val vSubst = mutableMapOf<String, String>() // type-param name → concrete type
+    val vTypeParams = inDecl.typeParams.toSet() // set of type-param names for O(1) lookup
+    if (inReceiverType != null && inDecl.receiver != null) {
+        val vRecvParamName = inDecl.receiver.name // type param name used as receiver (e.g. "A")
+        if (vRecvParamName in vTypeParams) vSubst[vRecvParamName] = inReceiverType.removeSuffix("?")
+    }
+    inDecl.params.forEachIndexed { vIdx, vParam ->
+        val vArgType = inArgTypes.getOrNull(vIdx)?.removeSuffix("?") ?: return@forEachIndexed
+        val vParamTypeName = vParam.type.name // type param name used as param type (e.g. "B")
+        if (vParamTypeName in vTypeParams) vSubst[vParamTypeName] = vArgType
+    }
+    return vSubst
+}
+
 internal fun CCodeGen.genStringConcat(e: BinExpr): String {
     val buf = tmp()
     preStmts += "char ${buf}[512];"
@@ -470,13 +521,21 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val recvExpr = genExpr(e.callee.obj)
             val recvKtType = inferExprType(e.callee.obj)?.removeSuffix("?")
             val retType = inlineExt.returnType
+            // Set up typeSubst for generic inline extension functions so return-type resolution works
+            val vSavedSubst = typeSubst
+            if (inlineExt.typeParams.isNotEmpty()) {
+                val vArgTypes = e.args.map { inferExprType(it.expr) } // concrete arg types at call site
+                typeSubst = inferInlineFunSubst(inlineExt, recvKtType, vArgTypes)
+            }
             if (retType == null) {
                 emitInlineCall(inlineExt, e.args, currentInd, false, receiverExpr = recvExpr, receiverType = recvKtType)
+                typeSubst = vSavedSubst
                 return ""
             }
             val resultName = "\$ir${inlineCounter++}"
             impl.appendLine("$currentInd${cType(retType)} $resultName;")
             emitInlineCall(inlineExt, e.args, currentInd, false, receiverExpr = recvExpr, receiverType = recvKtType, resultVar = resultName)
+            typeSubst = vSavedSubst
             return resultName
         }
         // C package passthrough: c.printf(...) → printf(...)

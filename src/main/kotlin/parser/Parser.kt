@@ -28,17 +28,20 @@ class Parser(private val tokens: List<Token>) {
             if (at(TokenType.COMMENT)) { advance(); skipTerminator(); continue }
             break
         }
-        // track 'override', 'operator', 'inline' and 'private' modifiers
+        // track 'override', 'operator', 'infix', 'inline' and 'private' modifiers
         val isOverride = at(TokenType.OVERRIDE)
         if (isOverride) advance()
         val isOperator = at(TokenType.IDENT) && cur().value == "operator"
         if (isOperator) advance()
-        val isInline = at(TokenType.IDENT) && cur().value == "inline" && peek().type == TokenType.FUN
-        if (isInline) advance()
+        val isInfix = at(TokenType.IDENT) && cur().value == "infix"
+        if (isInfix) advance()
+        val isInlineExplicit = at(TokenType.IDENT) && cur().value == "inline" && peek().type == TokenType.FUN
+        if (isInlineExplicit) advance()
+        val isInline = isInlineExplicit || isInfix
         val isPrivate = at(TokenType.PRIVATE)
         if (isPrivate) advance()
         return when {
-            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate, isInline = isInline, isOverride = isOverride)
+            at(TokenType.FUN)    -> parseFunDecl(isOperator = isOperator, isPrivate = isPrivate, isInline = isInline, isOverride = isOverride, isInfix = isInfix)
             at(TokenType.DATA)   -> { if (isPrivate) error("private with data not supported"); advance(); expect(TokenType.CLASS); parseClassDecl(isData = true) }
             at(TokenType.CLASS)  -> { advance(); parseClassDecl(isData = false) }
             at(TokenType.ENUM)   -> { advance(); expect(TokenType.CLASS); parseEnumDecl() }
@@ -70,7 +73,7 @@ class Parser(private val tokens: List<Token>) {
 
     // ── fun ──────────────────────────────────────────────────────────
 
-    private fun parseFunDecl(isOperator: Boolean = false, isPrivate: Boolean = false, isInline: Boolean = false, isOverride: Boolean = false): FunDecl {
+    private fun parseFunDecl(isOperator: Boolean = false, isPrivate: Boolean = false, isInline: Boolean = false, isOverride: Boolean = false, isInfix: Boolean = false): FunDecl {
         expect(TokenType.FUN)
         // Parse optional type parameters: fun <T, U> name(...)
         val typeParams = if (at(TokenType.LT)) {
@@ -116,7 +119,7 @@ class Parser(private val tokens: List<Token>) {
             else -> null
         }
         skipTerminator()
-        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator, isPrivate, isInline, isOverride)
+        return FunDecl(name, params, retType, body, receiver, typeParams, isOperator, isPrivate, isInline, isOverride, isInfix)
     }
 
     private fun parseParamList(): List<Param> {
@@ -919,7 +922,7 @@ class Parser(private val tokens: List<Token>) {
     // ═══════════════════════════ Precedence table ════════════════════
 
     companion object {
-        val INFIX_IDS = setOf("until", "downTo", "step", "to", "and", "or", "xor", "shl", "shr", "ushr")
+        var INFIX_IDS: MutableSet<String> = mutableSetOf("until", "downTo", "step", "to", "and", "or", "xor", "shl", "shr", "ushr")
         // Levels — higher binds tighter
         const val PREC_DISJUNCTION  = 1   // ||
         const val PREC_CONJUNCTION  = 2   // &&
