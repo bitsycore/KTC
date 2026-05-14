@@ -136,24 +136,100 @@ void ktc_time_sleep_seconds(ktc_Double seconds)
 #if defined(_WIN32)
 
 #include <dbghelp.h>
-/* MSVC: auto-link. MinGW: DbgHelp is loaded dynamically, no -ldbghelp needed. */
-#ifdef _MSC_VER
-#   pragma comment(lib, "dbghelp.lib")
-#endif
 
-/* DbgHelp function pointer types — loaded at runtime to avoid MinGW import issues. */
+/* Return just the filename from a full path (handles both / and \). */
+static const char* ktc_st_basename(const char* inPath)
+{
+    const char* p = inPath;
+    const char* last = inPath;
+    while (*p) {
+        if (*p == '/' || *p == '\\') last = p + 1;
+        p++;
+    }
+    return last;
+}
+
+/* Format addr2line location "full/path/file.c:42" → "file.c:42". */
+static void ktc_st_format_loc(const char* inRaw, char* outBuf, int inBufSize)
+{
+    /* Find the last colon that precedes digits — the line-number separator. */
+    const char* vColon = NULL;
+    for (const char* p = inRaw; *p; p++) {
+        if (*p == ':' && *(p + 1) >= '0' && *(p + 1) <= '9')
+            vColon = p;
+    }
+    if (!vColon) { snprintf(outBuf, inBufSize, "%s", inRaw); return; }
+
+    char vPath[512];
+    int  vN = (int)(vColon - inRaw);
+    if (vN >= (int)sizeof(vPath)) vN = (int)sizeof(vPath) - 1;
+    memcpy(vPath, inRaw, vN);
+    vPath[vN] = '\0';
+    snprintf(outBuf, inBufSize, "%s%s", ktc_st_basename(vPath), vColon);
+}
+
+#if defined(__MINGW32__) || defined(__MINGW64__)
+/*
+ * MinGW: DbgHelp only reads PDB symbols; MinGW/GCC produces DWARF.
+ * addr2line (shipped with MinGW binutils) reads DWARF natively.
+ * Compile with -g for function names and file:line to be available.
+ */
+void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
+{
+    fprintf(stderr, "Exception in thread \"main\" kotlin.Error: %.*s\n",
+        inMessageLen, inMessage);
+
+    void* vFrames[KTC_ST_MAX_FRAMES];
+    int   vFrameCount = (int)CaptureStackBackTrace(
+        KTC_ST_SKIP_FRAMES, KTC_ST_MAX_FRAMES, vFrames, NULL
+    );
+    if (vFrameCount == 0) return;
+
+    char vExe[MAX_PATH];
+    GetModuleFileNameA(NULL, vExe, sizeof(vExe));
+
+    /* Build: addr2line -f -e "<exe>" 0xADDR1 0xADDR2 ... 2>NUL */
+    char vCmd[4096];
+    int  vPos = snprintf(vCmd, sizeof(vCmd), "addr2line -f -e \"%s\"", vExe);
+    for (int i = 0; i < vFrameCount && vPos < (int)sizeof(vCmd) - 24; i++)
+        vPos += snprintf(vCmd + vPos, sizeof(vCmd) - vPos, " %p", vFrames[i]);
+    if (vPos < (int)sizeof(vCmd) - 8)
+        strncat(vCmd, " 2>NUL", sizeof(vCmd) - (size_t)vPos - 1);
+
+    FILE* vFp = popen(vCmd, "r");
+    if (!vFp) {
+        for (int i = 0; i < vFrameCount; i++)
+            fprintf(stderr, "\tat ??(Unknown Source)\n");
+        return;
+    }
+
+    /* addr2line -f outputs pairs: function name line, then file:line. */
+    char vFunc[256], vFileLine[512], vLoc[256];
+    for (int i = 0; i < vFrameCount; i++) {
+        if (!fgets(vFunc,     sizeof(vFunc),     vFp)) break;
+        if (!fgets(vFileLine, sizeof(vFileLine), vFp)) break;
+        vFunc[strcspn(vFunc, "\r\n")]         = '\0';
+        vFileLine[strcspn(vFileLine, "\r\n")] = '\0';
+
+        if (vFileLine[0] == '?' && vFileLine[1] == '?')
+            fprintf(stderr, "\tat %s(Unknown Source)\n", vFunc);
+        else {
+            ktc_st_format_loc(vFileLine, vLoc, sizeof(vLoc));
+            fprintf(stderr, "\tat %s(%s)\n", vFunc, vLoc);
+        }
+    }
+    pclose(vFp);
+}
+
+#else
+/*
+ * MSVC: DbgHelp reads PDB symbols. Load dynamically so no .lib is needed
+ * at link time — dbghelp.dll is always present on Windows.
+ */
 typedef BOOL (WINAPI *PFN_SymInitialize)(HANDLE, PCSTR, BOOL);
 typedef BOOL (WINAPI *PFN_SymFromAddr)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
 typedef BOOL (WINAPI *PFN_SymGetLineFromAddr64)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
 typedef BOOL (WINAPI *PFN_SymCleanup)(HANDLE);
-
-static const char* ktc_st_basename(const char* inPath)
-{
-    const char* vSlash  = strrchr(inPath, '\\');
-    const char* vFSlash = strrchr(inPath, '/');
-    const char* vLast   = vSlash > vFSlash ? vSlash : vFSlash;
-    return vLast ? vLast + 1 : inPath;
-}
 
 void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
 {
@@ -165,7 +241,6 @@ void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
         KTC_ST_SKIP_FRAMES, KTC_ST_MAX_FRAMES, vFrames, NULL
     );
 
-    /* Load DbgHelp dynamically — works with both MSVC and MinGW. */
     HMODULE vDbgHelp = LoadLibraryA("dbghelp.dll");
     if (!vDbgHelp) {
         for (USHORT i = 0; i < vFrameCount; i++)
@@ -173,15 +248,14 @@ void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
         return;
     }
 
-    PFN_SymInitialize        vSymInitialize        = (PFN_SymInitialize)       GetProcAddress(vDbgHelp, "SymInitialize");
-    PFN_SymFromAddr          vSymFromAddr          = (PFN_SymFromAddr)         GetProcAddress(vDbgHelp, "SymFromAddr");
-    PFN_SymGetLineFromAddr64 vSymGetLineFromAddr64 = (PFN_SymGetLineFromAddr64)GetProcAddress(vDbgHelp, "SymGetLineFromAddr64");
-    PFN_SymCleanup           vSymCleanup           = (PFN_SymCleanup)          GetProcAddress(vDbgHelp, "SymCleanup");
+    PFN_SymInitialize        vSymInit  = (PFN_SymInitialize)       GetProcAddress(vDbgHelp, "SymInitialize");
+    PFN_SymFromAddr          vSymFrom  = (PFN_SymFromAddr)         GetProcAddress(vDbgHelp, "SymFromAddr");
+    PFN_SymGetLineFromAddr64 vSymLine  = (PFN_SymGetLineFromAddr64)GetProcAddress(vDbgHelp, "SymGetLineFromAddr64");
+    PFN_SymCleanup           vSymClean = (PFN_SymCleanup)          GetProcAddress(vDbgHelp, "SymCleanup");
 
     HANDLE vProcess = GetCurrentProcess();
-    if (vSymInitialize) vSymInitialize(vProcess, NULL, TRUE);
+    if (vSymInit) vSymInit(vProcess, NULL, TRUE);
 
-    /* SYMBOL_INFO needs a trailing name buffer inline. */
     char vSymBuf[sizeof(SYMBOL_INFO) + 255];
     SYMBOL_INFO* vSym = (SYMBOL_INFO*)vSymBuf;
     memset(vSymBuf, 0, sizeof(vSymBuf));
@@ -195,20 +269,21 @@ void ktc_stacktrace_print(const char* inMessage, int inMessageLen)
     for (USHORT i = 0; i < vFrameCount; i++) {
         DWORD64 vDisp64 = 0;
         DWORD   vDisp32 = 0;
-        BOOL vHasSym  = vSymFromAddr          && vSymFromAddr(vProcess, (DWORD64)vFrames[i], &vDisp64, vSym);
-        BOOL vHasLine = vSymGetLineFromAddr64 && vSymGetLineFromAddr64(vProcess, (DWORD64)vFrames[i], &vDisp32, &vLine);
+        BOOL vHasSym  = vSymFrom && vSymFrom(vProcess, (DWORD64)vFrames[i], &vDisp64, vSym);
+        BOOL vHasLine = vSymLine  && vSymLine(vProcess, (DWORD64)vFrames[i], &vDisp32, &vLine);
 
         const char* vFunc = (vHasSym && vSym->Name[0]) ? vSym->Name : "??";
-
         if (vHasLine)
             fprintf(stderr, "\tat %s(%s:%lu)\n", vFunc, ktc_st_basename(vLine.FileName), vLine.LineNumber);
         else
             fprintf(stderr, "\tat %s(Unknown Source)\n", vFunc);
     }
 
-    if (vSymCleanup) vSymCleanup(vProcess);
+    if (vSymClean) vSymClean(vProcess);
     FreeLibrary(vDbgHelp);
 }
+
+#endif /* MinGW vs MSVC */
 
 #elif defined(__GNUC__) || defined(__clang__)
 /* POSIX: Linux and macOS.
