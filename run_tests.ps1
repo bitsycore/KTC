@@ -6,21 +6,22 @@
 # are transpiled together. Adding a new directory = adding a new test.
 #
 # Usage:
-#   .\run_tests.ps1                        # Run all tests
-#   .\run_tests.ps1 -Skip unit             # Skip unit tests, only run integration
-#   .\run_tests.ps1 -Run HashMapTest       # Transpile, compile & run a single test
-#   .\run_tests.ps1 -Run game -MemTrack    # Run single test with --mem-track
-#   .\run_tests.ps1 -Run game -Ast         # Run single test with --ast
-#   .\run_tests.ps1 -Run game -DumpSemantics # Run single test with --dump-semantics
+#   .\run_tests.ps1                              # Run all tests
+#   .\run_tests.ps1 -Skip unit                  # Skip unit tests, only run integration
+#   .\run_tests.ps1 -Run HashMapTest             # Transpile, compile & run a single test
+#   .\run_tests.ps1 -Run "Test1,Test2"           # Run multiple tests
+#   .\run_tests.ps1 -Run game -MemTrack          # Run single test with --mem-track
+#   .\run_tests.ps1 -Run game -Ast               # Run single test with --ast
+#   .\run_tests.ps1 -Run game -DumpSemantics     # Run single test with --dump-semantics
 #   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
-#   .\run_tests.ps1 -Clean                  # Remove all test out/ directories
-#   .\run_tests.ps1 -Rebuild                # Force clean rebuild of JAR + run all tests
-#   .\run_tests.ps1 -Rebuild -Run Utf8Test  # Rebuild JAR + run single test
-#   .\run_tests.ps1 -Compiler clang        # Use clang instead of auto-detected gcc
-#   .\run_tests.ps1 -CCArgs "-j14 -O2"     # Pass flags to the C compiler
-#   .\run_tests.ps1 -Build Jar             # Build fat JAR (default)
-#   .\run_tests.ps1 -Build Gradle          # Build using gradle "run"
-#   .\run_tests.ps1 -Build Proguard        # Build and use the ProGuard-optimized JAR
+#   .\run_tests.ps1 -Clean                       # Remove all test out/ directories
+#   .\run_tests.ps1 -Rebuild                     # Force clean rebuild of JAR + run all tests
+#   .\run_tests.ps1 -Rebuild -Run Utf8Test       # Rebuild JAR + run single test
+#   .\run_tests.ps1 -Compiler clang              # Use clang instead of auto-detected gcc
+#   .\run_tests.ps1 -CCArgs "-j14 -O2"           # Pass flags to the C compiler
+#   .\run_tests.ps1 -Build Jar                   # Build fat JAR (default)
+#   .\run_tests.ps1 -Build Gradle                # Build using gradle "run"
+#   .\run_tests.ps1 -Build Proguard              # Build and use the ProGuard-optimized JAR
 #
 param(
     [string]$Skip = "",
@@ -78,11 +79,17 @@ $gradleJarCmd  = if ($Rebuild) { "clean jar" } else { "jar" }
 $gradleProCmd  = if ($Rebuild) { "clean proguard" } else { "proguard" }
 
 # ── Colors ──────────────────────────────────────────────────────
-function Write-Pass($msg) { Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host $msg }
-function Write-Fail($msg) { Write-Host "  FAIL " -ForegroundColor Red   -NoNewline; Write-Host $msg }
-function Write-Info($msg) { Write-Host "  ---- " -ForegroundColor Cyan  -NoNewline; Write-Host $msg }
+function Write-Pass($msg) { Write-Host "  PASS " -ForegroundColor Green  -NoNewline; Write-Host $msg }
+function Write-Fail($msg) { Write-Host "  FAIL " -ForegroundColor Red    -NoNewline; Write-Host $msg }
+function Write-Info($msg) { Write-Host "  ---- " -ForegroundColor Cyan   -NoNewline; Write-Host $msg }
+function Write-Warn($msg) { Write-Host "  WARN " -ForegroundColor Yellow -NoNewline; Write-Host $msg -ForegroundColor Yellow }
 function Write-Section($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Yellow }
 function Write-Cmd($msg) { Write-Host "  `$ " -ForegroundColor DarkYellow -NoNewline; Write-Host $msg -ForegroundColor White }
+
+function Format-Ms([long]$ms) {
+    if ($ms -lt 1000) { return "${ms}ms" }
+    return ("{0:N2}s" -f ($ms / 1000.0))
+}
 
 # ── Detect C compiler ───────────────────────────────────────────
 $CC = if ($Compiler -ne "") { $Compiler } else { $null }
@@ -111,6 +118,8 @@ function Invoke-Test {
         [string]$ExtraArgs = ""
     )
 
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+
     # ── Collect .kt files ───────────────────────────────────────
     $ktFiles = @(Get-ChildItem "$TestSrcDir\*.kt" | Select-Object -ExpandProperty FullName)
     if ($ktFiles.Count -eq 0) {
@@ -129,7 +138,6 @@ function Invoke-Test {
     # ── Transpile ───────────────────────────────────────────────
     if ($Verbose) { Write-Section "Transpile" }
     if ($BuildMode -eq "gradle") {
-        # gradle run handles classpath, kotlin stdlib, and resources automatically
         $ktArgs = ($ktFiles -join " ") + " -o $TestOutDir"
         if ($ExtraArgs -ne "") { $ktArgs += " $ExtraArgs" }
         $transpileArgs = @("run", "--quiet", "--args=$ktArgs")
@@ -156,8 +164,17 @@ function Invoke-Test {
         $transpileOutput = & java @transpileArgs 2>&1
     }
     $transpileExit = $LASTEXITCODE
+    $transpileMs = $sw.ElapsedMilliseconds
+    $sw.Restart()
+
     if ($Verbose) {
-        foreach ($line in $transpileOutput) { Write-Host "  $line" }
+        foreach ($line in $transpileOutput) {
+            if ("$line" -match 'warning:') {
+                Write-Host "  $line" -ForegroundColor Yellow
+            } else {
+                Write-Host "  $line"
+            }
+        }
         Write-Host ""
     }
     if ($transpileExit -ne 0) {
@@ -168,7 +185,11 @@ function Invoke-Test {
         }
         return $false
     }
-    if ($Verbose) { Write-Pass "Transpilation succeeded" }
+    if ($Verbose) {
+        Write-Host "  PASS " -ForegroundColor Green -NoNewline
+        Write-Host "Transpilation succeeded  " -NoNewline
+        Write-Host "(ktc: $(Format-Ms $transpileMs))" -ForegroundColor DarkGray
+    }
 
     # ── Discover generated .c files ─────────────────────────────
     $ktcSubDir = "$TestOutDir\ktc"
@@ -190,7 +211,6 @@ function Invoke-Test {
         return $false
     }
 
-    # Binary name: use test name (e.g., PointerTest.exe)
     $exePath = "$TestOutDir\$Name.exe"
 
     # ── Compile ─────────────────────────────────────────────────
@@ -205,6 +225,9 @@ function Invoke-Test {
     }
     $compileOutput = & $CC @compileArgs 2>&1
     $compileExit = $LASTEXITCODE
+    $compileMs = $sw.ElapsedMilliseconds
+    $sw.Restart()
+
     if ($Verbose -and $compileOutput) {
         foreach ($line in $compileOutput) { Write-Host "  $line" -ForegroundColor DarkGray }
         Write-Host ""
@@ -217,7 +240,11 @@ function Invoke-Test {
         }
         return $false
     }
-    if ($Verbose) { Write-Pass "Compilation succeeded -> $exePath" }
+    if ($Verbose) {
+        Write-Host "  PASS " -ForegroundColor Green -NoNewline
+        Write-Host "Compilation succeeded -> $exePath  " -NoNewline
+        Write-Host "(comp: $(Format-Ms $compileMs))" -ForegroundColor DarkGray
+    }
 
     # ── Generated files (verbose only) ──────────────────────────
     if ($Verbose) {
@@ -237,6 +264,9 @@ function Invoke-Test {
     }
     $runOutput = & $exePath 2>&1
     $runExit = $LASTEXITCODE
+    $runMs = $sw.ElapsedMilliseconds
+    $sw.Stop()
+
     if ($Verbose) {
         $runOutput | ForEach-Object { Write-Host "  $_" }
         Write-Host ""
@@ -249,14 +279,31 @@ function Invoke-Test {
         }
         return $false
     }
-    if ($Verbose) { Write-Pass "Program exited successfully (code 0)" }
-
-    if (-not $Verbose) { Write-Pass $Name }
+    $hasLeak = ($runOutput | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
+    if ($Verbose) {
+        if ($hasLeak) {
+            Write-Host "  PASS " -ForegroundColor DarkYellow -NoNewline
+            Write-Host "Program exited - memory leaks detected  " -NoNewline
+            Write-Host "LEAK  " -ForegroundColor Red -NoNewline
+            Write-Host "(run: $(Format-Ms $runMs))" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  PASS " -ForegroundColor Green -NoNewline
+            Write-Host "Program exited successfully (code 0)  " -NoNewline
+            Write-Host "(run: $(Format-Ms $runMs))" -ForegroundColor DarkGray
+        }
+    }
+    if (-not $Verbose) {
+        if ($hasLeak) {
+            Write-Host "  PASS " -ForegroundColor DarkYellow -NoNewline
+            Write-Host "$Name  " -NoNewline
+            Write-Host "LEAK" -ForegroundColor Red
+        } else { Write-Pass $Name }
+    }
     return $true
 }
 
 # ════════════════════════════════════════════════════════════════
-# Single-test run mode: -Run <TestDirName>
+# Single/multi-test run mode: -Run <Name> or -Run "A,B,C"
 # ════════════════════════════════════════════════════════════════
 if ($Run -ne "") {
     Write-Info "Using C compiler: $CC"
@@ -283,14 +330,6 @@ if ($Run -ne "") {
         }
     }
 
-    $testSrcDir = "$testsDir\$Run"
-    if (-not (Test-Path $testSrcDir -PathType Container)) {
-        Write-Host "ERROR: test directory not found: $testSrcDir" -ForegroundColor Red
-        Write-Host "Available tests:" -ForegroundColor Yellow
-        Get-ChildItem $testsDir -Directory | ForEach-Object { Write-Host "  - $($_.Name)" }
-        exit 1
-    }
-
     # ── Build transpile args from flags ───────────────────────────
     $allArgs = ""
     if ($MemTrack) { $allArgs += " --mem-track" }
@@ -299,8 +338,22 @@ if ($Run -ne "") {
     if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
     $allArgs = $allArgs.Trim()
 
-    $result = Invoke-Test -Name $Run -TestSrcDir $testSrcDir -TestOutDir "$testSrcDir\out" -Verbose $true -ExtraArgs $allArgs
-    if ($result) { exit 0 } else { exit 1 }
+    # ── Split on commas, run each test ────────────────────────────
+    $runNames = $Run -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+    $anyFailed = $false
+    foreach ($testName in $runNames) {
+        $testSrcDir = "$testsDir\$testName"
+        if (-not (Test-Path $testSrcDir -PathType Container)) {
+            Write-Host "ERROR: test directory not found: $testSrcDir" -ForegroundColor Red
+            Write-Host "Available tests:" -ForegroundColor Yellow
+            Get-ChildItem $testsDir -Directory | ForEach-Object { Write-Host "  - $($_.Name)" }
+            $anyFailed = $true
+            continue
+        }
+        $result = Invoke-Test -Name $testName -TestSrcDir $testSrcDir -TestOutDir "$testSrcDir\out" -Verbose $true -ExtraArgs $allArgs
+        if (-not $result) { $anyFailed = $true }
+    }
+    if ($anyFailed) { exit 1 } else { exit 0 }
 }
 
 # ════════════════════════════════════════════════════════════════
@@ -376,6 +429,14 @@ if ($testDirs.Count -eq 0) {
         $dirName = Split-Path $dir -Leaf
         $testOutDir = "$($dir.FullName)\out"
 
+        # Local ms formatter (functions from outer scope are not available in parallel blocks)
+        function fmtMs([long]$ms) {
+            if ($ms -lt 1000) { return "${ms}ms" }
+            return ("{0:N2}s" -f ($ms / 1000.0))
+        }
+
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+
         # Collect .kt files
         $ktFiles = @(Get-ChildItem "$dir\*.kt" -ErrorAction SilentlyContinue)
         if ($ktFiles.Count -eq 0) {
@@ -390,23 +451,29 @@ if ($testDirs.Count -eq 0) {
 
         # Transpile
         $transpileExit = 0
+        $transpileOutput = @()
         try {
             if ($using:BuildMode -eq "gradle") {
                 $argsStr = "$ktPaths -o $testOutDir"
                 if ($using:allArgs) { $argsStr += " $using:allArgs" }
-                & "$using:root\gradlew.bat" run --quiet --args="$argsStr" 2>&1 | Out-Null
+                $transpileOutput = & "$using:root\gradlew.bat" run --quiet --args="$argsStr" 2>&1
                 $transpileExit = $LASTEXITCODE
             } else {
                 $activeJar = if ($using:BuildMode -eq "proguard") { $using:releaseJar } else { $using:jar }
                 $cmdArgs = @("-jar", $activeJar) + $ktPaths + @("-o", $testOutDir)
                 if ($using:allArgs) { $cmdArgs += $using:allArgs -split '\s+' }
-                & java @cmdArgs 2>&1 | Out-Null
+                $transpileOutput = & java @cmdArgs 2>&1
                 $transpileExit = $LASTEXITCODE
             }
         } catch {
             Write-Host "  FAIL $dirName (transpile: $_)" -ForegroundColor Red
             return @{ Name = $dirName; Passed = $false; Reason = "transpile: $_" }
         }
+        $transpileMs = $sw.ElapsedMilliseconds
+        $sw.Restart()
+
+        $warnings = @($transpileOutput | Where-Object { "$_" -match 'warning:' })
+
         if ($transpileExit -ne 0) {
             Write-Host "  FAIL $dirName (transpile failed)" -ForegroundColor Red
             return @{ Name = $dirName; Passed = $false; Reason = "transpile failed" }
@@ -446,10 +513,13 @@ if ($testDirs.Count -eq 0) {
             Write-Host "  FAIL $dirName (compile: $_)" -ForegroundColor Red
             return @{ Name = $dirName; Passed = $false; Reason = "compile: $_" }
         }
+        $compileMs = $sw.ElapsedMilliseconds
+        $sw.Restart()
 
         # Run
+        $runOutput = @()
         try {
-            & $exePath 2>&1 | Out-Null
+            $runOutput = & $exePath 2>&1
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL $dirName (runtime error, exit $LASTEXITCODE)" -ForegroundColor Red
                 return @{ Name = $dirName; Passed = $false; Reason = "runtime error, exit $LASTEXITCODE" }
@@ -458,8 +528,20 @@ if ($testDirs.Count -eq 0) {
             Write-Host "  FAIL $dirName (run: $_)" -ForegroundColor Red
             return @{ Name = $dirName; Passed = $false; Reason = "run: $_" }
         }
+        $runMs = $sw.ElapsedMilliseconds
+        $sw.Stop()
 
-        Write-Host "  PASS $dirName" -ForegroundColor Green
+        $hasLeak = @($runOutput | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
+        $esc = [char]27
+        $g = "${esc}[32m"; $gr = "${esc}[90m"; $y = "${esc}[33m"; $red = "${esc}[31m"; $r = "${esc}[0m"
+        $timing = "${gr}ktc: $(fmtMs $transpileMs)  comp: $(fmtMs $compileMs)  run: $(fmtMs $runMs)${r}"
+        if ($hasLeak) {
+            Write-Host "  ${y}PASS $dirName${r}  ${red}LEAK${r}  $timing"
+        } else {
+            Write-Host "  ${g}PASS $dirName${r}  $timing"
+        }
+        foreach ($w in $warnings) { Write-Host "       $w" -ForegroundColor Yellow }
+
         return @{ Name = $dirName; Passed = $true; Reason = "" }
     } -ThrottleLimit $throttle
 

@@ -4,6 +4,11 @@ fun arrayPtr(arr: @Ptr Array<Int>) {
     if (arr.size < 0) error("negative size")
 }
 
+fun arrayPtrWithDispose(arr: @Ptr Array<Int>) {
+    if (arr.size < 0) error("negative size")
+    HeapFree(arr)
+}
+
 fun testArrayPtr() {
     val arr = Array<Int>(10)
     arrayPtr(arr.ptr())
@@ -15,11 +20,11 @@ fun testArrayPtr() {
 
     arrayPtr(Array<Int>(10).ptr())
 
-    arrayPtr(heapArrayOf(0,1,2,3,4,5))
+    arrayPtrWithDispose(heapArrayOf(0,1,2,3,4,5))
     val knownArr = heapArrayOf(10, 20, 30)
-    arrayPtr(knownArr)
+    arrayPtrWithDispose(knownArr)
     val arrHeap = heapArrayOf(0,1,2,3,4,5)
-    arrayPtr(arrHeap)
+    arrayPtrWithDispose(arrHeap)
 
     arrayPtr(arrayOf(1,2,3,4,5).ptr())
 

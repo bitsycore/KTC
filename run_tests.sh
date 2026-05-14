@@ -10,6 +10,7 @@
 #   ./run_tests.sh --help                     # Show this help
 #   ./run_tests.sh --skip-unit                # Skip unit tests
 #   ./run_tests.sh --run HashMapTest          # Single test
+#   ./run_tests.sh --run "Test1,Test2"        # Multiple tests
 #   ./run_tests.sh --run game --mem-track     # With --mem-track flag
 #   ./run_tests.sh --run game --ast           # With --ast flag
 #   ./run_tests.sh --run game --dump-semantics # With --dump-semantics flag
@@ -18,8 +19,8 @@
 #   ./run_tests.sh --build jar                # Build fat JAR (default for suite)
 #   ./run_tests.sh --build gradle             # Use gradle run (no JAR)
 #   ./run_tests.sh --build proguard           # Use ProGuard-optimized JAR
-#   ./run_tests.sh --clean                  # Remove all test output directories
-#   ./run_tests.sh --rebuild                # Force clean rebuild of JAR + run all tests
+#   ./run_tests.sh --clean                    # Remove all test output directories
+#   ./run_tests.sh --rebuild                  # Force clean rebuild of JAR + run all tests
 #
 set -euo pipefail
 
@@ -54,8 +55,8 @@ while [[ $# -gt 0 ]]; do
         --compiler)    COMPILER="$2"; shift 2 ;;
         --cc-args)     CC_ARGS="$2"; shift 2 ;;
         --build)       BUILD="$2"; shift 2 ;;
-        --clean)        CLEAN=true; shift ;;
-        --rebuild)      REBUILD=true; shift ;; 
+        --clean)       CLEAN=true; shift ;;
+        --rebuild)     REBUILD=true; shift ;;
         *)             echo "Unknown option: $1 (use --help)"; exit 1 ;;
     esac
 done
@@ -104,6 +105,28 @@ info()    { printf "  ${CYAN}----${NC} %s\n" "$1"; }
 section() { printf "\n${YELLOW}=== %s ===${NC}\n" "$1"; }
 showcmd() { printf "  ${DYELLOW}\$ ${WHITE}%s${NC}\n" "$1"; }
 
+# Returns current time in milliseconds (best effort, falls back to seconds*1000)
+now_ms() {
+    local ms
+    ms=$(date +%s%3N 2>/dev/null)
+    [[ "$ms" =~ ^[0-9]+$ ]] && echo "$ms" && return
+    ms=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null)
+    [[ "$ms" =~ ^[0-9]+$ ]] && echo "$ms" && return
+    ms=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000' 2>/dev/null)
+    [[ "$ms" =~ ^[0-9]+$ ]] && echo "$ms" && return
+    echo $(($(date +%s) * 1000))
+}
+
+# Formats milliseconds as "123ms" or "1.23s"
+format_ms() {
+    local ms=$1
+    if [[ $ms -lt 1000 ]]; then
+        echo "${ms}ms"
+    else
+        awk "BEGIN { printf \"%.2fs\", $ms / 1000 }"
+    fi
+}
+
 # ── Detect C compiler ───────────────────────────────────────────
 if [[ -n "$COMPILER" ]]; then
     CC="$COMPILER"
@@ -128,6 +151,9 @@ invoke_test() {
     local test_out_dir="$3"
     local verbose="${4:-false}"
     local extra_args="${5:-}"
+
+    local transpile_ms=0 compile_ms=0 run_ms=0
+    local ts_start ts_end
 
     # ── Collect .kt files ───────────────────────────────────────
     local kt_files=()
@@ -175,6 +201,7 @@ invoke_test() {
     fi
     set +e
     local output
+    ts_start=$(now_ms)
     case "$BUILD" in
         gradle)
             local app_args="${kt_files[*]} -o $test_out_dir $extra_args"
@@ -190,9 +217,22 @@ invoke_test() {
             ;;
     esac
     local transpile_exit=$?
+    ts_end=$(now_ms)
+    transpile_ms=$((ts_end - ts_start))
     set -e
+
+    # Extract codegenWarning lines from transpiler output
+    local warnings_lines=""
+    warnings_lines=$(echo "$output" | grep 'warning:' || true)
+
     if [[ "$verbose" == "true" ]]; then
-        while IFS= read -r line; do printf "  %s\n" "$line"; done <<< "$output"
+        while IFS= read -r line; do
+            if echo "$line" | grep -q 'warning:'; then
+                printf "  ${YELLOW}%s${NC}\n" "$line"
+            else
+                printf "  %s\n" "$line"
+            fi
+        done <<< "$output"
         echo ""
     fi
     if [[ $transpile_exit -ne 0 ]]; then
@@ -204,7 +244,9 @@ invoke_test() {
         fi
         return 1
     fi
-    if [[ "$verbose" == "true" ]]; then pass "Transpilation succeeded"; fi
+    if [[ "$verbose" == "true" ]]; then
+        printf "  ${GREEN}PASS${NC} Transpilation succeeded  ${GRAY}(ktc: %s)${NC}\n" "$(format_ms $transpile_ms)"
+    fi
 
     # ── Discover generated .c files ─────────────────────────────
     local ktc_dir="$test_out_dir/ktc"
@@ -235,7 +277,6 @@ invoke_test() {
         return 1
     fi
 
-    # Binary name: use test name
     local exe_path="$test_out_dir/$name"
 
     # ── Compile ─────────────────────────────────────────────────
@@ -245,8 +286,11 @@ invoke_test() {
         echo ""
     fi
     set +e
+    ts_start=$(now_ms)
     output=$("$CC" -std=c11 $CC_ARGS -o "$exe_path" "${c_sources[@]}" 2>&1)
     local compile_exit=$?
+    ts_end=$(now_ms)
+    compile_ms=$((ts_end - ts_start))
     set -e
     if [[ "$verbose" == "true" && -n "$output" ]]; then
         while IFS= read -r line; do printf "  ${GRAY}%s${NC}\n" "$line"; done <<< "$output"
@@ -261,7 +305,9 @@ invoke_test() {
         fi
         return 1
     fi
-    if [[ "$verbose" == "true" ]]; then pass "Compilation succeeded -> $exe_path"; fi
+    if [[ "$verbose" == "true" ]]; then
+        printf "  ${GREEN}PASS${NC} Compilation succeeded -> %s  ${GRAY}(comp: %s)${NC}\n" "$exe_path" "$(format_ms $compile_ms)"
+    fi
 
     # ── Generated files (verbose only) ──────────────────────────
     if [[ "$verbose" == "true" ]]; then
@@ -289,15 +335,18 @@ invoke_test() {
         echo ""
     fi
     set +e
-    if [[ "$verbose" == "true" ]]; then
-        "$exe_path" 2>&1 | while IFS= read -r line; do printf "  %s\n" "$line"; done
-        local run_exit=${PIPESTATUS[0]}
-    else
-        output=$("$exe_path" 2>&1)
-        local run_exit=$?
-    fi
+    local run_exit=0
+    ts_start=$(now_ms)
+    output=$("$exe_path" 2>&1)
+    run_exit=$?
+    ts_end=$(now_ms)
+    run_ms=$((ts_end - ts_start))
     set -e
-    if [[ "$verbose" == "true" ]]; then echo ""; fi
+
+    if [[ "$verbose" == "true" ]]; then
+        while IFS= read -r line; do printf "  %s\n" "$line"; done <<< "$output"
+        echo ""
+    fi
     if [[ $run_exit -ne 0 ]]; then
         if [[ "$verbose" == "true" ]]; then
             fail "Runtime error (exit code $run_exit)"
@@ -307,16 +356,35 @@ invoke_test() {
         fi
         return 1
     fi
-    if [[ "$verbose" == "true" ]]; then
-        pass "Program exited successfully (code 0)"
-    fi
 
-    if [[ "$verbose" != "true" ]]; then pass "$name"; fi
+    local has_leak=false
+    echo "$output" | grep -q 'leaked' && has_leak=true || true
+
+    if [[ "$verbose" == "true" ]]; then
+        if [[ "$has_leak" == true ]]; then
+            printf "  ${DYELLOW}PASS${NC} Program exited - memory leaks detected  ${RED}LEAK${NC}  ${GRAY}(run: %s)${NC}\n" "$(format_ms $run_ms)"
+        else
+            printf "  ${GREEN}PASS${NC} Program exited successfully (code 0)  ${GRAY}(run: %s)${NC}\n" "$(format_ms $run_ms)"
+        fi
+    else
+        if [[ "$has_leak" == true ]]; then
+            printf "  ${DYELLOW}PASS${NC} ${DYELLOW}%s${NC}  ${RED}LEAK${NC}  ${GRAY}ktc: %s  comp: %s  run: %s${NC}\n" \
+                "$name" "$(format_ms $transpile_ms)" "$(format_ms $compile_ms)" "$(format_ms $run_ms)"
+        else
+            printf "  ${GREEN}PASS${NC} ${GREEN}%s${NC}  ${GRAY}ktc: %s  comp: %s  run: %s${NC}\n" \
+                "$name" "$(format_ms $transpile_ms)" "$(format_ms $compile_ms)" "$(format_ms $run_ms)"
+        fi
+        if [[ -n "$warnings_lines" ]]; then
+            while IFS= read -r w; do
+                [[ -n "$w" ]] && printf "       ${YELLOW}%s${NC}\n" "$w"
+            done <<< "$warnings_lines"
+        fi
+    fi
     return 0
 }
 
 # ════════════════════════════════════════════════════════════════
-# Single-test run mode: --run <TestDirName>
+# Single/multi-test run mode: --run <Name> or --run "A,B,C"
 # ════════════════════════════════════════════════════════════════
 if [[ -n "$RUN_TEST" ]]; then
     info "Using C compiler: $CC"
@@ -346,21 +414,27 @@ if [[ -n "$RUN_TEST" ]]; then
         esac
     fi
 
-    test_src_dir="$TESTS_DIR/$RUN_TEST"
-    if [[ ! -d "$test_src_dir" ]]; then
-        echo "ERROR: test directory not found: $test_src_dir"
-        echo "Available tests:"
-        for d in "$TESTS_DIR"/*/; do
-            [[ -d "$d" ]] && echo "  - $(basename "$d")"
-        done
-        exit 1
-    fi
-
-    if invoke_test "$RUN_TEST" "$test_src_dir" "$test_src_dir/out" "true" "$EXTRA_ARGS"; then
-        exit 0
-    else
-        exit 1
-    fi
+    # ── Split on commas, run each test ─────────────────────────
+    any_failed=false
+    IFS=',' read -ra run_names <<< "$RUN_TEST"
+    for test_name in "${run_names[@]}"; do
+        test_name="${test_name// /}"  # trim spaces
+        [[ -z "$test_name" ]] && continue
+        test_src_dir="$TESTS_DIR/$test_name"
+        if [[ ! -d "$test_src_dir" ]]; then
+            echo "ERROR: test directory not found: $test_src_dir"
+            echo "Available tests:"
+            for d in "$TESTS_DIR"/*/; do
+                [[ -d "$d" ]] && echo "  - $(basename "$d")"
+            done
+            any_failed=true
+            continue
+        fi
+        if ! invoke_test "$test_name" "$test_src_dir" "$test_src_dir/out" "true" "$EXTRA_ARGS"; then
+            any_failed=true
+        fi
+    done
+    if [[ "$any_failed" == true ]]; then exit 1; else exit 0; fi
 fi
 
 # ════════════════════════════════════════════════════════════════
