@@ -160,18 +160,20 @@ fun main(args: Array<String>) {
     val ktcDir = File(outDir, "ktc") // subdir for stdlib + intrinsics
     ktcDir.mkdirs()
 
-    val allAsts = parsedFiles.map { it.ast }
+    val allAsts = parsedFiles.map { it.ast }.filter { !it.documentationOnly }
     val ktcOutputNames = mutableListOf<String>() // ktc_* packages (e.g. ktc_std)
     val userOutputNames = mutableListOf<String>() // user packages
 
     for ((pkg, group) in byPackage) {
-        // Merge all files in the same package into one KtFile
-        val mergedImports = group.flatMap { it.ast.imports }.distinct()
-        val mergedDecls = group.flatMap { it.ast.decls }
-        val mergedFile = KtFile(group.first().ast.pkg, mergedImports, mergedDecls)
-        val mergedSourceLines = group.flatMap { it.sourceLines }
+        // Merge all files in the same package into one KtFile — skip documentation-only files entirely
+        val realGroup = group.filter { !it.ast.documentationOnly }
+        if (realGroup.isEmpty()) continue
+        val mergedImports = realGroup.flatMap { it.ast.imports }.distinct()
+        val mergedDecls = realGroup.flatMap { it.ast.decls }
+        val mergedFile = KtFile(realGroup.first().ast.pkg, mergedImports, mergedDecls)
+        val mergedSourceLines = realGroup.flatMap { it.sourceLines }
 
-        val srcName = if (group.size == 1) group.first().file.name else "$pkg.kt"
+        val srcName = if (realGroup.size == 1) realGroup.first().file.name else "$pkg.kt"
 
         val output: COutput
         try {
