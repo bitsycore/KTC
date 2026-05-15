@@ -1066,6 +1066,8 @@ internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
     }
     hdr.appendLine("    const ${cName}_vt* vt;")
     hdr.appendLine("} $cName;")
+    // Emit _Optional wrapper for nullable interface use
+    hdr.appendLine("KTC_OPTIONAL($cName);")
     hdr.appendLine()
 }
 

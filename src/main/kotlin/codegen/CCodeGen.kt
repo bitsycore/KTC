@@ -165,7 +165,32 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     internal val genericFunConcreteReturn = mutableMapOf<String, String>()
     /** Check if a method on baseType has a nullable receiver declaration. */
     internal fun hasNullableReceiverExt(baseType: String, method: String): Boolean {
-        return extensionFuns[baseType]?.any { it.name == method && it.receiver?.nullable == true } == true
+        val bareType = baseType.removeSuffix("*")
+        // Check non-generic extension functions
+        if (extensionFuns[bareType]?.any { it.name == method && it.receiver?.nullable == true } == true) return true
+        // Check generic extension functions matching the base type or its interfaces
+        val genericMatch = genericFunDecls.any {
+            it.name == method && it.receiver?.nullable == true && (
+                it.receiver!!.name == bareType ||
+                (genericClassDecls.containsKey(it.receiver!!.name) && bareType.startsWith("${it.receiver!!.name}_")) ||
+                (genericIfaceDecls.containsKey(it.receiver!!.name) && (
+                    bareType == it.receiver!!.name ||
+                    classInterfaces[bareType]?.contains(it.receiver!!.name) == true ||
+                    bareType.startsWith("${it.receiver!!.name}_")
+                ))
+            )
+        }
+        if (genericMatch) return true
+        // Check interfaces implemented by this class
+        val ifaces = classInterfaces[bareType] ?: emptyList()
+        return ifaces.any { iface ->
+            genericFunDecls.any { gf ->
+                gf.name == method && gf.receiver?.nullable == true && (
+                    gf.receiver!!.name == iface ||
+                    (genericIfaceDecls.containsKey(gf.receiver!!.name) && iface.startsWith("${gf.receiver!!.name}_"))
+                )
+            }
+        }
     }
 
     // Map class name → list of interface names it implements

@@ -433,6 +433,9 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             if (thisKtc is KtcType.Nullable) {
                 // @Ptr T? → compare pointer to NULL
                 if (thisKtc.inner is KtcType.Ptr && thisKtc.inner.inner !is KtcType.Arr) {
+                    if ((thisKtc.inner as KtcType.Ptr).inner is KtcType.User
+                        && ((thisKtc.inner as KtcType.Ptr).inner as KtcType.User).kind == KtcType.UserKind.Interface)
+                        return if (e.op == "==") "!\$self.vt" else "\$self.vt"
                     return if (e.op == "==") "\$self == NULL" else "\$self != NULL"
                 }
                 if (isValueNullableKtc(thisKtc)) {
@@ -446,6 +449,10 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         if (varKtc != null) {
             // @Ptr T? → compare pointer to NULL (exclude typed array pointers like IntArray)
             if (varKtc is KtcType.Nullable && varKtc.inner is KtcType.Ptr && varKtc.inner.inner !is KtcType.Arr) {
+                // @Ptr InterfaceType → check vt for null (ktc_IfacePtr is a struct)
+                if ((varKtc.inner as KtcType.Ptr).inner is KtcType.User
+                    && ((varKtc.inner as KtcType.Ptr).inner as KtcType.User).kind == KtcType.UserKind.Interface)
+                    return if (e.op == "==") "!${varName}.vt" else "${varName}.vt"
                 return if (e.op == "==") "$varName == NULL" else "$varName != NULL"
             }
             // Any? nullable → compare data pointer to NULL
@@ -1471,7 +1478,10 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
             if (hasAtPtr || isPtrOrArrayPtr) {
                 // @Ptr-annotated type — pass raw pointer (NULL for null)
                 if (arg.expr is NullLit) {
-                    parts += "NULL"
+                    if (paramTypeKtc is KtcType.Ptr && paramTypeKtc.inner is KtcType.User
+                        && (paramTypeKtc.inner as KtcType.User).kind == KtcType.UserKind.Interface)
+                        parts += "(ktc_IfacePtr){0}"   // zero-init for iface trampoline
+                    else parts += "NULL"
                     if (isArrayType(paramType)) parts += "0"
                 } else if ((paramTypeKtc as? KtcType.Ptr)?.inner is KtcType.Any) {
                     // @Ptr Any → wrap as ktc_Any fat pointer, pass pointer to it.
@@ -1521,7 +1531,12 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                             "&$tVal"
                         }
                         val tIface = tmp()
-                        preStmts += "ktc_IfacePtr $tIface = {{$typeId}, (const void*)&${cConcrete}_${ifaceName}_vt, $objPtr};"
+                        val argIsNullable = argKtc is KtcType.Nullable || inferExprTypeKtc(arg.expr) is KtcType.Nullable
+                        if (argIsNullable) {
+                            preStmts += "ktc_IfacePtr $tIface = ($expr) ? ((ktc_IfacePtr){{$typeId}, (const void*)&${cConcrete}_${ifaceName}_vt, (void*)($expr)}) : ((ktc_IfacePtr){0});"
+                        } else {
+                            preStmts += "ktc_IfacePtr $tIface = {{$typeId}, (const void*)&${cConcrete}_${ifaceName}_vt, $objPtr};"
+                        }
                         parts += tIface
                     } else {
                         parts += expr
@@ -1560,15 +1575,36 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                 } else {
                     val argVarName = (arg.expr as? NameExpr)?.name
                     val argVarKtc = if (argVarName != null) lookupVarKtc(argVarName) else null
-                    parts += if (argVarKtc is KtcType.Nullable && isValueNullableKtc(argVarKtc)
+                    val wrapped = if (argVarKtc is KtcType.Nullable && isValueNullableKtc(argVarKtc)
                         && (argVarName != null && isOptional(argVarName))
                     ) {
-                        // Already an Optional var — pass through (genName returned the Optional var name)
-                        expr
+                        // Already an Optional var — check if needs interface conversion
+                        val ifaceName2 = paramType
+                        if (interfaces.containsKey(ifaceName2) && classes.containsKey(argVarKtc.inner.toInternalStr)
+                            && classInterfaces[argVarKtc.inner.toInternalStr]?.contains(ifaceName2) == true) {
+                            val baseFlat = typeFlatName(argVarKtc.inner.toInternalStr)
+                            val t = tmp()
+                            val optType2 = optCTypeName("${paramType}?")
+                            preStmts += "$optType2 $t = ($expr.tag == ktc_SOME) ? ($optType2){ktc_SOME, ${baseFlat}_as_$ifaceName2(&$expr.value)} : ($optType2){ktc_NONE};"
+                            t
+                        } else expr
                     } else {
-                        // Non-nullable value — wrap in Some
-                        optSome(optType, expr)
+                        // Check if needs as_Iface conversion for class→interface
+                        val ifaceName = paramType
+                        val innerKtc = paramTypeKtc
+                        val argKtc = inferExprTypeKtc(arg.expr)
+                        val argKtcCore = (argKtc as? KtcType.Nullable)?.inner ?: argKtc
+                        val baseArg = (argKtcCore as? KtcType.User)?.baseName ?: argKtcCore?.toInternalStr
+                        val isIfImpl = baseArg != null && interfaces.containsKey(ifaceName)
+                            && (classes.containsKey(baseArg) || objects.containsKey(baseArg))
+                            && classInterfaces[baseArg]?.contains(ifaceName) == true
+                        val valExpr = if (isIfImpl) {
+                            if (argKtcCore is KtcType.Ptr || objects.containsKey(baseArg)) "${typeFlatName(baseArg)}_as_$ifaceName($expr)"
+                            else "${typeFlatName(baseArg)}_as_$ifaceName(&$expr)"
+                        } else expr
+                        optSome(optType, valExpr)
                     }
+                    parts += wrapped
                 }
             } else if (interfaces.containsKey(paramType)) {
                 val argKtc = inferExprTypeKtc(arg.expr)
@@ -2008,12 +2044,11 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
 
     // .ptr() on nullable value type → produce @Ptr T? (nullable pointer)
-    if (method == "ptr" && recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)) {
-        val innerKtc = recvTypeKtc.inner
+    if (method == "ptr" && rawRecvTypeKtc is KtcType.Nullable && isValueNullableKtc(rawRecvTypeKtc)) {
+        val innerKtc = rawRecvTypeKtc.inner
         val ct = cTypeStr(innerKtc.toInternalStr)
         val t = tmp()
-        if (recv.endsWith(".value")) preStmts += "$ct* $t = &$recv;"
-        else preStmts += "$ct* $t = (${recv}.tag == ktc_SOME) ? &${recv}.value : NULL;"
+        preStmts += "$ct* $t = (${rawRecv}.tag == ktc_SOME) ? &${rawRecv}.value : NULL;"
         return t
     }
 
@@ -2101,19 +2136,47 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                         && recvName != null && isOptional(recvName) -> recv
 
                 isExtFun -> {
-                    if (ifaceConcrete != null && !isPtrRecv) optSome(optSelfType, "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)")
+                    if (isNullableRecv && !isPtrRecv) {
+                        val rName2 = (dot.obj as? NameExpr)?.name
+                        val rKtc2 = if (rName2 != null) lookupVarKtc(rName2) else null
+                        if (rKtc2 is KtcType.Nullable && rName2 != null && isOptional(rName2)) {
+                            if (ifaceConcrete != null) {
+                                val optBase = ifaceConcrete
+                                val t = tmp()
+                                val optType2 = optCTypeName("${optBase}?")
+                                preStmts += "$optType2 $t = ($recv.tag == ktc_SOME) ? ($optType2){ktc_SOME, ${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv.value)} : ($optType2){ktc_NONE};"
+                                optSome(optSelfType, t)
+                            } else optSome(optSelfType, recv)
+                        } else {
+                            val valExpr = if (ifaceConcrete != null) "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)" else recv
+                            val optBase = ifaceConcrete ?: vClassInfo.baseName
+                            optSome(optCTypeName("${optBase}?"), valExpr)
+                        }
+                    } else if (ifaceConcrete != null && !isPtrRecv) optSome(optSelfType, "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)")
                     else optSome(optSelfType, recv)
                 }
                 else -> optSome(optSelfType, "&$recv")
             }
         } else if (isExtFun) {
-            if (ifaceConcrete != null && !isPtrRecv) "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)"
-            else if (isNullableRecv && !isPtrRecv) {
+            if (isNullableRecv && !isPtrRecv) {
                 val rName = (dot.obj as? NameExpr)?.name
                 val rKtc = if (rName != null) lookupVarKtc(rName) else null
-                if (rKtc is KtcType.Nullable && rName != null && isOptional(rName)) recv  // already optional
-                else optSome(optCTypeName("${vClassInfo.baseName}?"), recv)  // wrap
-            }
+                if (rKtc is KtcType.Nullable && rName != null && isOptional(rName)) {
+                    if (ifaceConcrete != null) {
+                        // Convert Optional<ArrayList> to Optional<List> via as_Iface
+                        val optBase = ifaceConcrete
+                        val t = tmp()
+                        val optType = optCTypeName("${optBase}?")
+                        preStmts += "$optType $t = ($recv.tag == ktc_SOME) ? ($optType){ktc_SOME, ${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv.value)} : ($optType){ktc_NONE};"
+                        t
+                    } else recv
+                }
+                else {
+                    val optBase = ifaceConcrete ?: vClassInfo.baseName
+                    val valExpr = if (ifaceConcrete != null) "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)" else recv
+                    optSome(optCTypeName("${optBase}?"), valExpr)
+                }
+            } else if (ifaceConcrete != null && !isPtrRecv) "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)"
             else recv
         } else "&$recv"
         // Use expandCallArgs for proper @Ptr expansion and default arg filling
