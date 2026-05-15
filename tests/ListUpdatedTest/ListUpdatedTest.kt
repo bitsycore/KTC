@@ -347,30 +347,29 @@ fun arrayListAllocTest() {
 
     // CONCRETE NULLABLE
 
-//    testValueNullable(stack1)
-//    testValueNullable(stack2)
-//    testValueNullable(heap1.value())
-//    testValueNullable(heap2.value())
-//
-//    testValueNullable(null)
-//    heap1Null1?.let { testValueNullable(it.value()) }
-//    heap1Null2?.let { testValueNullable(it.value()) }
-//    testValueNullable(stack1Null1)
-//    testValueNullable(stack1Null2)
-//
-//    testPtrNullable(stack1.ptr())
-//    testPtrNullable(stack2.ptr())
-//    testPtrNullable(heap1)
-//    testPtrNullable(heap2)
-//
-//    testPtrNullable(null)
-//    testPtrNullable(stack1Null1.ptr())
-//    testPtrNullable(stack1Null2.ptr())
-//    testPtrNullable(heap1Null1)
-//    testPtrNullable(heap1Null2)
-//
-//    // CONCRETE EXTENSION NULLABLE
-//
+   testValueNullable(stack1)
+   testValueNullable(stack2)
+   testValueNullable(heap1.value())
+   testValueNullable(heap2.value())
+
+   //testValueNullable(null)  // null literal — see above
+   //heap1Null1?.let { testValueNullable(it.value()) }  // let block not yet working
+   //heap1Null2?.let { testValueNullable(it.value()) }
+   testValueNullable(stack1Null1)
+   testValueNullable(stack1Null2)
+
+   testPtrNullable(stack1.ptr())
+   testPtrNullable(stack2.ptr())
+   testPtrNullable(heap1)
+   testPtrNullable(heap2)
+
+   //testPtrNullable(null)  // null literal type inference not yet working
+   testPtrNullable(stack1Null1.ptr())
+   testPtrNullable(stack1Null2.ptr())
+   testPtrNullable(heap1Null1)
+   testPtrNullable(heap1Null2)
+
+   // CONCRETE EXTENSION NULLABLE — need Optional handling in ext fun receiver
 //    stack1.testValueExtNullable()
 //    stack2.testValueExtNullable()
 //    heap1.value().testValueExtNullable()
@@ -388,19 +387,16 @@ fun arrayListAllocTest() {
 //
 //    heap1Null1.testPtrExtNullable()
 //    heap1Null2.testPtrExtNullable()
-//    stack1Null1.ptr().testPtrExtNullable()
-//    stack1Null2.ptr().testPtrExtNullable()
-//
-//    // INTERFACE NULLABLE
-//
+//    stack1Null1?.ptr()?.testPtrExtNullable()
+//    stack1Null2?.ptr()?.testPtrExtNullable()
+
+   // INTERFACE NULLABLE — need interface nullable support
 //    testListValueNullable(stack1)
 //    testListValueNullable(stack2)
 //    testListValueNullable(heap1.value())
 //    testListValueNullable(heap2.value())
 //
 //    testListValueNullable(null)
-//    heap1Null1?.let { testListValueNullable(it.value()) }
-//    heap1Null2?.let { testListValueNullable(it.value()) }
 //    testListValueNullable(stack1Null1)
 //    testListValueNullable(stack1Null2)
 //
@@ -410,20 +406,15 @@ fun arrayListAllocTest() {
 //    testListPtrNullable(heap2)
 //
 //    testListPtrNullable(null)
-//    testListPtrNullable(stack1Null1.ptr())
-//    testListPtrNullable(stack1Null2.ptr())
 //    testListPtrNullable(heap1Null1)
 //    testListPtrNullable(heap1Null2)
-//
-//    // INTERFACE EXTENSION NULLABLE
-//
+
+   // INTERFACE EXTENSION NULLABLE — need interface ext fun nullable support
 //    stack1.testListValueExtNullable()
 //    stack2.testListValueExtNullable()
 //    heap1.value().testListValueExtNullable()
 //    heap2.value().testListValueExtNullable()
 //
-//    heap1Null1?.let { it.value().testListValueExtNullable() }
-//    heap1Null2?.let { it.value().testListValueExtNullable() }
 //    stack1Null1.testListValueExtNullable()
 //    stack1Null2.testListValueExtNullable()
 //
@@ -434,8 +425,6 @@ fun arrayListAllocTest() {
 //
 //    heap1Null1.testListPtrExtNullable()
 //    heap1Null2.testListPtrExtNullable()
-//    stack1Null1.ptr().testListPtrExtNullable()
-//    stack1Null2.ptr().testListPtrExtNullable()
 }
 
 fun main() {

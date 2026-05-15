@@ -542,6 +542,7 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
                 p.type.nullable -> "${vGenPStr}?"
                 else -> vGenPStr
             })
+            if (p.type.nullable && isValueNullableKtc(KtcType.Nullable(vKtcGenParam))) markOptional(p.name)
         }
         val savedTrampolined3 = trampolinedParams.toHashSet(); trampolinedParams.clear()
         emitArrayParamCopies(f.params, "    ")

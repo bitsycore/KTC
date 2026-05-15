@@ -798,6 +798,8 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             val innerKtc = recvKtc.inner
             val isIndirectArray = innerKtc is KtcType.Ptr && innerKtc.inner is KtcType.Arr
             if (!hasNullableReceiverExt(innerKtc.toInternalStr, e.callee.name) && !isIndirectArray && innerKtc !is KtcType.Arr) {
+                // .ptr() on nullable value type → produces nullable pointer (NULL if NONE)
+                if (e.callee.name == "ptr") return genMethodCall(e.callee, e.args)
                 val recvSrc = (e.callee.obj as? NameExpr)?.name ?: e.callee.obj.toString()
                 val recvType = recvKtc.toInternalStr
                 codegenError("Only safe (?.) calls are allowed on a nullable receiver of type '$recvType': $recvSrc.${e.callee.name}()")
@@ -1997,6 +1999,16 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             return t
         }
         return "$vtAccess->$method($allArgs)"
+    }
+
+    // .ptr() on nullable value type → produce @Ptr T? (nullable pointer)
+    if (method == "ptr" && recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)) {
+        val innerKtc = recvTypeKtc.inner
+        val ct = cTypeStr(innerKtc.toInternalStr)
+        val t = tmp()
+        if (recv.endsWith(".value")) preStmts += "$ct* $t = &$recv;"
+        else preStmts += "$ct* $t = (${recv}.tag == ktc_SOME) ? &${recv}.value : NULL;"
+        return t
     }
 
     // Class method or extension function on class type (stack value)
