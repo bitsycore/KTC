@@ -516,7 +516,6 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
             defineVar(p.name, when {
                 p.isVararg -> "${vGenPStr}Array"  // vararg params are arrays (ptr + $len)
                 p.type.nullable -> "${vGenPStr}?"
-                classes.containsKey(vGenPStr) -> "${vGenPStr}*"
                 else -> vGenPStr
             })
         }

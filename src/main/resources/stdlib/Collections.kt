@@ -1,11 +1,11 @@
 package ktc.std
 
-class ListIterator<T>(val buf: @Ptr Array<T>) : Iterator<T> {
+class ListIterator<T>(val buf: @Ptr Array<T>, val size: Int) : Iterator<T> {
 
 	var idx: Int = 0
 
 	operator fun hasNext(): Boolean {
-		return idx < buf.size
+		return idx < size
 	}
 
 	operator fun next(): T {
@@ -80,7 +80,7 @@ class ArrayList<T>(private val allocator: @Ptr Allocator, capacity: Int) : Mutab
 	}
 
 	override operator fun iterator(): ListIterator<T> {
-		return ListIterator<T>(buf)
+		return ListIterator<T>(buf, size)
 	}
 
     override fun dispose() {
