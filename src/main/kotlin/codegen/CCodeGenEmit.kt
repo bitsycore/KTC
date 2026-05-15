@@ -207,7 +207,10 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
 internal fun CCodeGen.emitClassEquals(cName: String, ci: ClassInfo) {
     hdr.appendLine("ktc_Bool ${cName}_equals($cName a, $cName b);")
     impl.appendLine("ktc_Bool ${cName}_equals($cName a, $cName b) {")
-    val eqs = ci.props.joinToString(" && ") { (name, type) ->
+    val eqs = ci.props.filter { (_, type) ->
+        // Skip @Ptr interface fields — ktc_IfacePtr can't be compared with ==
+        !(type.annotations.any { it.name == "Ptr" } && interfaces.containsKey(type.name))
+    }.joinToString(" && ") { (name, type) ->
         val fieldName = if (name in ci.privateProps) "PRIV_$name" else name
         val vKtcEq = resolveTypeName(type)          // KtcType for equals dispatch
         val vTStr  = vKtcEq.toInternalStr            // string for class lookup

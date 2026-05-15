@@ -190,7 +190,9 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
         val inner = genExpr(e.expr)
         val exprKtc = inferExprTypeKtc(e.expr)
         val exprKtcCore = (exprKtc as? KtcType.Nullable)?.inner ?: exprKtc
-        val memOp = if (exprKtcCore is KtcType.Ptr) "->" else "."
+        // ktc_IfacePtr is a value struct even though the KTC type is Ptr<Interface>
+        val isIfacePtr = exprKtcCore is KtcType.Ptr && exprKtcCore.inner is KtcType.User && (exprKtcCore.inner as KtcType.User).kind == KtcType.UserKind.Interface
+        val memOp = if (exprKtcCore is KtcType.Ptr && !isIfacePtr) "->" else "."
         val vIsClassInfo = classInfoFor(targetKtc)                                    // non-null if target is a user class
         val vIsIfaceInfo = ifaceInfoFor(targetKtc)                                    // non-null if target is an interface
         val check = if (vIsClassInfo != null) {
@@ -1425,8 +1427,6 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     if (isArrayType(paramType)) parts += "0"
                 } else if ((paramTypeKtc as? KtcType.Ptr)?.inner is KtcType.Any) {
                     // @Ptr Any → wrap as ktc_Any fat pointer, pass pointer to it.
-                    // For variables, take address of original (allows mutation).
-                    // For rvalues, copy to temp first (isolates the callee from the caller's stack).
                     val argType = inferExprType(arg.expr)?.removeSuffix("?") ?: "Int"
                     val typeId = getTypeId(argType)
                     val ct = cTypeStr(argType)
@@ -1441,6 +1441,37 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     val tAny = tmp()
                     preStmts += "ktc_Any $tAny = {{$typeId}, (void*)$dataRef};"
                     parts += "&$tAny"
+                } else if ((paramTypeKtc as? KtcType.Ptr)?.inner is KtcType.User && interfaces.containsKey((paramTypeKtc.inner as KtcType.User).baseName)) {
+                    // @Ptr InterfaceType → wrap into ktc_IfacePtr trampoline
+                    val ifaceName = (paramTypeKtc.inner as KtcType.User).baseName
+                    val cIface = typeFlatName(ifaceName)
+                    val argKtc = inferExprTypeKtc(arg.expr)
+                    val argKtcCore = (argKtc as? KtcType.Nullable)?.inner ?: argKtc
+                    val concreteName = when {
+                        arg.expr is NameExpr && classes.containsKey(arg.expr.name) -> arg.expr.name
+                        arg.expr is NameExpr && objects.containsKey(arg.expr.name) -> arg.expr.name
+                        argKtcCore is KtcType.User -> argKtcCore.baseName
+                        else -> null
+                    }
+                    if (concreteName != null) {
+                        val cConcrete = typeFlatName(concreteName)
+                        val typeId = getTypeId(concreteName)
+                        val objPtr: String = if (arg.expr is NameExpr && objects.containsKey(arg.expr.name)) {
+                            "(void*)&$expr"
+                        } else if (arg.expr is NameExpr) {
+                            "$expr"
+                        } else {
+                            val tVal = tmp()
+                            val ct = cTypeStr(argKtcCore?.toInternalStr ?: "Int")
+                            preStmts += "$ct $tVal = $expr;"
+                            "&$tVal"
+                        }
+                        val tIface = tmp()
+                        preStmts += "ktc_IfacePtr $tIface = {{$typeId}, (const void*)&${cConcrete}_${ifaceName}_vt, $objPtr};"
+                        parts += tIface
+                    } else {
+                        parts += expr
+                    }
                 } else {
                     parts += expr
                     if (isArrayType(paramType)) {
@@ -1796,7 +1827,9 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
 
     // @Ptr/@Heap/@Value-annotated class pointer methods
     val pointerBase = (recvTypeKtc as? KtcType.Ptr)?.inner?.let { it as? KtcType.User }?.baseName
-    if (pointerBase != null) {
+    // Skip if pointerBase is an interface — those go through vtable dispatch below
+    val isIface = pointerBase != null && interfaces.containsKey(pointerBase)
+    if (pointerBase != null && !isIface) {
         // If class defines the method, delegate to it
         val classHasMethod = classes[pointerBase]?.methods?.any { it.name == method } == true
         if (classHasMethod) {
@@ -1825,30 +1858,34 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     }
 
     // Interface method dispatch → d.vt->method(data_ptr, args)
-    val vIfaceInfo = ifaceInfoFor(recvTypeKtc)                                        // non-null if receiver is a known interface
+    val vIfaceInfo = ifaceInfoFor(recvTypeKtc)
     if (vIfaceInfo != null) {
-        // Extension functions on the interface are static — call directly, not through vtable
+        val cIface = typeFlatName(vIfaceInfo.name)
         val extFunOnIface = extensionFuns[vIfaceInfo.baseName]?.find { it.name == method }
             ?: extensionFuns[vIfaceInfo.flatName]?.find { it.name == method }
         if (extFunOnIface != null) {
             val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
             return "${vIfaceInfo.flatName}_$method($allArgs)"
         }
-        val vSelfArg = ifaceVtableSelf(vIfaceInfo.name, recv)                         // pointer to concrete data inside interface
+        // @Ptr interface uses trampoline (value): recv.vt->method(recv.obj, ...)
+        // Value interface uses tagged union: recv.vt->method(&recv.data, ...)
+        val isIfacePtr = rawRecvTypeKtc is KtcType.Ptr
+        val vSelfArg = if (isIfacePtr) "$recv.obj" else ifaceVtableSelf(vIfaceInfo.name, recv)
         val allArgs = if (argStr.isEmpty()) vSelfArg else "$vSelfArg, $argStr"
-        // Check if this interface method returns nullable
+        val vtAccess = if (isIfacePtr) "((${cIface}_vt*)$recv.vt)"
+                       else "$recv.vt"
         val ifaceMethod = vIfaceInfo.methods.find { it.name == method }
             ?: collectAllIfaceMethods(vIfaceInfo).find { it.name == method }
         if (ifaceMethod?.returnType?.nullable == true) {
             val retType = resolveTypeName(ifaceMethod.returnType).toInternalStr
             val optType = optCTypeName("${retType}?")
             val t = tmp()
-            preStmts += "$optType $t = $recv.vt->$method($allArgs);"
+            preStmts += "$optType $t = $vtAccess->$method($allArgs);"
             markOptional(t)
             defineVar(t, "${retType}?")
             return t
         }
-        return "$recv.vt->$method($allArgs)"
+        return "$vtAccess->$method($allArgs)"
     }
 
     // Class method or extension function on class type (stack value)

@@ -110,6 +110,11 @@ typedef struct {
     ktc_Int typeId;
 } ktc_core_AnySupertype;
 
+/** @Ptr interface trampoline — fat pointer for interface references.
+ *  Uses __base.typeId for is-checks, vt for dispatch, obj for concrete data.
+ *  One unified struct for all @Ptr InterfaceType regardless of which interface. */
+typedef struct { ktc_core_AnySupertype __base; const void* vt; void* obj; } ktc_IfacePtr;
+
 /** Vtable for Any methods — one static instance per class.
  *  All methods take void* for type-erased dispatch. */
 typedef struct ktc_core_AnyVt {

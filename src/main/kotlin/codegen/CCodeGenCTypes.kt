@@ -169,6 +169,7 @@ internal fun CCodeGen.expandParams(inParams: List<Param>): String {
 }
 
 internal fun CCodeGen.cTypeStr(t: String): String {
+    if (t == "ktc_IfacePtr") return "ktc_IfacePtr"
     val ktc = parseResolvedTypeName(t)
     return cTypeStr(ktc)
 }
@@ -182,7 +183,12 @@ internal fun CCodeGen.resolveTypeNameStr(t: TypeRef?): String {
         return resolveTypeNameStr(vSubstituted.typeArgs[0]) + "*"
     val vBase = resolveTypeNameInnerStr(vSubstituted) // raw resolved name
     val vIsPtr = vSubstituted.annotations.any { it.name == "Ptr" } // has @Ptr annotation
-    return if (vIsPtr) "${vBase}*" else vBase
+    if (vIsPtr) {
+        // @Ptr InterfaceType → ktc_IfacePtr (trampoline value, carries vt+obj)
+        if (interfaces.containsKey(vSubstituted.name)) return "ktc_IfacePtr"
+        return "${vBase}*"
+    }
+    return vBase
 }
 
 internal fun CCodeGen.typeRefToStr(t: TypeRef?): String {
@@ -472,6 +478,10 @@ internal fun CCodeGen.userType(inName: String, inKind: KtcType.UserKind = KtcTyp
 }
 
 internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null): KtcType {
+    // @Ptr InterfaceType → preserve interface info for dispatch
+    if (resolved == "ktc_IfacePtr" && t != null && interfaces.containsKey(t.name)) {
+        return KtcType.Ptr(userType(t.name, KtcType.UserKind.Interface))
+    }
     // Pointer suffix — for array types that are already pointers, don't double-wrap
     if (resolved.endsWith("*?")) {
         val base = resolved.dropLast(2)
@@ -565,11 +575,13 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Ptr -> {
         // Ptr(Arr(elem)) → elem*, not trampoline* (handles OptArray via nullable elem)
         if (ktc.inner is KtcType.Arr) {
-            val vArrElem = ktc.inner.elem                    // element KtcType (smart-cast after is KtcType.Arr)
-            val vElemStr = if (vArrElem is KtcType.Nullable) // nullable elem → Optional C type
+            val vArrElem = ktc.inner.elem
+            val vElemStr = if (vArrElem is KtcType.Nullable)
                 optCTypeName(vArrElem.inner.toInternalStr)
-            else cTypeStr(vArrElem)                           // plain elem C type
+            else cTypeStr(vArrElem)
             "$vElemStr*"
+        } else if (ktc.inner is KtcType.User && ktc.inner.kind == KtcType.UserKind.Interface) {
+            "ktc_IfacePtr"  // @Ptr InterfaceType → untyped trampoline
         } else "${cTypeStr(ktc.inner)}*"
     }
 

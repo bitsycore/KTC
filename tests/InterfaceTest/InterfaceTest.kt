@@ -72,6 +72,30 @@ fun shapeReturnerById4Infer(id: Int) = when {
     else -> Square(4.0f)
 }
 
+// ═══════════════════════ @Ptr Interface helpers ══════════════════
+
+fun testAtPtrAlloc(alloc: @Ptr Allocator) {
+    val p: @Ptr Byte = alloc.allocMem(32)
+    println("@Ptr allocMem(32): ok")
+    alloc.freeMem(p)
+    println("@Ptr freeMem: ok")
+}
+
+class AllocHolder(private val alloc: @Ptr Allocator) {
+    fun test() {
+        val p: @Ptr Byte = alloc.allocMem(64)
+        println("Holder allocMem(64): ok")
+        alloc.freeMem(p)
+        println("Holder freeMem: ok")
+    }
+
+    override fun dispose() {
+        println("Holder.dispose called")
+    }
+}
+
+// ═══════════════════════ Main ═════════════════════════════════
+
 fun main() {
     val c = Circle(2.0f)
     val s = Square(3.0f)
@@ -150,6 +174,15 @@ fun main() {
     // dispose on non-override class (no-op via macro)
     println("dispose on Circle (should be no-op):")
     c.dispose()
+
+    // ═══════════════════════ @Ptr Interface dispatch ══════════════
+    println()
+    println("=== @Ptr Interface ===")
+    testAtPtrAlloc(Heap)
+
+    val holder = AllocHolder(Heap)
+    holder.test()
+    holder.dispose()
 
     println("done")
 }

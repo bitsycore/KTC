@@ -243,8 +243,11 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         (inType as? KtcType.User)?.decl as? ClassInfo
 
     internal fun ifaceInfoFor(inType: KtcType?): IfaceInfo? =    // IfaceInfo if type is a user-defined interface
-        (inType as? KtcType.User)?.decl as? IfaceInfo
-
+        when (inType) {
+            is KtcType.User -> inType.decl as? IfaceInfo ?: interfaces[inType.baseName]
+            is KtcType.Ptr -> ifaceInfoFor(inType.inner)  // unwrap @Ptr
+            else -> null
+        }
     internal fun enumInfoFor(inType: KtcType?): EnumInfo? =      // EnumInfo if type is an enum class
         (inType as? KtcType.User)?.decl as? EnumInfo
 
@@ -356,14 +359,15 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     For single-implementor: pass &recv.ConcreteClass_data
     For zero-implementor (fallback): pass recv.obj (old void* design)
     */
-    internal fun ifaceVtableSelf(inIfaceName: String, inRecv: String): String
+    internal fun ifaceVtableSelf(inIfaceName: String, inRecv: String, isPtr: Boolean = false): String
         {
         val vImpls = interfaceImplementors[inIfaceName]
+        val deref = if (isPtr) "->" else "."
         return when
             {
-            vImpls.isNullOrEmpty() -> "$inRecv.obj"                                     // fallback: void* obj
-            vImpls.size == 1 -> "(void*)&$inRecv.${typeFlatName(vImpls[0])}_data"                   // single impl: &recv.Class_data
-            else -> "(void*)&$inRecv.data"                                                           // multi impl: &recv.data (= union start)
+            vImpls.isNullOrEmpty() -> if (isPtr) "$inRecv->obj" else "$inRecv.obj"
+            vImpls.size == 1 -> "(void*)&$inRecv${deref}${typeFlatName(vImpls[0])}_data"
+            else -> "(void*)&$inRecv${deref}data"
             }
         }
 
