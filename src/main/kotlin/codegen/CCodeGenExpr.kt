@@ -431,6 +431,10 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
         if (nonNull is ThisExpr) {
             val thisKtc = inferExprTypeKtc(nonNull)
             if (thisKtc is KtcType.Nullable) {
+                // @Ptr T? → compare pointer to NULL
+                if (thisKtc.inner is KtcType.Ptr && thisKtc.inner.inner !is KtcType.Arr) {
+                    return if (e.op == "==") "\$self == NULL" else "\$self != NULL"
+                }
                 if (isValueNullableKtc(thisKtc)) {
                     return if (e.op == "==") "\$self.tag == ktc_NONE" else "\$self.tag == ktc_SOME"
                 }
@@ -1224,7 +1228,9 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 val argTypeKtc = inferExprTypeKtc(args[i].expr)
                 matchTypeParam(param.type, argType, genFun.typeParams.toSet(), subst)
             }
-            if (subst.size == genFun.typeParams.size) genFun.typeParams.map { subst[it]!! } else null
+            if (subst.size == genFun.typeParams.size) genFun.typeParams.map { subst[it]!! }
+            // Fallback: if inference fails (e.g. null literal), use existing instantiation
+            else genericFunInstantiations[name]?.firstOrNull()?.toList()
         }
         if (typeArgNames != null) {
             val mangledName = "${name}_${typeArgNames.joinToString("_")}"
@@ -2079,6 +2085,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val effectiveDecl = methodDecl ?: genericExtDecl
         val isExtFun = effectiveDecl?.receiver != null
         val isPtrRecv = effectiveDecl?.receiver?.annotations?.any { it.name == "Ptr" } == true
+        val isNullableRecv = effectiveDecl?.receiver?.nullable == true
         val flatBase = if (ifaceConcrete != null) {
             val f = typeFlatName(ifaceConcrete)
             if (isPtrRecv) "${f.removeSuffix("_$ifaceConcrete")}_Ptr_${ifaceConcrete}" else f
@@ -2101,6 +2108,12 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             }
         } else if (isExtFun) {
             if (ifaceConcrete != null && !isPtrRecv) "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)"
+            else if (isNullableRecv && !isPtrRecv) {
+                val rName = (dot.obj as? NameExpr)?.name
+                val rKtc = if (rName != null) lookupVarKtc(rName) else null
+                if (rKtc is KtcType.Nullable && rName != null && isOptional(rName)) recv  // already optional
+                else optSome(optCTypeName("${vClassInfo.baseName}?"), recv)  // wrap
+            }
             else recv
         } else "&$recv"
         // Use expandCallArgs for proper @Ptr expansion and default arg filling

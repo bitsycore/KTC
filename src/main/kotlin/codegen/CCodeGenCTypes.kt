@@ -608,7 +608,7 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Nullable -> {
         val inner = ktc.inner
         if (inner is KtcType.Ptr) cTypeStr(inner)  // T* for nullable pointers (NULL = null)
-        else cTypeStr(inner)  // fallback (Optional handled elsewhere)
+        else optCTypeName(inner.toInternalStr)  // T_Optional for nullable value types
     }
 
     is KtcType.Func -> "void*"

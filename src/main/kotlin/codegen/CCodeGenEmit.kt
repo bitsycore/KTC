@@ -476,7 +476,8 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         }
         val cName = if (hasReceiver) {
             val recvKtc = resolveTypeName(f.receiver)
-            val recvName = (recvKtc as? KtcType.Ptr)?.inner?.let { (it as? KtcType.User)?.baseName } ?: recvKtc.toInternalStr.removeSuffix("*")
+            val recvName = (recvKtc as? KtcType.Ptr)?.inner?.let { (it as? KtcType.User)?.baseName }
+                ?: recvKtc.toInternalStr.removeSuffix("*").removeSuffix("?")
             if (f.receiver!!.annotations.any { it.name == "Ptr" }) {
                 val baseFlat = typeFlatName(recvName)
                 "${baseFlat.removeSuffix("_$recvName")}_Ptr_${recvName}_${f.name}"
@@ -485,7 +486,13 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
             }
         } else funCName(mangledName)
         val baseParams = expandParams(f.params)
-        val selfParam = if (hasReceiver) "${cType(f.receiver)} \$self" else null
+        val selfParam = if (hasReceiver) {
+            val selfRecvKtc = resolveTypeName(f.receiver!!)
+            val ct = if (f.receiver!!.nullable && selfRecvKtc !is KtcType.Ptr && selfRecvKtc !is KtcType.Nullable)
+                optCTypeName(selfRecvKtc.toInternalStr)
+            else cType(f.receiver!!)
+            "$ct \$self"
+        } else null
         val params = when {
             returnsSizedArray -> {
                 val elemCType = cTypeStr(vRetKtcGen!!.asArr!!.elem)
@@ -522,10 +529,12 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         // Set up receiver context for generic extension functions
         if (hasReceiver) {
             val recvResolved = resolveTypeName(f.receiver!!)
-            val recvName = recvResolved.toInternalStr
+            val recvFull = recvResolved.toInternalStr
+            val recvName = recvFull.removeSuffix("?")
             val isClassType = classes.containsKey(recvName)
             currentExtRecvType = if (f.receiver!!.nullable) "${recvName}?" else recvName
             defineVar("\$self", if (f.receiver!!.nullable) "${recvName}?" else recvName)
+            if (f.receiver!!.nullable && isValueNullableKtc(recvResolved as? KtcType.Nullable ?: KtcType.Nullable(recvResolved))) markOptional("\$self")
             if (isClassType) {
                 currentClass = recvName
                 selfIsPointer = f.receiver!!.annotations.any { it.name == "Ptr" }

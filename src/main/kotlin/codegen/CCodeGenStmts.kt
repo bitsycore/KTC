@@ -1684,6 +1684,15 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
         }
     }
 
+    fun tryThisSmartCastElse() {
+        val type = currentExtRecvType
+        if (type != null) {
+            val typeKtc = parseResolvedTypeName(type)
+            if (typeKtc is KtcType.Nullable)
+                casts.add("\$self" to typeKtc.inner.toInternalStr)
+        }
+    }
+
     // x == null → in else branch, x is non-null
     when (cond) {
         is BinExpr if cond.op == "==" && cond.right is NullLit && cond.left is NameExpr ->
@@ -1691,6 +1700,14 @@ internal fun CCodeGen.extractElseSmartCasts(cond: Expr): List<Pair<String, Strin
 
         is BinExpr if cond.op == "==" && cond.left is NullLit && cond.right is NameExpr ->
             trySmartCast(cond.right.name)
+
+        // this == null → in else branch, $self is non-null
+        is BinExpr if cond.op == "==" && cond.right is NullLit && cond.left is ThisExpr ->
+            tryThisSmartCastElse()
+
+        // null == this → same
+        is BinExpr if cond.op == "==" && cond.left is NullLit && cond.right is ThisExpr ->
+            tryThisSmartCastElse()
 
         // x !is Type → in else branch, x IS Type
         is IsCheckExpr if cond.negated && cond.expr is NameExpr ->
