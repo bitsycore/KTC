@@ -1,6 +1,6 @@
 # REFACTOR_REMAINING.md — What's Left
 
-## Status: ~500 lines eliminated. All 32 + 541 tests pass.
+## Status: ~600 lines eliminated. All 33 integration + 570 unit tests pass.
 
 ## Hard floor: 4 string checks that must stay
 
@@ -13,17 +13,33 @@ These are in `parseResolvedTypeName` (the KtcType parser itself) and one AST che
 
 ---
 
-## ArraysMapping.kt: 3 callers still using string versions
+## ✅ ArraysMapping.kt: all string callers converted
 
-These use strings from `inferExprType` or string manipulation — KtcType not directly available:
+| File                 | What                                         | Resolution                                                                    |
+|----------------------|----------------------------------------------|-------------------------------------------------------------------------------|
+| ~~CCodeGenStmts.kt~~ | ~~`arrayElementCType(t)` in tryArrayOfInit~~ | Replaced with `arrayElementCTypeKtc(tKtcCore)` via `parseResolvedTypeName(t)` |
+| ~~CCodeGenInfer.kt~~ | ~~`arrayElementKtType` in inferIndexType~~   | Replaced with `arrayElementKtTypeKtc(tKtcCore)` via `inferExprTypeKtc`        |
+| ~~CCodeGenInfer.kt~~ | ~~`t.dropLast(1)` string manipulation~~      | Replaced with `tKtcCore.inner.toInternalStr`                                  |
 
-| File             | Line | Function                   | Can't convert because                             |
-|------------------|------|----------------------------|---------------------------------------------------|
-| CCodeGenStmts.kt | 488  | `arrayElementCType(t)`     | `t` in `tryArrayOfInit` — no KtcType in scope     |
-| CCodeGenInfer.kt | 578  | `arrayElementKtType(base)` | `base` from `t.dropLast(1)` — string manipulation |
-| CCodeGenInfer.kt | 580  | `arrayElementKtType(t)`    | `t` from `inferExprType` in `inferIndexType`      |
+**String functions `arrayElementCType()` and `arrayElementKtType()` removed — ~90 lines eliminated.**
 
-**How to fix:** Convert `inferIndexType` to use `inferExprTypeKtc` alongside the string (same pattern as `inferDotType`). For `tryArrayOfInit`, add `parseResolvedTypeName(t)` to get KtcType.
+---
+
+## ✅ tryArrayOfInit string checks converted
+
+| What                             | Resolution                                                            |
+|----------------------------------|-----------------------------------------------------------------------|
+| ~~`recvType.endsWith("Array")`~~ | Replaced with `inferExprTypeKtc(dot.obj)?.isArrayLike`                |
+| ~~`t.endsWith("OptArray")`~~     | Replaced with KtcType structural check via `parseResolvedTypeName(t)` |
+
+---
+
+## ✅ inferIndexType Ptr branch converted
+
+| What                             | Resolution                                              |
+|----------------------------------|---------------------------------------------------------|
+| ~~`t.dropLast(1)` string manip~~ | Replaced with `tKtcCore.inner.toInternalStr`            |
+| ~~`isArrayType(base)`~~          | No longer needed (pre-checked: `inner !is KtcType.Arr`) |
 
 ---
 
@@ -41,12 +57,6 @@ The `.ptr`/`.toHeap` handlers use `recvType.endsWith("Array")` and `recvType.rem
 
 ---
 
-## `tryArrayOfInit` ≈ 20 string checks
-
-Function in CCodeGenStmts.kt (lines ~380-540) still uses `t.endsWith("OptArray")`, `t.endsWith("Array")`, `isArrayType(t)`. KtcType not available in scope — needs `parseResolvedTypeName(t)` or structural refactor to bring KtcType in.
-
----
-
 ## `inferExprType` return type migration plan
 
 | Step | What                                                                                                           | Impact           |
@@ -58,6 +68,5 @@ Function in CCodeGenStmts.kt (lines ~380-540) still uses `t.endsWith("OptArray")
 
 ## Priority
 
-1. `tryArrayOfInit` — highest density of remaining string checks, all fixable by bringing KtcType into scope
-2. `inferIndexType` line 578/580 — simple 2-line fix, just add `inferExprTypeKtc` alongside
-3. `inferExprType` migration — long-term, incremental
+1. `inferExprType` migration — long-term, incremental
+2. `inferDotType` array string manipulation — needs careful testing

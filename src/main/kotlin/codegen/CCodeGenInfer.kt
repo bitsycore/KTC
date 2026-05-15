@@ -1,7 +1,7 @@
 package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
-import com.bitsycore.ktc.codegen.mapping.arrayElementKtType
+import com.bitsycore.ktc.codegen.mapping.arrayElementKtTypeKtc
 import com.bitsycore.ktc.codegen.mapping.primitiveToArrayOptionalType
 import com.bitsycore.ktc.codegen.mapping.primitiveToArrayType
 import com.bitsycore.ktc.types.KtcType
@@ -505,18 +505,16 @@ internal fun CCodeGen.inferDotTypeKtc(e: DotExpr): KtcType? {
     }
     if (e.name == "size" && recvTypeCoreKtc != null && recvTypeCoreKtc.isArrayLike) return KtcType.Prim(KtcType.PrimKind.Int)
     if (e.name == "ptr") {
-        if (recvType.endsWith("Array")) {
-            val elem = recvType.removeSuffix("Array")
-            val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
-            return parseResolvedTypeName("${internal}*")
+        if (recvTypeCoreKtc?.isArrayLike == true) {
+            val arr = recvTypeCoreKtc!!.asArr
+            if (arr != null) return KtcType.Ptr(arr.elem)
         }
         if (recvTypeCoreKtc is KtcType.Ptr && recvTypeCoreKtc.inner is KtcType.Arr) return parseResolvedTypeName(recvType)
         return if (recvTypeCoreKtc is KtcType.Ptr) parseResolvedTypeName(recvType) else parseResolvedTypeName("${recvType}*")
     }
-    if (e.name == "toHeap" && recvType.endsWith("Array")) {
-        val elem = recvType.removeSuffix("Array")
-        val internal = if (elem.endsWith("Opt")) "${elem.removeSuffix("Opt")}?" else elem
-        return parseResolvedTypeName("${internal}*")
+    if (e.name == "toHeap" && recvTypeCoreKtc?.isArrayLike == true) {
+        val arr = recvTypeCoreKtc!!.asArr
+        if (arr != null) return KtcType.Ptr(arr.elem)
     }
     if (e.name == "length" && recvTypeCoreKtc is KtcType.Str) return KtcType.Prim(KtcType.PrimKind.Int)
     if (e.name == "runeLen" && recvTypeCoreKtc is KtcType.Str) return KtcType.Prim(KtcType.PrimKind.Int)
@@ -575,10 +573,9 @@ internal fun CCodeGen.inferIndexType(e: IndexExpr): String? {
     }
     // Typed pointer: Ptr<UserClass> → base name. Exclude typed arrays (Ptr<Arr<T>>).
     if (tKtcCore is KtcType.Ptr && tKtcCore.inner !is KtcType.Arr) {
-        val base = t.dropLast(1)
-        return if (isArrayType(base)) arrayElementKtType(base) else base
+        return tKtcCore.inner.toInternalStr
     }
-    return arrayElementKtType(t)
+    return tKtcCore?.let { arrayElementKtTypeKtc(it) } ?: "Int"
 }
 
 // ══ Phase 4.4 — KtcType inference entry points ══════════════════════

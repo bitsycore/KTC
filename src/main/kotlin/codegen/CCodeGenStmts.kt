@@ -2,7 +2,6 @@ package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
 import com.bitsycore.ktc.ast.Annotation
-import com.bitsycore.ktc.codegen.mapping.arrayElementCType
 import com.bitsycore.ktc.codegen.mapping.arrayElementCTypeKtc
 import com.bitsycore.ktc.codegen.mapping.arrayElementKtTypeKtc
 import com.bitsycore.ktc.types.KtcType
@@ -380,8 +379,8 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
     if (init.callee is DotExpr) {
         val dot = init.callee
         if (dot.name == "ptr" || dot.name == "toHeap") {
-            val recvType = inferExprType(dot.obj)
-            if (recvType != null && recvType.endsWith("Array")) {
+            val recvKtc = inferExprTypeKtc(dot.obj)
+            if (recvKtc?.isArrayLike == true) {
                 val expr = genExpr(init)
                 flushPreStmts(ind)
                 return "$ind$ct $varName = $expr;\n${ind}ktc_Int ${varName}\$len = ${expr}\$len;"
@@ -483,9 +482,13 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
     // arrayOf<T?>(…) or arrayOf(…) where declared type is an OptArray: wrap each element in Optional struct
     if (callee == "arrayOf") {
         val vTypeArg = init.typeArgs.getOrNull(0)
-        val vIsNullableElem = vTypeArg?.nullable == true || t.endsWith("OptArray")
+        val tKtc = parseResolvedTypeName(t)
+        val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
+        val isOptArray = tKtcCore is KtcType.Ptr && tKtcCore.inner is KtcType.Arr
+            && (tKtcCore.inner as KtcType.Arr).elem is KtcType.Nullable
+        val vIsNullableElem = vTypeArg?.nullable == true || isOptArray
         if (vIsNullableElem) {
-            val vOptCType = if (t.endsWith("OptArray")) arrayElementCType(t)
+            val vOptCType = if (isOptArray) arrayElementCTypeKtc(tKtcCore)
             else optCTypeName("${typeSubst[vTypeArg!!.name] ?: vTypeArg.name}?")
             val vArgs = init.args.joinToString(", ") { vArg ->
                 if (vArg.expr is NullLit) "($vOptCType){ktc_NONE}"
