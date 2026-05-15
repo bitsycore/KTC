@@ -1,5 +1,9 @@
 package test.list.updated
 
+// ===================================================
+// MARK: Concrete
+// ===================================================
+
 fun <T> testPtr(list: @Ptr ArrayList<T>) {
     println("testPtr(list)")
     var counter = 0
@@ -35,6 +39,10 @@ fun <T> ArrayList<T>.testValueExt() {
         counter++
     }
 }
+
+// ===================================================
+// MARK: Interface
+// ===================================================
 
 fun <T> testListPtr(list: @Ptr List<T>) {
     println("testListPtr(list)")
@@ -151,20 +159,25 @@ fun arrayListAllocTest() {
     testValue(heap1.value())
     testValue(heap2.value())
 
+    testPtr(stack1.ptr())
+    testPtr(stack2.ptr())
+    testPtr(heap1)
+    testPtr(heap2)
+
     stack1.testValueExt()
     stack2.testValueExt()
     heap1.value().testValueExt()
     heap2.value().testValueExt()
 
+    stack1.ptr().testPtrExt()
+    stack2.ptr().testPtrExt()
+    heap1.testPtrExt()
+    heap2.testPtrExt()
+
     testListValue(stack1)
     testListValue(stack2)
     testListValue(heap1.value())
     testListValue(heap2.value())
-
-    testPtr(stack1.ptr())
-    testPtr(stack2.ptr())
-    testPtr(heap1)
-    testPtr(heap2)
 
     testListPtr(stack1.ptr())
     testListPtr(stack2.ptr())

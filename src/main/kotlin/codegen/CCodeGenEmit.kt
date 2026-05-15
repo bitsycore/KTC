@@ -475,8 +475,14 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
             else -> "void"
         }
         val cName = if (hasReceiver) {
-            val recvResolved = resolveTypeName(f.receiver).toInternalStr
-            "${typeFlatName(recvResolved)}_${f.name}"
+            val recvKtc = resolveTypeName(f.receiver)
+            val recvName = (recvKtc as? KtcType.Ptr)?.inner?.let { (it as? KtcType.User)?.baseName } ?: recvKtc.toInternalStr.removeSuffix("*")
+            if (f.receiver!!.annotations.any { it.name == "Ptr" }) {
+                val baseFlat = typeFlatName(recvName)
+                "${baseFlat.removeSuffix("_$recvName")}_Ptr_${recvName}_${f.name}"
+            } else {
+                "${typeFlatName(recvName)}_${f.name}"
+            }
         } else funCName(mangledName)
         val baseParams = expandParams(f.params)
         val selfParam = if (hasReceiver) "${cType(f.receiver)} \$self" else null

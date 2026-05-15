@@ -1911,8 +1911,17 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             "toHeap", "ptr" -> return recv
         }
         // general class method — pointer passed directly
+        // Check if this is a generic extension function with @Ptr receiver
+        val genExt = genericFunDecls.find {
+            it.name == method && it.receiver != null && (
+                it.receiver.name == pointerBase ||
+                (genericClassDecls.containsKey(it.receiver.name) && pointerBase.startsWith("${it.receiver.name}_"))
+            )
+        }
+        val isPtrExt = genExt?.receiver?.annotations?.any { it.name == "Ptr" } == true
+        val flatPtrBase = if (isPtrExt) "${typeFlatName(pointerBase).removeSuffix("_$pointerBase")}_Ptr_${pointerBase}" else typeFlatName(pointerBase)
         val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
-        return "${typeFlatName(pointerBase)}_$method($allArgs)"
+        return "${flatPtrBase}_$method($allArgs)"
     }
 
     // Interface method dispatch → d.vt->method(data_ptr, args)
@@ -1978,6 +1987,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val effectiveDecl = methodDecl ?: genericExtDecl
         val isExtFun = effectiveDecl?.receiver != null
         val isPtrRecv = effectiveDecl?.receiver?.annotations?.any { it.name == "Ptr" } == true
+        val flatBase = if (isPtrRecv) "${vClassInfo.flatName.removeSuffix("_${vClassInfo.baseName}")}_Ptr_${vClassInfo.baseName}" else vClassInfo.flatName
         val nullableRecv = hasNullableReceiverExt(recvType ?: "", method)
         val selfArg = if (nullableRecv) {
             val recvName = (dot.obj as? NameExpr)?.name
@@ -2017,9 +2027,9 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
         // Nullable return: use out-pointer pattern
         if (methodDecl?.returnType?.nullable == true) {
-            return genNullableMethodCall(vClassInfo.baseName, "${vClassInfo.flatName}_$fnPrefix", allArgs, methodDecl)
+            return genNullableMethodCall(vClassInfo.baseName, "${flatBase}_$fnPrefix", allArgs, methodDecl)
         }
-        return "${vClassInfo.flatName}_$fnPrefix($allArgs)"
+        return "${flatBase}_$fnPrefix($allArgs)"
     }
     // Object / Companion method
     val vDotObjInfo = resolveDotObjInfo(dot)
