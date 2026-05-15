@@ -18,7 +18,6 @@ import com.bitsycore.ktc.types.KtcType
  *   - "Int?" for nullable values (uses Optional struct)
  *   - "Vec2*" for @Ptr-annotated pointer types
  *   - "IntArray" for Array<Int>, "Vec2Array" for Array<Vec2>
- *   - "Pair_Int_String", "Triple_A_B_C", "Tuple_A_B_..."
  *   - "Fun(P1,P2)->R" for function types
  *
  * ## Main entry points:

@@ -740,8 +740,16 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         // String literals are emitted as raw C strings (not ktc_core_str wrapped)
         if (e.callee.obj is NameExpr && e.callee.obj.name == "c" && lookupVar(e.callee.obj.name) == null) {
             val cFnName = e.callee.name
+            // Route malloc/free/realloc through tracking wrappers when mem-track enabled
+            val fnName = when {
+                memTrack && cFnName == "malloc" -> "ktc_core_malloc"
+                memTrack && cFnName == "free" -> "ktc_core_free"
+                memTrack && cFnName == "realloc" -> "ktc_core_realloc"
+                else -> cFnName
+            }
             val argStr = e.args.joinToString(", ") { genCArg(it.expr) }
-            return "$cFnName($argStr)"
+            val extra = if (memTrack && cFnName in setOf("malloc", "free", "realloc")) ", ${ktSrc()}" else ""
+            return "$fnName($argStr$extra)"
         }
         // Nested class constructor: Outer.Inner(...) or A.B.C(...) → flat name
         fun flattenDotCallee(callee: Expr): String? {
@@ -1515,7 +1523,14 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     }
                 }
             } else {
-                parts += expr
+                // Auto-cast any pointer to AnyPtr / Byte* (for freeMem, reallocMem, etc.)
+                val argKtc = inferExprTypeKtc(arg.expr)
+                val argKtcCore = (argKtc as? KtcType.Nullable)?.inner ?: argKtc
+                if (paramType == "void*" || (paramType == "Byte*" && argKtcCore is KtcType.Ptr)) {
+                    parts += "(void*)($expr)"
+                } else {
+                    parts += expr
+                }
             }
             argIdx++
         }
@@ -1747,6 +1762,25 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         preStmts += "if ($t) memcpy($t, $recv, sizeof($elemC) * (size_t)($lenExpr));"
         preStmts += "ktc_Int ${t}\$len = $lenExpr;"
         return t
+    }
+    // Array / RawArray .resizeWith(allocator, newSize) → allocator-based realloc
+    if (method == "resizeWith" && recvTypeKtc != null && recvTypeKtc.isArrayLike && args.size >= 2) {
+        val elemC = arrayElementCTypeKtc(recvTypeKtc)
+        val allocExpr = genExpr(args[0].expr)
+        val newSizeExpr = genExpr(args[1].expr)
+        val t = tmp()
+        val allocObjName = (args[0].expr as? NameExpr)?.name
+        val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
+        val allocInit = if (isAllocObj) {
+            "${typeFlatName(allocObjName!!)}_as_Allocator(&$allocExpr)"
+        } else { allocExpr }
+        val dataField = ifaceDataName(allocObjName ?: "Heap")
+        preStmts += "ktc_std_Allocator $t = $allocInit;"
+        preStmts += "$elemC* ${t}_ptr = ($elemC*)${t}.vt->reallocMem((void*)&${t}.${dataField}, $recv, sizeof($elemC) * (size_t)($newSizeExpr));"
+        // Array<T> has $len companion; RawArray<T> does not
+        val isRawArray = recvTypeKtc.asArr == null && recvTypeKtc is KtcType.Ptr
+        if (!isRawArray) preStmts += "ktc_Int ${t}_ptr\$len = $newSizeExpr;"
+        return "${t}_ptr"
     }
     // Array pointer .get(i) → recv[i] and .set(i,v) → recv[i] = v
     if ((method == "get" || method == "set") && recvTypeKtc != null && recvTypeKtc.isArrayLike) {

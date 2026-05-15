@@ -1,3 +1,4 @@
+#define KTC_MEM_TRACK
 #include "ktc_core.h"
 #include <math.h>
 
@@ -616,7 +617,7 @@ void ktc_core_sb_append_float(ktc_StrBuf* sb, ktc_Float v) {
     ktc_core_sb_append_str(sb, (ktc_String){vBuf, vLen});
 }
 
-/* Kotlin-like double formatting:
+/** Kotlin-like double formatting:
  * - shortest representation that round-trips
  * - always has a decimal digit (1.0 not 1)
  * - strips trailing zeros (3.5 not 3.500000)
@@ -752,6 +753,124 @@ ktc_Bool ktc_core_str_toDoubleOrNull(ktc_String s, ktc_Double* out) {
     *out = (ktc_Double)vVal;
     return true;
 }
+
+// ══════════════════════════════════════════════════════════════════
+// MARK: Memory Tracking (shared across all translation units)
+// ══════════════════════════════════════════════════════════════════
+
+#ifdef KTC_MEM_TRACK
+
+#ifndef KTC_MEM_MAX
+#define KTC_MEM_MAX 8192
+#endif
+
+typedef struct {
+    void*           ptr;
+    ktc_ULong       size;
+    const ktc_Char* file;
+    ktc_Int         line;
+    ktc_Bool        active;
+} ktc_MemRecord;
+
+static ktc_MemRecord ktc_core_mem_records[KTC_MEM_MAX];
+static ktc_Int   ktc_core_mem_count  = 0;
+static ktc_Int   ktc_core_mem_allocs = 0;
+static ktc_Int   ktc_core_mem_frees  = 0;
+static ktc_ULong ktc_core_mem_bytes  = 0;
+
+static void ktc_core_mem_record_alloc(void* p, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    ktc_core_mem_allocs++;
+    ktc_core_mem_bytes += sz;
+    if (ktc_core_mem_count < KTC_MEM_MAX)
+        ktc_core_mem_records[ktc_core_mem_count++] = (ktc_MemRecord){p, sz, file, line, true};
+}
+
+void* ktc_core_malloc(ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    void* p = (malloc)(sz);
+    ktc_core_mem_record_alloc(p, sz, file, line);
+    return p;
+}
+
+void* ktc_core_calloc(ktc_ULong n, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    void* p = (calloc)(n, sz);
+    ktc_core_mem_record_alloc(p, n * sz, file, line);
+    return p;
+}
+
+void* ktc_core_realloc(void* old, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    for (ktc_Int i = ktc_core_mem_count - 1; i >= 0; i--) {
+        if (ktc_core_mem_records[i].ptr == old && ktc_core_mem_records[i].active) {
+            ktc_core_mem_records[i].active = false;
+            ktc_core_mem_bytes -= ktc_core_mem_records[i].size;
+            ktc_core_mem_frees++;
+            break;
+        }
+    }
+    void* p = (realloc)(old, sz);
+    ktc_core_mem_record_alloc(p, sz, file, line);
+    return p;
+}
+
+void ktc_core_free(void* p, const ktc_Char* file, ktc_Int line) {
+    if (!p) return;
+    for (ktc_Int i = ktc_core_mem_count - 1; i >= 0; i--) {
+        if (ktc_core_mem_records[i].ptr == p && ktc_core_mem_records[i].active) {
+            ktc_core_mem_records[i].active = false;
+            ktc_core_mem_bytes -= ktc_core_mem_records[i].size;
+            ktc_core_mem_frees++;
+            (free)(p);
+            return;
+        }
+    }
+    printf("[mem] WARNING: free(%p) unknown pointer at %s:%d\n", p, file, line);
+    ktc_core_mem_frees++;
+    (free)(p);
+}
+
+void ktc_core_mem_report(void) {
+    ktc_Int   leaks        = 0;
+    ktc_ULong leaked_bytes = 0;
+    printf("\n====== ktc memory report ======\n");
+    printf("  total allocs : %d\n", ktc_core_mem_allocs);
+    printf("  total frees  : %d\n", ktc_core_mem_frees);
+    printf("  balance      : %d\n", ktc_core_mem_allocs - ktc_core_mem_frees);
+    for (ktc_Int i = 0; i < ktc_core_mem_count; i++) {
+        if (ktc_core_mem_records[i].active) {
+            if (leaks == 0) printf("\n  LEAKS:\n");
+            printf("    %p  %6zu bytes  %s:%d\n",
+                ktc_core_mem_records[i].ptr, (size_t)ktc_core_mem_records[i].size,
+                ktc_core_mem_records[i].file, ktc_core_mem_records[i].line);
+            leaks++;
+            leaked_bytes += ktc_core_mem_records[i].size;
+        }
+    }
+    if (leaks == 0)
+        printf("  status       : OK, no leaks\n");
+    else
+        printf("  leaked       : %d allocs, %zu bytes\n", leaks, (size_t)leaked_bytes);
+    printf("===============================\n");
+}
+
+#else
+
+void* ktc_core_malloc(ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    (void)file; (void)line;
+    return (malloc)(sz);
+}
+
+void ktc_core_free(void* p, const ktc_Char* file, ktc_Int line) {
+    (void)file; (void)line;
+    (free)(p);
+}
+
+void* ktc_core_realloc(void* old, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    (void)file; (void)line;
+    return (realloc)(old, sz);
+}
+
+void ktc_core_mem_report(void) {}
+
+#endif /* KTC_MEM_TRACK */
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Initialization

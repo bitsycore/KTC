@@ -25,11 +25,11 @@ fun <T> newArray(size: Int = 100) : @Ptr Array<T> {
 fun main(args: Array<String>) {
 
 	val array = newArray<Int>(5)
-	defer HeapFree(array)
+	defer Heap.freeMem(array)
 	val array2 = newArray<Int>()
-	defer HeapFree(array2)
+	defer Heap.freeMem(array2)
 	val array3 = newArray<Int>(180)
-	defer HeapFree(array3)
+	defer Heap.freeMem(array3)
 
 	println("Sizeof array: ${array.size}")
 	if (array.size != 5) error("FAIL array.size=${array.size}")
@@ -40,7 +40,7 @@ fun main(args: Array<String>) {
 
 	val listVec = HeapAlloc<ArrayList<Vec2>>(8)
 	if (listVec == null) return
-	defer HeapFree(listVec)
+	defer Heap.freeMem(listVec)
 	val v2 = listVec.value()
 	defer {
 		v2.dispose()
@@ -115,5 +115,5 @@ fun main(args: Array<String>) {
 	if (v.size != 0) error("FAIL size after clear=${v.size}")
 
 	v.dispose()
-	HeapFree(list)
+	Heap.freeMem(list)
 }

@@ -149,9 +149,9 @@ class HashMap<K, V>(private var capacity: Int) : MutableMap<K, V> {
 				this.put(oldKeys[i], oldVals[i])
 			}
 		}
-		HeapFree(oldKeys)
-		HeapFree(oldVals)
-		HeapFree(oldOcc)
+		Heap.freeMem(oldKeys)
+		Heap.freeMem(oldVals)
+		Heap.freeMem(oldOcc)
 	}
 
 	override operator fun iterator(): Iterator<Pair<K, V>> {
@@ -159,9 +159,9 @@ class HashMap<K, V>(private var capacity: Int) : MutableMap<K, V> {
 	}
 
 	override fun dispose() {
-		HeapFree(keys)
-		HeapFree(vals)
-		HeapFree(occ)
+		Heap.freeMem(keys)
+		Heap.freeMem(vals)
+		Heap.freeMem(occ)
 	}
 
 }

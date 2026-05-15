@@ -1,6 +1,6 @@
 package ktc.std
 
-class ListIterator<T>(@Ptr val buf: Array<T>) : Iterator<T> {
+class ListIterator<T>(val buf: @Ptr Array<T>) : Iterator<T> {
 
 	var idx: Int = 0
 
@@ -32,23 +32,21 @@ interface MutableList<T> : List<T> {
 
 class ArrayList<T>(capacity: Int) : MutableList<T> {
 
-	private var buf: @Ptr Array<T> = HeapAlloc<Array<T>>(if (capacity > 0) capacity else 4)!!
+	private var buf: @Ptr Array<T> = Array<T>.allocWith(Heap, if (capacity > 0) capacity else 4)!!
 
 	override var size: Int = 0
 		private set
 
-	override fun add(value: T) {
-		if (size >= buf.size) {
-			val newSize = if (buf.size > 0) buf.size * 2 else 4
-			buf = HeapArrayResize<Array<T>>(buf, newSize)!!
-		}
-		buf[size] = value
-		size = size + 1
-	}
+    override fun add(value: T) {
+        if (size >= buf.size) {
+            val newSize = if (buf.size > 0) buf.size * 2 else 4
+            buf = buf.resizeWith(Heap, newSize)
+        }
+        buf[size] = value
+        size = size + 1
+    }
 
-	override operator fun get(index: Int): T {
-		return buf[index]
-	}
+	override operator fun get(index: Int): T = buf[index]
 
 	override operator fun set(index: Int, value: T) {
 		buf[index] = value
@@ -85,9 +83,9 @@ class ArrayList<T>(capacity: Int) : MutableList<T> {
 		return ListIterator<T>(buf)
 	}
 
-	override fun dispose() {
-		HeapFree(buf)
-	}
+    override fun dispose() {
+		Heap.freeMem(buf)
+    }
 
 }
 

@@ -93,6 +93,7 @@ class HeapUnitTest : TranspilerTestBase() {
         )
         r.sourceContains("free(p)")
     }
+    }
 
     // ── Typed raw pointer ────────────────────────────────────────────
 
@@ -275,7 +276,7 @@ class HeapUnitTest : TranspilerTestBase() {
             """
             val h = HeapAlloc<Vec2>(10.0f, 20.0f)!!
             val v = h.value()
-            HeapFree(h)
+            Heap.freeMem(h)
             println(v.x)
             """.trimIndent(),
             decls = vec2Decl

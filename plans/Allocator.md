@@ -295,7 +295,7 @@ For generic classes, monomorphized versions follow the same pattern.
 |-----|-----|-----------|
 | `HeapAlloc<T>(args)` | `T.allocWith(alloc, args...)` | Static factory: allocate + place |
 | `toHeap()` | `instance.copyWith(alloc)` | Copy existing value into allocator |
-| `HeapFree(ptr)` | `allocator.free(ptr)` | Direct method on allocator instance |
+| `Heap.freeMem(ptr)` | `allocator.free(ptr)` | Direct method on allocator instance |
 | `HeapArrayZero` | `allocator.allocZeroed(...)` | Via allocator, not global |
 
 ## 6. Open Questions

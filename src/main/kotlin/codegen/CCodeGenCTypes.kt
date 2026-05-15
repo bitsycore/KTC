@@ -248,6 +248,9 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
         val vTypeArgNames = t.typeArgs.map { resolveTypeNameStr(it) } // resolved type argument names
         return mangledGenericName(t.name, vTypeArgNames)
     }
+    // Intrinsic AnyPtr → void* (accepts any @Ptr type, used for freeMem etc.)
+    if (t.name == "AnyPtr" && t.typeArgs.isEmpty())
+        return if (t.annotations.any { it.name == "Ptr" }) "void*" else "void*"
     // Intrinsic StringBuffer → ktc_StrBuf (only when no user-defined class named StringBuffer)
     if (t.name == "StringBuffer" && t.typeArgs.isEmpty()
         && !classes.containsKey("StringBuffer") && !genericClassDecls.containsKey("StringBuffer")
@@ -268,7 +271,7 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
         && !interfaces.containsKey(t.name)
         && !genericClassDecls.containsKey(t.name)
         && !genericIfaceDecls.containsKey(t.name)
-        && t.name !in setOf("Array", "Tuple", "RawArray")
+        && t.name !in setOf("Array", "RawArray", "AnyPtr")
     )
         codegenError("Unknown type '${t.name}<...>'. Use @Ptr for pointer types.")
     // Resolve nested class within current object/class scope (e.g., Context → Sha256$Context)
@@ -554,6 +557,7 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
         when (bn) {
             "Any" -> "ktc_Any"
             "ktc_StrBuf" -> "ktc_StrBuf"
+            "AnyPtr" -> "void*"
             else -> ktc.toCType()
         }
     }

@@ -21,12 +21,12 @@ class SubConfig {
 
     override fun dispose() {
         println("AutoFreeing SubConfig")
-        HeapFree(buffer)
-        HeapFree(buffer2)
-        HeapFree(buffer3)
-        HeapFree(rawBuffer)
-        HeapFree(rawBuffer2)
-        HeapFree(rawBuffer3)
+        Heap.freeMem(buffer)
+        Heap.freeMem(buffer2)
+        Heap.freeMem(buffer3)
+        Heap.freeMem(rawBuffer)
+        Heap.freeMem(rawBuffer2)
+        Heap.freeMem(rawBuffer3)
     }
 
 }
@@ -45,12 +45,12 @@ object Config2 {
 
     override fun dispose() {
         println("AutoFreeing Config2")
-        HeapFree(buffer)
-        HeapFree(buffer2)
-        HeapFree(buffer3)
-        HeapFree(rawBuffer)
-        HeapFree(rawBuffer2)
-        HeapFree(rawBuffer3)
+        Heap.freeMem(buffer)
+        Heap.freeMem(buffer2)
+        Heap.freeMem(buffer3)
+        Heap.freeMem(rawBuffer)
+        Heap.freeMem(rawBuffer2)
+        Heap.freeMem(rawBuffer3)
         sub.dispose()
     }
 

@@ -1,21 +1,21 @@
 package ktc.std
 
 interface Allocator {
-    fun allocMem(size: Int): @Ptr Byte
-    fun freeMem(ptr: @Ptr Byte)
-    fun reallocMem(ptr: @Ptr Byte, newSize: Int): @Ptr Byte
+    fun allocMem(size: Int): AnyPtr
+    fun freeMem(ptr: AnyPtr)
+    fun reallocMem(ptr: AnyPtr, newSize: Int): AnyPtr
 }
 
 object Heap : Allocator {
-    override fun allocMem(size: Int): @Ptr Byte {
+    override fun allocMem(size: Int): AnyPtr {
         return c.malloc(size)
     }
 
-    override fun freeMem(ptr: @Ptr Byte) {
+    override fun freeMem(ptr: AnyPtr) {
         c.free(ptr)
     }
 
-    override fun reallocMem(ptr: @Ptr Byte, newSize: Int): @Ptr Byte {
+    override fun reallocMem(ptr: AnyPtr, newSize: Int): AnyPtr {
         return c.realloc(ptr, newSize)
     }
 }

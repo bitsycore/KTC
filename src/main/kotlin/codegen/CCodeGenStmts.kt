@@ -613,12 +613,16 @@ internal fun CCodeGen.isAllocArrayCall(e: Expr?): Boolean {
 internal fun extractAllocSize(e: Expr?): Expr? {
     val inner = if (e is NotNullExpr) e.expr else e
     if (inner !is CallExpr) return null
+    // allocWith: Array/RawArray.allocWith(allocator, size) → size is 2nd arg (index 1)
+    if (inner.callee is DotExpr && inner.callee.name == "allocWith" && inner.args.size >= 2) {
+        return inner.args[1].expr
+    }
     val name = (inner.callee as? NameExpr)?.name ?: return null
     return when (name) {
-        "HeapAlloc" -> inner.args.firstOrNull()?.expr  // HeapAlloc<Array<T>>(size)
-        "HeapArrayZero" -> inner.args.firstOrNull()?.expr  // HeapArrayZero<Array<T>>(size)
-        "HeapArrayResize" -> inner.args.getOrNull(1)?.expr   // HeapArrayResize<Array<T>>(ptr, size)
-        "heapArrayOf" -> IntLit(inner.args.size.toLong())  // heapArrayOf<T>(...) — size = number of args
+        "HeapAlloc" -> inner.args.firstOrNull()?.expr
+        "HeapArrayZero" -> inner.args.firstOrNull()?.expr
+        "HeapArrayResize" -> inner.args.getOrNull(1)?.expr
+        "heapArrayOf" -> IntLit(inner.args.size.toLong())
         else -> null
     }
 }

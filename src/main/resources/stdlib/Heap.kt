@@ -29,6 +29,6 @@ fun <T> HeapArrayResize(inPtr: @Ptr Array<T>, inN: Int): @Ptr Array<T> = error("
 
 /**
 Free a heap allocation obtained from HeapAlloc.
-Usage: HeapFree(ptr)
+Usage: Heap.freeMem(ptr)
 */
-fun HeapFree(inPtr: @Ptr Any) = error("Transpiler intrinsic")
+fun Heap.freeMem(inPtr: @Ptr Any) = error("Transpiler intrinsic")

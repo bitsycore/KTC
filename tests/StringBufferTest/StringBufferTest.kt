@@ -72,7 +72,7 @@ fun main() {
     var sb8 = StringBuffer(bufHeap, 0)
     val s8 = p8.toString(sb8)
     if (s8 != "Point(x=7)") error("FAIL 8: heapBufferToString")
-    HeapFree(bufHeap)
+    Heap.freeMem(bufHeap)
 
     // 9. StringBuffer field access
     val buf9 = CharArray(128)
