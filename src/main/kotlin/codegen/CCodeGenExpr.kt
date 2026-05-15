@@ -194,11 +194,11 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
         val vIsClassInfo = classInfoFor(targetKtc)                                    // non-null if target is a user class
         val vIsIfaceInfo = ifaceInfoFor(targetKtc)                                    // non-null if target is an interface
         val check = if (vIsClassInfo != null) {
-            "${inner}${memOp}__type_id == ${vIsClassInfo.flatName}_TYPE_ID"
+            "${inner}${memOp}__base.typeId == ${vIsClassInfo.flatName}_TYPE_ID"
         } else if (vIsIfaceInfo != null) {
             val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
             if (impls.isEmpty()) "false"
-            else impls.joinToString(" || ") { "${inner}${memOp}__type_id == ${typeFlatName(it)}_TYPE_ID" }
+            else impls.joinToString(" || ") { "${inner}${memOp}__base.typeId == ${typeFlatName(it)}_TYPE_ID" }
         } else if (targetKtc.isArrayLike) {
             if (exprKtcCore != null && exprKtcCore.isArrayLike) {
                 if (exprKtcCore.toInternalStr == target) "true" else "false"
@@ -218,7 +218,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
                 } else "false"
             } else {
                 val typeId = getTypeId(target)
-                "(${inner}${memOp}__type_id == $typeId)"
+                    "(${inner}${memOp}__base.typeId == $typeId)"
             }
         } else {
             "/* is-check: unknown type '${target}' */ true"
@@ -240,14 +240,14 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
             val optCType = optCTypeName("$target?")
             val memOp = if (isPtr) "->" else "."
             val check = if (vCastClassInfo != null) {
-                "${inner}${memOp}__type_id == ${vCastClassInfo.flatName}_TYPE_ID"
+                "${inner}${memOp}__base.typeId == ${vCastClassInfo.flatName}_TYPE_ID"
             } else if (vCastIfaceInfo != null) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
-                else impls.joinToString(" || ") { "${inner}${memOp}__type_id == ${typeFlatName(it)}_TYPE_ID" }
+                else impls.joinToString(" || ") { "${inner}${memOp}__base.typeId == ${typeFlatName(it)}_TYPE_ID" }
             } else if (targetKtc !is KtcType.User || targetKtc.kind != KtcType.UserKind.Class) {
                 val typeId = getTypeId(target)
-                "${inner}${memOp}__type_id == $typeId"
+                "${inner}${memOp}__base.typeId == $typeId"
             } else {
                 "true"
             }
@@ -1357,7 +1357,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                         dataRef = "&$tVal"
                     }
                     val tAny = tmp()
-                    preStmts += "ktc_Any $tAny = {$typeId, (void*)$dataRef};"
+                    preStmts += "ktc_Any $tAny = {{$typeId}, (void*)$dataRef};"
                     parts += "&$tAny"
                 } else {
                     parts += expr
@@ -1433,7 +1433,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                         val ct = cTypeStr(argType)
                         val tVal = tmp()
                         preStmts += "$ct $tVal = $expr;"
-                        parts += "(ktc_Any){$typeId, (void*)&$tVal}"
+                        parts += "(ktc_Any){{$typeId}, (void*)&$tVal}"
                     }
                 }
             } else {

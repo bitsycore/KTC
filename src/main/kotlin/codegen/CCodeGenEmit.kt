@@ -88,6 +88,12 @@ internal fun CCodeGen.emitClass(d: ClassDecl) {
     }
     // Implicit hashCode — default returns __type_id, data classes hash all fields
     emitImplicitHashCode(cName, ci, d.isData, isGenericClass = false, d.members)
+    // Implicit toString for non-data classes (data classes already emitted above)
+    if (!d.isData && d.members.none { it is FunDecl && it.name == "toString" }) {
+        emitDefaultToString(d.name, cName, ci)
+    }
+    // Any vtable + _as_Any wrapper
+    emitAnyVtable(cName, ci.name, d.isData, d.members, isGenericClass = false)
     popScope()
     currentClass = null
 
@@ -183,6 +189,12 @@ internal fun CCodeGen.emitGenericClass(templateDecl: ClassDecl, mangledName: Str
     if (templateDecl.isData && templateDecl.members.none { it is FunDecl && it.name == "toString" }) {
         emitDataClassToString(templateDecl.name, cName, ci)
     }
+    // Implicit toString for non-data classes
+    if (!templateDecl.isData && templateDecl.members.none { it is FunDecl && it.name == "toString" }) {
+        emitDefaultToString(ci.name, cName, ci)
+    }
+    // Any vtable + _as_Any wrapper
+    emitAnyVtable(cName, ci.name, templateDecl.isData, templateDecl.members, isGenericClass = true)
     popScope()
     currentClass = null
 
@@ -999,12 +1011,12 @@ internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
         // Fallback: no known implementors — keep void* obj
         hdr.appendLine("    void* obj;")
     } else if (impls.size == 1) {
-        // Single implementor: no union needed, use plain field; __type_id read through the concrete struct
-        hdr.appendLine("    ktc_Int __type_id;")
+        // Single implementor: no union needed, use plain field
+        hdr.appendLine("    ktc_core_AnySupertype __base;")
         hdr.appendLine("    ${typeFlatName(impls[0])} ${ifaceDataName(impls[0])};")
     } else {
-        // Multiple implementors: tagged union — __type_id mirrors the concrete struct's first field
-        hdr.appendLine("    ktc_Int __type_id;")
+        // Multiple implementors: tagged union
+        hdr.appendLine("    ktc_core_AnySupertype __base;")
         hdr.appendLine("    union {")
         for (className in impls) {
             hdr.appendLine("        ${typeFlatName(className)} ${ifaceDataName(className)};")
@@ -1078,7 +1090,7 @@ internal fun CCodeGen.emitImplicitHashCode(cName: String, ci: ClassInfo, isData:
         impl.appendLine("    uintptr_t p = (uintptr_t)\$self; p >>= 4;")
         impl.appendLine("    ktc_UInt lo = (ktc_UInt)p;")
         impl.appendLine("    ktc_UInt hi = (ktc_UInt)(p >> 32);")
-        impl.appendLine("    ktc_UInt t = (ktc_UInt)\$self->__type_id * 0x9e3779b1U;")
+        impl.appendLine("    ktc_UInt t = (ktc_UInt)\$self->__base.typeId * 0x9e3779b1U;")
         impl.appendLine("    ktc_UInt h = lo ^ hi ^ t;")
         impl.appendLine("    h = ktc_core_fmix32(h);")
         impl.appendLine("    return (ktc_Int)h;")
@@ -1090,10 +1102,79 @@ internal fun CCodeGen.emitImplicitHashCode(cName: String, ci: ClassInfo, isData:
     impl.appendLine()
 }
 
+/** Emit default toString for non-data classes: ClassName@hexHashCode */
+internal fun CCodeGen.emitDefaultToString(ktName: String, cName: String, ci: ClassInfo) {
+    val maxLen = toStringMaxLen(ci.name)
+    val maxComment = if (maxLen != null) " // max output: $maxLen chars" else ""
+    hdr.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb);${maxComment}")
+    impl.appendLine("void ${cName}_toString($cName* \$self, ktc_StrBuf* sb) {")
+    if (maxLen != null && maxLen <= 64) {
+        impl.appendLine("    ktc_Char buf[$maxLen];")
+        impl.appendLine("    snprintf(buf, $maxLen, \"%s@%x\", \"${ktDisplayName(ktName)}\", ${cName}_hashCode(\$self));")
+        impl.appendLine("    ktc_core_sb_append_cstr(sb, buf);")
+    } else {
+        impl.appendLine("    ktc_Char buf[64];")
+        impl.appendLine("    snprintf(buf, 64, \"%s@%x\", \"${ktDisplayName(ktName)}\", ${cName}_hashCode(\$self));")
+        impl.appendLine("    ktc_core_sb_append_cstr(sb, buf);")
+    }
+    impl.appendLine("}")
+    impl.appendLine()
+}
+
+/**
+ * Emit Any vtable + _as_Any wrapper for a class.
+ * Generates thin wrapper functions (void* → ClassName*) for vtable dispatch,
+ * a static ktc_core_AnyVt, and a ClassName_as_Any function.
+ */
+internal fun CCodeGen.emitAnyVtable(cName: String, className: String, isData: Boolean, members: List<Decl>, isGenericClass: Boolean) {
+    // Thin wrapper functions for type-erased vtable dispatch
+    impl.appendLine("// ── Any vtable wrappers ──")
+    // toString wrapper
+    impl.appendLine("static void ${cName}_toString_any(void* \$self, ktc_StrBuf* sb) {")
+    impl.appendLine("    ${cName}_toString(($cName*)\$self, sb);")
+    impl.appendLine("}")
+    // hashCode wrapper
+    impl.appendLine("static ktc_Int ${cName}_hashCode_any(void* \$self) {")
+    impl.appendLine("    return ${cName}_hashCode(($cName*)\$self);")
+    impl.appendLine("}")
+    // equals wrapper
+    impl.appendLine("static ktc_Bool ${cName}_equals_any(void* \$self, void* other) {")
+    impl.appendLine("    return ${cName}_equals(*($cName*)\$self, *($cName*)other);")
+    impl.appendLine("}")
+    // dispose wrapper
+    if (members.none { it is FunDecl && it.name == "dispose" }) {
+        impl.appendLine("static void ${cName}_dispose_any(void* \$self) {")
+        impl.appendLine("    (void)\$self;")
+        impl.appendLine("}")
+    } else {
+        impl.appendLine("static void ${cName}_dispose_any(void* \$self) {")
+        impl.appendLine("    ${cName}_dispose(($cName*)\$self);")
+        impl.appendLine("}")
+    }
+    impl.appendLine()
+
+    // Static vtable
+    hdr.appendLine("extern const ktc_core_AnyVt ${cName}_AnyVt;")
+    impl.appendLine("const ktc_core_AnyVt ${cName}_AnyVt = {")
+    impl.appendLine("    (void (*)(void*, void*)) ${cName}_toString_any,")
+    impl.appendLine("    (ktc_Int (*)(void*)) ${cName}_hashCode_any,")
+    impl.appendLine("    (ktc_Bool (*)(void*, void*)) ${cName}_equals_any,")
+    impl.appendLine("    (void (*)(void*)) ${cName}_dispose_any,")
+    impl.appendLine("};")
+    impl.appendLine()
+
+    // _as_Any wrapper
+    hdr.appendLine("ktc_Any ${cName}_as_Any($cName* \$self);")
+    impl.appendLine("ktc_Any ${cName}_as_Any($cName* \$self) {")
+    impl.appendLine("    return (ktc_Any){{.typeId = ${cName}_TYPE_ID}, (void*)\$self, &${cName}_AnyVt};")
+    impl.appendLine("}")
+    impl.appendLine()
+}
+
 /** KtcType-based overload. */
 /** Emit struct field declarations (shared by emitClass and emitGenericClass). */
 internal fun CCodeGen.emitStructFields(ci: ClassInfo) {
-    hdr.appendLine("    ktc_Int __type_id;")
+    hdr.appendLine("    ktc_core_AnySupertype __base;")
     for ((name, type) in ci.props)
         {
         val vFieldName = if (name in ci.privateProps) "PRIV_$name" else name  // C field name
@@ -1130,10 +1211,10 @@ internal fun CCodeGen.emitConstructorBody(cName: String, ci: ClassInfo) {
     hdr.appendLine("$cName ${cName}_primaryConstructor($vParamDecl);")
     impl.appendLine("$cName ${cName}_primaryConstructor($vParamDecl) {")
     if (ci.bodyProps.isEmpty() && ci.ctorPlainParams.isEmpty() && ci.ctorProps.none { resolveTypeName(it.typeRef).isArrayLike || it.typeRef.nullable }) {
-        impl.appendLine("    return ($cName){${cName}_TYPE_ID, ${ci.ctorProps.joinToString(", ") { it.name }}};")
+        impl.appendLine("    return ($cName){{${cName}_TYPE_ID}, ${ci.ctorProps.joinToString(", ") { it.name }}};")
     } else {
         impl.appendLine("    $cName \$self = {0};")
-        impl.appendLine("    \$self.__type_id = ${cName}_TYPE_ID;")
+        impl.appendLine("    \$self.__base.typeId = ${cName}_TYPE_ID;")
         for (vProp in ci.ctorProps) {
             val vName = vProp.name
             val vType = vProp.typeRef
@@ -1240,8 +1321,8 @@ internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String 
 
     is KtcType.Str -> "ktc_core_hash_str($valueExpr)"
     is KtcType.Ptr -> "((ktc_Int)(uintptr_t)($valueExpr))"
-    is KtcType.User, is KtcType.Arr, is KtcType.Nullable -> "($valueExpr).__type_id"
-    else -> "($valueExpr).__type_id"
+    is KtcType.User, is KtcType.Arr, is KtcType.Nullable -> "($valueExpr).__base.typeId"
+    else -> "($valueExpr).__base.typeId"
 }
 
 /**
@@ -1254,7 +1335,7 @@ internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String 
 internal fun CCodeGen.ifaceAsInit(cIface: String, cClass: String, className: String, ifaceName: String): String {
     val impls = interfaceImplementors[ifaceName]
     val dataName = ifaceDataName(className)
-    val typeIdField = ".__type_id = ${cClass}_TYPE_ID"
+    val typeIdField = ".__base.typeId = ${cClass}_TYPE_ID"
     return when {
         impls.isNullOrEmpty() -> "($cIface){(void*)\$self, &${cClass}_${ifaceName}_vt}"
         impls.size == 1 -> "($cIface){$typeIdField, .$dataName = *\$self, .vt = &${cClass}_${ifaceName}_vt}"

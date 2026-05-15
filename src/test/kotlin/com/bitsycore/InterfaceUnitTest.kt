@@ -101,7 +101,7 @@ class InterfaceUnitTest : TranspilerTestBase() {
 
     @Test fun typeIdFieldInStruct() {
         val r = transpileMain("val c = Circle(5.0f)", decls = shapeDecls)
-        r.headerContains("ktc_Int __type_id;")
+        r.headerContains("ktc_core_AnySupertype __base;")
     }
 
     @Test fun typeIdInConstructor() {
@@ -121,7 +121,7 @@ class InterfaceUnitTest : TranspilerTestBase() {
                 if (c is Circle) println("yes")
             }
         """)
-        r.sourceContains("c.__type_id == test_Main_Circle_TYPE_ID")
+        r.sourceContains("c.__base.typeId == test_Main_Circle_TYPE_ID")
     }
 
     @Test fun isCheckInterface() {
@@ -133,7 +133,7 @@ class InterfaceUnitTest : TranspilerTestBase() {
                 if (s is Shape) println("yes")
             }
         """)
-        r.sourceContains("__type_id == test_Main_Circle_TYPE_ID ||")
+        r.sourceContains("__base.typeId == test_Main_Circle_TYPE_ID ||")
     }
 
     @Test fun negatedIsCheck() {
@@ -146,7 +146,7 @@ class InterfaceUnitTest : TranspilerTestBase() {
                 if (b !is Circle) println("no")
             }
         """)
-        r.sourceContains("!(b.__type_id == test_Main_Circle_TYPE_ID)")
+        r.sourceContains("!(b.__base.typeId == test_Main_Circle_TYPE_ID)")
     }
 
     // ── Override enforcement ──────────────────────────────────────────

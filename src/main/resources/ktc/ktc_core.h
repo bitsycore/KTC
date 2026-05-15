@@ -104,8 +104,23 @@ ktc_UInt ktc_core_rand_range(ktc_ULong* state, ktc_ULong* inc, ktc_UInt bound);
 /** Pass-by-value for variable-size arrays; functions copy data to a local stack buffer. */
 typedef struct { ktc_Int __array_type_id; ktc_Int size; void* data; } ktc_ArrayTrampoline;
 
-/** Type-erased fat pointer for `Any` — identity checks only, no vtable. */
-typedef struct { ktc_Int __type_id; void* data; } ktc_Any;
+/** Base "supertype" embedded at the start of every class/object/interface struct.
+ *  Mirrors Kotlin's implicit `Any` superclass. */
+typedef struct {
+    ktc_Int typeId;
+} ktc_core_AnySupertype;
+
+/** Vtable for Any methods — one static instance per class.
+ *  All methods take void* for type-erased dispatch. */
+typedef struct ktc_core_AnyVt {
+    void      (*toString)(void* $self, void* sb);
+    ktc_Int   (*hashCode)(void* $self);
+    ktc_Bool  (*equals)(void* $self, void* other);
+    void      (*dispose)(void* $self);
+} ktc_core_AnyVt;
+
+/** Type-erased fat pointer for `Any` — identity checks + vtable dispatch. */
+typedef struct { ktc_core_AnySupertype __base; void* data; const ktc_core_AnyVt* vt; } ktc_Any;
 
 typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 

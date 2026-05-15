@@ -279,7 +279,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                     flushPreStmts(ind)
                     val tVal = tmp()
                     impl.appendLine("$ind$initCT $tVal = $expr;")
-                    impl.appendLine("$ind$mutComment$ct ${s.name} = (ktc_Any){$typeId, (void*)&$tVal};")
+                    impl.appendLine("$ind$mutComment$ct ${s.name} = (ktc_Any){{$typeId}, (void*)&$tVal};")
                 }
             }
             // ── Non-nullable ──
@@ -334,7 +334,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                         val initCT = cTypeStr(initType)
                         val tVal = tmp()
                         impl.appendLine("$ind$initCT $tVal = $expr;")
-                        impl.appendLine("$ind$mutComment$qual$ct ${s.name} = (ktc_Any){$typeId, (void*)&$tVal};")
+                        impl.appendLine("$ind$mutComment$qual$ct ${s.name} = (ktc_Any){{$typeId}, (void*)&$tVal};")
                     } else {
                         impl.appendLine("$ind$mutComment$qual$ct ${s.name} = $expr;")
                     }
@@ -933,7 +933,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                 val tVal = tmp()
                 impl.appendLine("$ind$ct $tVal = $expr;")
                 emitDeferredBlocks(ind)
-                impl.appendLine("${ind}return (ktc_Any){$typeId, (void*)&$tVal};")
+                impl.appendLine("${ind}return (ktc_Any){{$typeId}, (void*)&$tVal};")
             }
             return
         }
@@ -1025,7 +1025,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                         val ct = cTypeStr(srcTy)
                         val tVal = tmp()
                         impl.appendLine("$ind$ct $tVal = $expr;")
-                        impl.appendLine("${ind}return (ktc_Any){$typeId, (void*)&$tVal};")
+                        impl.appendLine("${ind}return (ktc_Any){{$typeId}, (void*)&$tVal};")
                     } else {
                         impl.appendLine("${ind}return $expr;")
                     }
@@ -1784,11 +1784,11 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
             val exprKtcCore = (exprKtc as? KtcType.Nullable)?.inner ?: exprKtc
             val memOp = if (exprKtcCore is KtcType.Ptr) "->" else "."
             val check = if (classes.containsKey(target)) {
-                "$subj${memOp}__type_id == ${typeFlatName(target)}_TYPE_ID"
+                "$subj${memOp}__base.typeId == ${typeFlatName(target)}_TYPE_ID"
             } else if (interfaces.containsKey(target)) {
                 val impls = classInterfaces.filter { (_, ifaces) -> target in ifaces }.keys
                 if (impls.isEmpty()) "false"
-                else impls.joinToString(" || ") { "$subj${memOp}__type_id == ${typeFlatName(it)}_TYPE_ID" }
+                else impls.joinToString(" || ") { "$subj${memOp}__base.typeId == ${typeFlatName(it)}_TYPE_ID" }
             } else if (targetKtc.isArrayLike) {
                 if (exprKtcCore != null && exprKtcCore.isArrayLike) {
                     if (exprKtcCore.toInternalStr == target) "true" else "false"
@@ -1806,7 +1806,7 @@ internal fun CCodeGen.genWhenCond(c: WhenCond, subject: Expr?): String {
                     } else "false"
                 } else {
                     val typeId = getTypeId(target)
-                    "($subj${memOp}__type_id == $typeId)"
+                    "($subj${memOp}__base.typeId == $typeId)"
                 }
             } else {
                 "/* is ${c.type.name} */ true"
