@@ -320,7 +320,8 @@ function Run-Suite {
 
 		# Transpile
 		if ($vBm -eq "gradle") {
-			$vAs  = ($vKts -join " ") + " -o $vOut" + (if ($vExA) { " $vExA" } else { "" })
+			$vExAStr = if ($vExA) { " $vExA" } else { "" }
+			$vAs  = ($vKts -join " ") + " -o $vOut$vExAStr"
 			$vTO  = & "$vRt\gradlew.bat" run --quiet --args="$vAs" 2>&1
 		} else {
 			$vAJ  = if ($vBm -eq "proguard") { $vRJ } else { $vJar }
@@ -469,7 +470,20 @@ class TuiRunner {
 		$e    = [char]27
 		$kCy  = "${e}[36m";  $kYl = "${e}[33m";  $kGr  = "${e}[90m"
 		$kWh  = "${e}[97m";  $kRst = "${e}[0m"
-		$vW   = [Math]::Min(62, [Console]::WindowWidth - 2)
+		$vW     = [Math]::Min(62, [Console]::WindowWidth - 2)
+		$vTermH = [Console]::WindowHeight
+
+		# Guard: 27 fixed lines + 2-line margin = 29 minimum rows required
+		$kMinH = 29
+		if ($vTermH -lt $kMinH) {
+			$vSb = [System.Text.StringBuilder]::new(512)
+			[void]$vSb.Append("${e}[H")
+			$vMsg = " Terminal too small — need at least $kMinH rows (current: $vTermH)"
+			[void]$vSb.Append($kYl + $vMsg.PadRight($vW + 2) + $kRst + "`n")
+			for ($vi = 1; $vi -lt $vTermH; $vi++) { [void]$vSb.Append("".PadRight($vW + 2) + "`n") }
+			[Console]::Write($vSb.ToString())
+			return
+		}
 
 		$vSep = "─" * $vW
 		$vDSp = "═" * $vW
@@ -496,7 +510,7 @@ class TuiRunner {
 		}
 
 		$vSb = [System.Text.StringBuilder]::new(4096)
-		[void]$vSb.Append("${e}[H")    # move to top-left of alternate screen
+		[void]$vSb.Append("${e}[H")    # move to top-left; blank-fill below replaces [2J without flicker
 
 		# Title
 		[void]$vSb.Append($kCy + (" KotlinToC Test Runner  ─  Interactive Mode  [$vCompiler]").PadRight($vW + 2) + $kRst + "`n")
@@ -558,6 +572,12 @@ class TuiRunner {
 		[void]$vSb.Append("".PadRight($vW + 2) + "`n")
 		[void]$vSb.Append($kGr + (" $vDSp") + $kRst + "`n")
 		[void]$vSb.Append($kGr + $vHints.PadRight($vW + 2) + $kRst + "`n")
+		# Fill rows below the 27 fixed lines with blanks — overwrites sub-screen residue without [2J flicker.
+		# Use $vTermH-28 lines with newlines + 1 line without: total newlines = $vTermH-1, no terminal scroll.
+		$vBlankLine = "".PadRight($vW + 2) + "`n"
+		$vFillCount = [Math]::Max(0, $vTermH - 28)
+		for ($vi = 0; $vi -lt $vFillCount; $vi++) { [void]$vSb.Append($vBlankLine) }
+		[void]$vSb.Append("".PadRight($vW + 2))
 
 		[Console]::Write($vSb.ToString())
 	}
@@ -696,7 +716,10 @@ class TuiRunner {
 								if ($this.Idx -lt $this.Builds.Count - 1) { $this.Idx++ }
 								else { $this.Section = "compiler"; $this.Idx = 0 }
 							}
-							"compiler" { if ($this.Idx -lt $this.Fields.Count - 1) { $this.Idx++ } }
+							"compiler" {
+							if ($this.Idx -lt $this.Fields.Count - 1) { $this.Idx++ }
+							else { $this.Section = "tests"; $this.Idx = 0 }
+						}
 						}
 						$this.Render()
 					}

@@ -489,7 +489,17 @@ run_interactive() {
 		# opts-hdr(1) sep(1) 4opts(4) blank(1)=7  build-hdr(1) sep(1) 3builds(3) blank(1)=6
 		# compiler-hdr(1) sep(1) 2fields(2) blank(1)=5  dsep(1) hints(1)=2  total=27
 
-		tput cup 0 0 2>/dev/null || printf '\033[H'
+		# Guard: 27 fixed lines + 2-line margin = 29 minimum rows required
+		if (( vTermH < 29 )); then
+			local vBlank; printf -v vBlank '%*s' "$vW" ''; vBlank="${vBlank// / }"
+			printf '\033[H'
+			printf " ${YELLOW}Terminal too small — need at least 29 rows (current: %d)${NC}\n" "$vTermH"
+			local vi; for (( vi=1; vi<vTermH; vi++ )); do printf '%s\n' "$vBlank"; done
+			return
+		fi
+
+		# Move to top-left; blank-fill below replaces [2J without flicker
+		printf '\033[H'
 		local vSep; printf -v vSep '%*s' "$vW" ''; vSep="${vSep// /─}"
 		local vDSep; printf -v vDSep '%*s' "$vW" ''; vDSep="${vDSep// /═}"
 
@@ -577,6 +587,13 @@ run_interactive() {
 		printf "\n"
 		printf " ${GRAY}%s${NC}\n" "$vDSep"
 		printf " ${GRAY}%s${NC}\n" "$vHints"
+		# Fill rows below the 27 fixed lines with blanks — overwrites sub-screen residue without [2J flicker.
+		# Use (vTermH-28) lines with newlines + 1 without: total newlines = vTermH-1, no terminal scroll.
+		local vBlankRow; printf -v vBlankRow '%*s' "$vW" ''; vBlankRow="${vBlankRow// / }"
+		local vFillCount=$(( vTermH - 28 ))
+		(( vFillCount < 0 )) && vFillCount=0 || true
+		local vi; for (( vi=0; vi < vFillCount; vi++ )); do printf '%s\n' "$vBlankRow"; done
+		printf '%s' "$vBlankRow"
 
 	}
 
@@ -715,7 +732,9 @@ run_interactive() {
 					build)
 						if (( vIdx < 2 )); then ((vIdx++))
 						else vSection="compiler"; vIdx=0; fi ;;
-					compiler) (( vIdx < 1 )) && ((vIdx++)) || true ;;
+					compiler)
+						if (( vIdx < 1 )); then ((vIdx++))
+						else vSection="tests"; vIdx=0; fi ;;
 				esac
 				adjust_view; render_tui ;;
 			right)
