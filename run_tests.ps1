@@ -2,575 +2,850 @@
 #
 # run_tests.ps1 — Build the transpiler, then run all integration tests.
 #
-# Each subdirectory under tests/ is one test. All .kt files in the directory
-# are transpiled together. Adding a new directory = adding a new test.
-#
 # Usage:
-#   .\run_tests.ps1                              # Run all tests
-#   .\run_tests.ps1 -Skip unit                  # Skip unit tests, only run integration
-#   .\run_tests.ps1 -Run HashMapTest             # Transpile, compile & run a single test
-#   .\run_tests.ps1 -Run "Test1,Test2"           # Run multiple tests
-#   .\run_tests.ps1 -Run game -MemTrack          # Run single test with --mem-track
-#   .\run_tests.ps1 -Run game -Ast               # Run single test with --ast
-#   .\run_tests.ps1 -Run game -DumpSemantics     # Run single test with --dump-semantics
-#   .\run_tests.ps1 -Run game -MemTrack -TranspilerArgs "--other"  # Combined
-#   .\run_tests.ps1 -Clean                       # Remove all test out/ directories
-#   .\run_tests.ps1 -Rebuild                     # Force clean rebuild of JAR + run all tests
-#   .\run_tests.ps1 -Rebuild -Run Utf8Test       # Rebuild JAR + run single test
-#   .\run_tests.ps1 -Compiler clang              # Use clang instead of auto-detected gcc
-#   .\run_tests.ps1 -CCArgs "-j14 -O2"           # Pass flags to the C compiler
-#   .\run_tests.ps1 -Build Jar                   # Build fat JAR (default)
-#   .\run_tests.ps1 -Build Gradle                # Build using gradle "run"
-#   .\run_tests.ps1 -Build Proguard              # Build and use the ProGuard-optimized JAR
+#   .\run_tests.ps1                            # Run all tests
+#   .\run_tests.ps1 -Interactive               # Interactive TUI: pick tests and options
+#   .\run_tests.ps1 -Run HashMapTest           # Run a single test (verbose)
+#   .\run_tests.ps1 -Run "Test1,Test2"         # Run multiple tests
+#   .\run_tests.ps1 -Skip unit                 # Skip unit tests
+#   .\run_tests.ps1 -Run game -MemTrack        # With --mem-track
+#   .\run_tests.ps1 -Run game -Ast             # With --ast
+#   .\run_tests.ps1 -Run game -DumpSemantics   # With --dump-semantics
+#   .\run_tests.ps1 -Clean                     # Remove all test out/ directories
+#   .\run_tests.ps1 -Rebuild                   # Force clean rebuild of JAR
+#   .\run_tests.ps1 -Compiler clang            # Override C compiler
+#   .\run_tests.ps1 -CCArgs "-j14 -O2"         # Extra C compiler flags
+#   .\run_tests.ps1 -Build Jar                 # Build fat JAR (default)
+#   .\run_tests.ps1 -Build Gradle              # Use gradle run (no JAR)
+#   .\run_tests.ps1 -Build Proguard            # ProGuard-optimized JAR
 #
+
 param(
-    [string]$Skip = "",
-    [string]$Run  = "",
-    [string]$TranspilerArgs = "",
-    [string]$Compiler = "",
-    [string]$CCArgs = "",
-    [switch]$Help,
-    [switch]$MemTrack,
-    [switch]$Ast,
-    [switch]$DumpSemantics,
-    [switch]$Clean,
-    [switch]$Rebuild,
-    [string]$Build = "Jar"
+	[string]$Run            = "",
+	[string]$Skip           = "",
+	[string]$TranspilerArgs = "",
+	[string]$Compiler       = "",
+	[string]$CCArgs         = "",
+	[string]$Build          = "Jar",
+	[switch]$Interactive,
+	[switch]$MemTrack,
+	[switch]$Ast,
+	[switch]$DumpSemantics,
+	[switch]$Clean,
+	[switch]$Rebuild,
+	[switch]$Help
 )
 
-$BuildMode = $Build.ToLowerInvariant()
+# ==================
+# MARK: Setup
+# ==================
 
 if ($Help) {
-    $inUsage = $false
-    Get-Content $PSCommandPath | ForEach-Object {
-        $line = $_.TrimStart()
-        if ($line -match '^# Usage:') { $inUsage = $true }
-        elseif ($inUsage -and $line -notmatch '^#') { $inUsage = $false; return }
-        if ($inUsage) { Write-Host ($line -replace '^# ?', '') }
-    }
-    exit 0
+	$vInUsage = $false
+	Get-Content $PSCommandPath | ForEach-Object {
+		$vLine = $_.TrimStart()
+		if ($vLine -match '^# Usage:')                { $vInUsage = $true }
+		elseif ($vInUsage -and $vLine -notmatch '^#') { $vInUsage = $false; return }
+		if ($vInUsage) { Write-Host ($vLine -replace '^# ?', '') }
+	}
+	exit 0
 }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$root = $PSScriptRoot
-$jar        = "$root\build\libs\KotlinToC-1.0-SNAPSHOT.jar"
-$releaseJar = "$root\build\libs\KotlinToC-1.0-SNAPSHOT-release.jar"
-$testsDir = "$root\tests"
 
-# ── Clean mode ──────────────────────────────────────────────────
+$vRoot       = $PSScriptRoot                                             # project root
+$vJar        = "$vRoot\build\libs\KotlinToC-1.0-SNAPSHOT.jar"          # standard fat JAR
+$vReleaseJar = "$vRoot\build\libs\KotlinToC-1.0-SNAPSHOT-release.jar"  # ProGuard JAR
+$vTestsDir   = "$vRoot\tests"                                            # integration tests root
+$vBuildMode  = $Build.ToLowerInvariant()                                # normalized build mode string
+$vGradleJar  = if ($Rebuild) { "clean jar" } else { "jar" }            # gradle JAR task
+$vGradlePro  = if ($Rebuild) { "clean proguard" } else { "proguard" }  # gradle ProGuard task
+
+# ==================
+# MARK: Output helpers
+# ==================
+
+function Write-Pass { param($msg) Write-Host "  PASS " -ForegroundColor Green      -NoNewline; Write-Host $msg }
+function Write-Fail { param($msg) Write-Host "  FAIL " -ForegroundColor Red        -NoNewline; Write-Host $msg }
+function Write-Info { param($msg) Write-Host "  ---- " -ForegroundColor Cyan       -NoNewline; Write-Host $msg }
+function Write-Sec  { param($msg) Write-Host "`n=== $msg ===" -ForegroundColor Yellow }
+function Write-Cmd  { param($msg) Write-Host "  `$ "   -ForegroundColor DarkYellow -NoNewline; Write-Host $msg -ForegroundColor White }
+
+<#
+Formats elapsed milliseconds as "123ms" or "1.23s".
+#>
+function Format-Ms {
+	param([long]$inMs)
+	if ($inMs -lt 1000) { return "${inMs}ms" }
+	return ("{0:N2}s" -f ($inMs / 1000.0))
+}
+
+# ==================
+# MARK: Clean
+# ==================
+
 if ($Clean) {
-    Write-Host "Cleaning per-test output directories..." -ForegroundColor Cyan
-    $cleaned = 0
-    Get-ChildItem $testsDir -Directory | ForEach-Object {
-        $outPath = Join-Path $_.FullName "out"
-        if (Test-Path $outPath) {
-            Remove-Item $outPath -Recurse -Force
-            Write-Host "  removed $outPath" -ForegroundColor DarkGray
-            $cleaned++
-        }
-    }
-    Write-Host "Cleaned $cleaned test output directories." -ForegroundColor Green
-    exit 0
+	Write-Host "Cleaning per-test output directories..." -ForegroundColor Cyan
+	$vCleaned = 0
+	Get-ChildItem $vTestsDir -Directory | ForEach-Object {
+		$vOut = Join-Path $_.FullName "out"
+		if (Test-Path $vOut) {
+			Remove-Item $vOut -Recurse -Force
+			Write-Host "  removed $vOut" -ForegroundColor DarkGray
+			$vCleaned++
+		}
+	}
+	Write-Host "Cleaned $vCleaned test output directories." -ForegroundColor Green
+	exit 0
 }
 
-# Gradle build command — optionally force clean rebuild
-$gradleJarCmd  = if ($Rebuild) { "clean jar" } else { "jar" }
-$gradleProCmd  = if ($Rebuild) { "clean proguard" } else { "proguard" }
+# ==================
+# MARK: Compiler detection
+# ==================
 
-# ── Colors ──────────────────────────────────────────────────────
-function Write-Pass($msg) { Write-Host "  PASS " -ForegroundColor Green  -NoNewline; Write-Host $msg }
-function Write-Fail($msg) { Write-Host "  FAIL " -ForegroundColor Red    -NoNewline; Write-Host $msg }
-function Write-Info($msg) { Write-Host "  ---- " -ForegroundColor Cyan   -NoNewline; Write-Host $msg }
-function Write-Warn($msg) { Write-Host "  WARN " -ForegroundColor Yellow -NoNewline; Write-Host $msg -ForegroundColor Yellow }
-function Write-Section($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Yellow }
-function Write-Cmd($msg) { Write-Host "  `$ " -ForegroundColor DarkYellow -NoNewline; Write-Host $msg -ForegroundColor White }
-
-function Format-Ms([long]$ms) {
-    if ($ms -lt 1000) { return "${ms}ms" }
-    return ("{0:N2}s" -f ($ms / 1000.0))
+<#
+Returns $inPreferred if set, otherwise the first of gcc/clang/cl found on PATH.
+#>
+function Find-CCompiler {
+	param([string]$inPreferred)
+	if ($inPreferred -ne "") { return $inPreferred }
+	foreach ($vCand in @("gcc", "clang", "cl")) {
+		if (Get-Command $vCand -ErrorAction SilentlyContinue) { return $vCand }
+	}
+	return $null
 }
 
-# ── Detect C compiler ───────────────────────────────────────────
-$CC = if ($Compiler -ne "") { $Compiler } else { $null }
-if (-not $CC) {
-    foreach ($candidate in @("gcc", "clang", "cl")) {
-        if (Get-Command $candidate -ErrorAction SilentlyContinue) {
-            $CC = $candidate
-            break
-        }
-    }
-}
-if (-not $CC) {
-    Write-Host "ERROR: No C compiler found (tried gcc, clang, cl). Install one and add to PATH." -ForegroundColor Red
-    exit 1
+# ==================
+# MARK: Build
+# ==================
+
+<#
+Builds the transpiler JAR (or ProGuard release JAR) via Gradle. Exits on failure.
+#>
+function Invoke-Build {
+	if ($vBuildMode -eq "gradle") { return }
+	if ($vBuildMode -eq "proguard") {
+		Write-Sec "Building ProGuard release JAR"
+		Write-Cmd "gradlew $vGradlePro"
+		& "$vRoot\gradlew.bat" $vGradlePro.Split(' ') 2>&1
+		if ($LASTEXITCODE -ne 0 -or -not (Test-Path $vReleaseJar)) {
+			Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red; exit 1
+		}
+		Write-Pass "Built $vReleaseJar"
+	} else {
+		Write-Sec "Building transpiler JAR"
+		Write-Cmd "gradlew $vGradleJar"
+		& "$vRoot\gradlew.bat" $vGradleJar.Split(' ') 2>&1
+		if ($LASTEXITCODE -ne 0 -or -not (Test-Path $vJar)) {
+			Write-Host "ERROR: JAR build failed" -ForegroundColor Red; exit 1
+		}
+		Write-Pass "Built $vJar"
+	}
 }
 
-# ── Helper: transpile, compile, run one test directory ──────────
-# Returns $true on success, $false on failure.
-# When $Verbose is set, prints step-by-step output (for -Run mode).
+# ==================
+# MARK: Test execution (verbose, single-test mode)
+# ==================
+
+<#
+Transpiles, compiles, and runs one test directory with verbose step-by-step output.
+Returns $true on success. Used by -Run mode and interactive single-test selection.
+#>
 function Invoke-Test {
-    param(
-        [string]$Name,
-        [string]$TestSrcDir,
-        [string]$TestOutDir,
-        [bool]$Verbose = $false,
-        [string]$ExtraArgs = ""
-    )
+	param(
+		[string]$inName,
+		[string]$inSrcDir,
+		[string]$inOutDir,
+		[string]$inExtraArgs = ""
+	)
 
-    $sw = [Diagnostics.Stopwatch]::StartNew()
+	$vSw = [Diagnostics.Stopwatch]::StartNew()
 
-    # ── Collect .kt files ───────────────────────────────────────
-    $ktFiles = @(Get-ChildItem "$TestSrcDir\*.kt" | Select-Object -ExpandProperty FullName)
-    if ($ktFiles.Count -eq 0) {
-        if ($Verbose) { Write-Fail "$Name — no .kt files in $TestSrcDir" } else { Write-Fail "$Name (no .kt files)" }
-        return $false
-    }
+	# Collect .kt sources
+	$vKtFiles = @(Get-ChildItem "$inSrcDir\*.kt" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+	if ($vKtFiles.Count -eq 0) { Write-Fail "$inName — no .kt files in $inSrcDir"; return $false }
+	if (Test-Path $inOutDir) { Remove-Item $inOutDir -Recurse -Force }
+	New-Item $inOutDir -ItemType Directory -Force | Out-Null
+	Write-Info "Input:      $(($vKtFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' ')"
+	Write-Info "Output dir: $inOutDir"
 
-    if (Test-Path $TestOutDir) { Remove-Item $TestOutDir -Recurse -Force }
-    New-Item $TestOutDir -ItemType Directory -Force | Out-Null
+	# ── Transpile ────────────────────────────────────────────────
+	Write-Sec "Transpile"
+	$vKtNames = ($vKtFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
+	$vSuffix  = if ($inExtraArgs) { " $inExtraArgs" } else { "" }
+	if ($vBuildMode -eq "gradle") {
+		$vKtStr = ($vKtFiles -join " ") + " -o $inOutDir$vSuffix"
+		Write-Cmd "gradlew run --args=`"$vKtNames -o $inOutDir$vSuffix`""
+		$vTOut  = & "$vRoot\gradlew.bat" run --quiet --args="$vKtStr" 2>&1
+	} else {
+		$vActive = if ($vBuildMode -eq "proguard") { $vReleaseJar } else { $vJar }
+		$vTArgs  = @("-jar", $vActive) + $vKtFiles + @("-o", $inOutDir)
+		if ($inExtraArgs) { $vTArgs += ($inExtraArgs -split '\s+') }
+		$vLabel  = if ($vBuildMode -eq "proguard") { "KotlinToC-release.jar" } else { "KotlinToC.jar" }
+		Write-Cmd "java -jar $vLabel $vKtNames -o $inOutDir$vSuffix"
+		$vTOut  = & java @vTArgs 2>&1
+	}
+	$vTExit = $LASTEXITCODE;  $vTMs = $vSw.ElapsedMilliseconds;  $vSw.Restart()
+	Write-Host ""
+	foreach ($vLine in $vTOut) {
+		if ("$vLine" -match 'warning:') { Write-Host "  $vLine" -ForegroundColor Yellow }
+		else                            { Write-Host "  $vLine" }
+	}
+	Write-Host ""
+	if ($vTExit -ne 0) { Write-Fail "Transpilation failed (exit $vTExit)"; return $false }
+	Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host "Transpilation succeeded  " -NoNewline
+	Write-Host "(ktc: $(Format-Ms $vTMs))" -ForegroundColor DarkGray
 
-    if ($Verbose) {
-        Write-Info "Input: $($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) "
-        Write-Info "Output dir: $TestOutDir"
-    }
+	# ── Discover .c files ────────────────────────────────────────
+	$vKtcDir = "$inOutDir\ktc"
+	$vCSrcs  = @()
+	if (Test-Path $vKtcDir -PathType Container) {
+		$vCore = "$vKtcDir\ktc_core.c"
+		if (Test-Path $vCore) { $vCSrcs += $vCore }
+		Get-ChildItem "$vKtcDir\*.c" -ErrorAction SilentlyContinue |
+			Where-Object { $_.Name -ne "ktc_core.c" } | Sort-Object Name |
+			ForEach-Object { $vCSrcs += $_.FullName }
+	}
+	Get-ChildItem "$inOutDir\*.c" -ErrorAction SilentlyContinue | Sort-Object Name |
+		ForEach-Object { $vCSrcs += $_.FullName }
+	if ($vCSrcs.Count -eq 0) { Write-Fail "No .c files generated"; return $false }
 
-    # ── Transpile ───────────────────────────────────────────────
-    if ($Verbose) { Write-Section "Transpile" }
-    if ($BuildMode -eq "gradle") {
-        $ktArgs = ($ktFiles -join " ") + " -o $TestOutDir"
-        if ($ExtraArgs -ne "") { $ktArgs += " $ExtraArgs" }
-        $transpileArgs = @("run", "--quiet", "--args=$ktArgs")
-    } else {
-        $activeJar = if ($BuildMode -eq "proguard") { $releaseJar } else { $jar }
-        $transpileArgs = @("-jar", $activeJar) + $ktFiles + @("-o", $TestOutDir)
-        if ($ExtraArgs -ne "") { $transpileArgs += ($ExtraArgs -split '\s+') }
-    }
-    if ($Verbose) {
-        $ktNames = ($ktFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ' '
-        if ($BuildMode -eq "gradle") {
-            $cmdLine = "gradlew run --args=`"$ktNames -o $TestOutDir`""
-        } else {
-            $jarLabel = if ($BuildMode -eq "proguard") { "KotlinToC-release.jar" } else { "KotlinToC.jar" }
-            $cmdLine = "java -jar $jarLabel $ktNames -o $TestOutDir"
-        }
-        if ($ExtraArgs -ne "") { $cmdLine += " $ExtraArgs" }
-        Write-Cmd $cmdLine
-        Write-Host ""
-    }
-    if ($BuildMode -eq "gradle") {
-        $transpileOutput = & "$root\gradlew.bat" @transpileArgs 2>&1
-    } else {
-        $transpileOutput = & java @transpileArgs 2>&1
-    }
-    $transpileExit = $LASTEXITCODE
-    $transpileMs = $sw.ElapsedMilliseconds
-    $sw.Restart()
+	# ── Compile ──────────────────────────────────────────────────
+	Write-Sec "Compile"
+	$vExe   = "$inOutDir\$inName.exe"
+	$vCArgs = @("-std=c11", "-o", $vExe)
+	if ($CCArgs) { $vCArgs += ($CCArgs -split '\s+') }
+	$vCArgs += $vCSrcs
+	Write-Cmd "$vCC -std=c11$(if ($CCArgs) { " $CCArgs" }) -o $vExe $($vCSrcs -join ' ')"
+	Write-Host ""
+	$vCOut  = & $vCC @vCArgs 2>&1
+	$vCExit = $LASTEXITCODE;  $vCMs = $vSw.ElapsedMilliseconds;  $vSw.Restart()
+	if ($vCOut) { foreach ($vLine in $vCOut) { Write-Host "  $vLine" -ForegroundColor DarkGray }; Write-Host "" }
+	if ($vCExit -ne 0) { Write-Fail "Compilation failed (exit $vCExit)"; return $false }
+	Write-Host "  PASS " -ForegroundColor Green -NoNewline; Write-Host "Compilation succeeded -> $vExe  " -NoNewline
+	Write-Host "(comp: $(Format-Ms $vCMs))" -ForegroundColor DarkGray
 
-    if ($Verbose) {
-        foreach ($line in $transpileOutput) {
-            if ("$line" -match 'warning:') {
-                Write-Host "  $line" -ForegroundColor Yellow
-            } else {
-                Write-Host "  $line"
-            }
-        }
-        Write-Host ""
-    }
-    if ($transpileExit -ne 0) {
-        if ($Verbose) { Write-Fail "Transpilation failed (exit code $transpileExit)" }
-        else {
-            Write-Fail "$Name (transpile failed)"
-            Write-Host "       $transpileOutput" -ForegroundColor DarkGray
-        }
-        return $false
-    }
-    if ($Verbose) {
-        Write-Host "  PASS " -ForegroundColor Green -NoNewline
-        Write-Host "Transpilation succeeded  " -NoNewline
-        Write-Host "(ktc: $(Format-Ms $transpileMs))" -ForegroundColor DarkGray
-    }
+	# Generated files listing
+	Write-Sec "Generated Files"
+	Get-ChildItem $inOutDir -Recurse -File | Sort-Object FullName | ForEach-Object {
+		$vRel  = $_.FullName.Substring($inOutDir.Length + 1)
+		$vSize = if ($_.Length -ge 1024) { "{0:N1} KB" -f ($_.Length / 1024) } else { "$($_.Length) B" }
+		Write-Info ("{0,-30} {1,10}" -f $vRel, $vSize)
+	}
 
-    # ── Discover generated .c files ─────────────────────────────
-    $ktcSubDir = "$TestOutDir\ktc"
-    $cSources = @()
-    if (Test-Path $ktcSubDir -PathType Container) {
-        $ktcIntrinsic = "$ktcSubDir\ktc_intrinsic.c"
-        if (Test-Path $ktcIntrinsic) { $cSources += $ktcIntrinsic }
-        Get-ChildItem "$ktcSubDir\*.c" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -ne "ktc_intrinsic.c" } |
-            Sort-Object Name |
-            ForEach-Object { $cSources += $_.FullName }
-    }
-    Get-ChildItem "$TestOutDir\*.c" -ErrorAction SilentlyContinue |
-        Sort-Object Name |
-        ForEach-Object { $cSources += $_.FullName }
+	# ── Run ──────────────────────────────────────────────────────
+	Write-Sec "Run"
+	Write-Cmd $vExe; Write-Host ""
+	$vROut  = & $vExe 2>&1
+	$vRExit = $LASTEXITCODE;  $vRMs = $vSw.ElapsedMilliseconds;  $vSw.Stop()
+	$vROut | ForEach-Object { Write-Host "  $_" }
+	Write-Host ""
+	if ($vRExit -ne 0) { Write-Fail "Runtime error (exit $vRExit)"; return $false }
 
-    if ($cSources.Count -eq 0) {
-        if ($Verbose) { Write-Fail "No .c files generated" } else { Write-Fail "$Name (no .c files generated)" }
-        return $false
-    }
-
-    $exePath = "$TestOutDir\$Name.exe"
-
-    # ── Compile ─────────────────────────────────────────────────
-    if ($Verbose) { Write-Section "Compile" }
-    $compileArgs = @("-std=c11", "-o", $exePath)
-    if ($CCArgs -ne "") { $compileArgs += ($CCArgs -split '\s+') }
-    $compileArgs += $cSources
-    if ($Verbose) {
-        $extraFlags = if ($CCArgs -ne "") { " $CCArgs" } else { "" }
-        Write-Cmd "$CC -std=c11$extraFlags -o $exePath $($cSources -join ' ')"
-        Write-Host ""
-    }
-    $compileOutput = & $CC @compileArgs 2>&1
-    $compileExit = $LASTEXITCODE
-    $compileMs = $sw.ElapsedMilliseconds
-    $sw.Restart()
-
-    if ($Verbose -and $compileOutput) {
-        foreach ($line in $compileOutput) { Write-Host "  $line" -ForegroundColor DarkGray }
-        Write-Host ""
-    }
-    if ($compileExit -ne 0) {
-        if ($Verbose) { Write-Fail "Compilation failed (exit code $compileExit)" }
-        else {
-            Write-Fail "$Name (compile failed)"
-            $compileOutput | ForEach-Object { Write-Host "       $_" -ForegroundColor DarkGray }
-        }
-        return $false
-    }
-    if ($Verbose) {
-        Write-Host "  PASS " -ForegroundColor Green -NoNewline
-        Write-Host "Compilation succeeded -> $exePath  " -NoNewline
-        Write-Host "(comp: $(Format-Ms $compileMs))" -ForegroundColor DarkGray
-    }
-
-    # ── Generated files (verbose only) ──────────────────────────
-    if ($Verbose) {
-        Write-Section "Generated Files"
-        Get-ChildItem "$TestOutDir" -Recurse -File | Sort-Object FullName | ForEach-Object {
-            $relName = $_.FullName.Substring($TestOutDir.Length + 1)
-            $size = if ($_.Length -ge 1024) { "{0:N1} KB" -f ($_.Length / 1024) } else { "$($_.Length) B" }
-            Write-Info ("{0,-30} {1,10}" -f $relName, $size)
-        }
-    }
-
-    # ── Run ─────────────────────────────────────────────────────
-    if ($Verbose) { Write-Section "Run" }
-    if ($Verbose) {
-        Write-Cmd $exePath
-        Write-Host ""
-    }
-    $runOutput = & $exePath 2>&1
-    $runExit = $LASTEXITCODE
-    $runMs = $sw.ElapsedMilliseconds
-    $sw.Stop()
-
-    if ($Verbose) {
-        $runOutput | ForEach-Object { Write-Host "  $_" }
-        Write-Host ""
-    }
-    if ($runExit -ne 0) {
-        if ($Verbose) { Write-Fail "Runtime error (exit code $runExit)" }
-        else {
-            Write-Fail "$Name (runtime error, exit code $runExit)"
-            $runOutput | ForEach-Object { Write-Host "       $_" -ForegroundColor DarkGray }
-        }
-        return $false
-    }
-    $hasLeak = ($runOutput | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
-    if ($Verbose) {
-        if ($hasLeak) {
-            Write-Host "  PASS " -ForegroundColor DarkYellow -NoNewline
-            Write-Host "Program exited - memory leaks detected  " -NoNewline
-            Write-Host "LEAK  " -ForegroundColor Red -NoNewline
-            Write-Host "(run: $(Format-Ms $runMs))" -ForegroundColor DarkGray
-        } else {
-            Write-Host "  PASS " -ForegroundColor Green -NoNewline
-            Write-Host "Program exited successfully (code 0)  " -NoNewline
-            Write-Host "(run: $(Format-Ms $runMs))" -ForegroundColor DarkGray
-        }
-    }
-    if (-not $Verbose) {
-        if ($hasLeak) {
-            Write-Host "  PASS " -ForegroundColor DarkYellow -NoNewline
-            Write-Host "$Name  " -NoNewline
-            Write-Host "LEAK" -ForegroundColor Red
-        } else { Write-Pass $Name }
-    }
-    return $true
+	$vLeak = ($vROut | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
+	if ($vLeak) {
+		Write-Host "  PASS " -ForegroundColor DarkYellow -NoNewline
+		Write-Host "Program exited - memory leaks detected  " -NoNewline
+		Write-Host "LEAK  " -ForegroundColor Red -NoNewline
+	} else {
+		Write-Host "  PASS " -ForegroundColor Green -NoNewline
+		Write-Host "Program exited successfully (code 0)  " -NoNewline
+	}
+	Write-Host "(run: $(Format-Ms $vRMs))" -ForegroundColor DarkGray
+	return $true
 }
 
-# ════════════════════════════════════════════════════════════════
-# Single/multi-test run mode: -Run <Name> or -Run "A,B,C"
-# ════════════════════════════════════════════════════════════════
+# ==================
+# MARK: Suite (parallel)
+# ==================
+
+<#
+Runs a list of tests in parallel, prints results, returns summary object.
+NOTE: ForEach-Object -Parallel cannot call outer-scope functions,
+so the per-test logic is inlined in the parallel scriptblock below.
+#>
+function Run-Suite {
+	param(
+		[string[]]$inTestNames,  # list of test directory names to run
+		[string]$inExtraArgs  = "",
+		[bool]$inSkipUnit     = $false
+	)
+
+	$vPassed = 0           # number of passing integration tests
+	$vFailed = 0           # number of failing tests (unit + integration)
+	$vFailedNames = @()    # names of all failed tests
+
+	# Unit tests
+	if (-not $inSkipUnit) {
+		Write-Sec "Unit Tests (gradlew test)"
+		& "$vRoot\gradlew.bat" test --quiet 2>&1
+		if ($LASTEXITCODE -eq 0) { Write-Pass "All unit tests passed" }
+		else { Write-Fail "Unit tests had failures"; $vFailed++; $vFailedNames += "unit-tests" }
+	}
+
+	# Integration tests
+	Write-Sec "Integration Tests"
+	if ($inTestNames.Count -eq 0) { Write-Info "No tests to run."; return }
+
+	$vDirs     = @($inTestNames | ForEach-Object { Get-Item "$vTestsDir\$_" })
+	$vThrottle = [Math]::Max(1, [Environment]::ProcessorCount)
+
+	$vResults = $vDirs | ForEach-Object -Parallel {
+		$vDir  = $_                  # current test directory
+		$vName = $vDir.Name          # test name
+		$vOut  = "$($vDir.FullName)\out"
+		$vBm   = $using:vBuildMode
+		$vJar  = $using:vJar
+		$vRJ   = $using:vReleaseJar
+		$vRt   = $using:vRoot
+		$vCC   = $using:vCC
+		$vCCa  = $using:CCArgs
+		$vExA  = $using:inExtraArgs
+
+		function fmtMs([long]$ms) {
+			if ($ms -lt 1000) { "${ms}ms" } else { "{0:N2}s" -f ($ms / 1000.0) }
+		}
+
+		$vSw  = [Diagnostics.Stopwatch]::StartNew()
+
+		# Collect .kt files
+		$vKts = @(Get-ChildItem "$($vDir.FullName)\*.kt" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+		if ($vKts.Count -eq 0) {
+			Write-Host "  FAIL $vName (no .kt files)" -ForegroundColor Red
+			return @{ Name = $vName; Passed = $false }
+		}
+		if (Test-Path $vOut) { Remove-Item $vOut -Recurse -Force -ErrorAction SilentlyContinue }
+		New-Item $vOut -ItemType Directory -Force | Out-Null
+
+		# Transpile
+		if ($vBm -eq "gradle") {
+			$vAs  = ($vKts -join " ") + " -o $vOut" + (if ($vExA) { " $vExA" } else { "" })
+			$vTO  = & "$vRt\gradlew.bat" run --quiet --args="$vAs" 2>&1
+		} else {
+			$vAJ  = if ($vBm -eq "proguard") { $vRJ } else { $vJar }
+			$vTA  = @("-jar", $vAJ) + $vKts + @("-o", $vOut)
+			if ($vExA) { $vTA += $vExA -split '\s+' }
+			$vTO  = & java @vTA 2>&1
+		}
+		$vTEx = $LASTEXITCODE;  $vTMs = $vSw.ElapsedMilliseconds;  $vSw.Restart()
+		$vWrn = @($vTO | Where-Object { "$_" -match 'warning:' })
+		if ($vTEx -ne 0) {
+			Write-Host "  FAIL $vName (transpile failed)" -ForegroundColor Red
+			return @{ Name = $vName; Passed = $false }
+		}
+
+		# Discover .c files
+		$vKD  = "$vOut\ktc";  $vCS = @()
+		if (Test-Path $vKD -PathType Container) {
+			$vCr = "$vKD\ktc_core.c"
+			if (Test-Path $vCr) { $vCS += $vCr }
+			Get-ChildItem "$vKD\*.c" -ErrorAction SilentlyContinue |
+				Where-Object { $_.Name -ne "ktc_core.c" } | Sort-Object Name |
+				ForEach-Object { $vCS += $_.FullName }
+		}
+		Get-ChildItem "$vOut\*.c" -ErrorAction SilentlyContinue | Sort-Object Name |
+			ForEach-Object { $vCS += $_.FullName }
+		if ($vCS.Count -eq 0) {
+			Write-Host "  FAIL $vName (no .c files generated)" -ForegroundColor Red
+			return @{ Name = $vName; Passed = $false }
+		}
+
+		# Compile
+		$vExe = "$vOut\$vName.exe"
+		$vCA  = @("-std=c11", "-o", $vExe)
+		if ($vCCa) { $vCA += $vCCa -split '\s+' }
+		$vCA += $vCS
+		& $vCC @vCA 2>&1 | Out-Null
+		$vCEx = $LASTEXITCODE;  $vCMs = $vSw.ElapsedMilliseconds;  $vSw.Restart()
+		if ($vCEx -ne 0) {
+			Write-Host "  FAIL $vName (compile failed)" -ForegroundColor Red
+			return @{ Name = $vName; Passed = $false }
+		}
+
+		# Run
+		$vRO  = & $vExe 2>&1
+		$vREx = $LASTEXITCODE;  $vRMs = $vSw.ElapsedMilliseconds;  $vSw.Stop()
+		if ($vREx -ne 0) {
+			Write-Host "  FAIL $vName (runtime error, exit $vREx)" -ForegroundColor Red
+			return @{ Name = $vName; Passed = $false }
+		}
+
+		$vLk  = @($vRO | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
+		$e    = [char]27
+		$vTim = "${e}[90mktc: $(fmtMs $vTMs)  comp: $(fmtMs $vCMs)  run: $(fmtMs $vRMs)${e}[0m"
+		if ($vLk) { Write-Host "  ${e}[33mPASS $vName${e}[0m  ${e}[31mLEAK${e}[0m  $vTim" }
+		else      { Write-Host "  ${e}[32mPASS $vName${e}[0m  $vTim" }
+		foreach ($vW in $vWrn) { Write-Host "       $vW" -ForegroundColor Yellow }
+		return @{ Name = $vName; Passed = $true }
+
+	} -ThrottleLimit $vThrottle
+
+	foreach ($vR in $vResults) {
+		if ($vR.Passed) { $vPassed++ } else { $vFailed++; $vFailedNames += $vR.Name }
+	}
+
+	return [PSCustomObject]@{ Passed = $vPassed; Failed = $vFailed; FailedNames = $vFailedNames }
+}
+
+<#
+Prints the final pass/fail summary and exits with the appropriate code.
+#>
+function Show-Summary {
+	param([PSCustomObject]$inResult)
+	Write-Sec "Summary"
+	$vTotal = $inResult.Passed + $inResult.Failed
+	Write-Host "  Total: $vTotal  |  " -NoNewline
+	Write-Host "Passed: $($inResult.Passed)" -ForegroundColor Green -NoNewline
+	Write-Host "  |  " -NoNewline
+	if ($inResult.Failed -gt 0) {
+		Write-Host "Failed: $($inResult.Failed)" -ForegroundColor Red
+		Write-Host ""
+		Write-Host "  Failed tests:" -ForegroundColor Red
+		foreach ($vName in $inResult.FailedNames) { Write-Host "    - $vName" -ForegroundColor Red }
+		exit 1
+	} else {
+		Write-Host "Failed: 0" -ForegroundColor Green
+		exit 0
+	}
+}
+
+# ==================
+# MARK: Interactive TUI
+# ==================
+
+<#
+Interactive checkbox TUI for selecting tests, options, and build mode.
+Sections: TESTS | OPTIONS | BUILD | COMPILER — navigate with ◄► arrows.
+Uses alternate screen buffer and a single buffered write to avoid flicker.
+Returns a selection object or $null on cancel.
+#>
+class TuiRunner {
+
+	[object[]] $Tests      # array of { Name, On }
+	[object[]] $Opts       # array of { Label, Key, On }
+	[object[]] $Builds     # array of { Label, Value, On }
+	[object[]] $Fields     # array of { Label, Key, Value } — editable text fields
+	[string]   $Section    # active section: "tests" | "opts" | "build" | "compiler"
+	[int]      $Idx        # cursor position within the active section
+	[int]      $ViewOff    # first visible test index (scroll offset)
+
+	TuiRunner([string[]]$inNames, [string]$inCC) {
+		$this.Tests  = @($inNames | ForEach-Object { [PSCustomObject]@{ Name = $_; On = $true } })
+		$this.Opts   = @(
+			[PSCustomObject]@{ Label = "Skip Unit Tests  (-Skip unit)";       Key = "SkipUnit";      On = $false },
+			[PSCustomObject]@{ Label = "Memory Tracking  (--mem-track)";      Key = "MemTrack";      On = $false },
+			[PSCustomObject]@{ Label = "Dump AST         (--ast)";            Key = "Ast";           On = $false },
+			[PSCustomObject]@{ Label = "Dump Semantics   (--dump-semantics)"; Key = "DumpSemantics"; On = $false }
+		)
+		$this.Builds = @(
+			[PSCustomObject]@{ Label = "JAR (default)"; Value = "jar";      On = $true  },
+			[PSCustomObject]@{ Label = "Gradle";        Value = "gradle";   On = $false },
+			[PSCustomObject]@{ Label = "ProGuard";      Value = "proguard"; On = $false }
+		)
+		$this.Fields = @(
+			[PSCustomObject]@{ Label = "Compiler"; Key = "Compiler"; Value = $inCC },
+			[PSCustomObject]@{ Label = "CC Args "; Key = "CcArgs";   Value = "" }
+		)
+		$this.Section = "tests"
+		$this.Idx     = 0
+		$this.ViewOff = 0
+	}
+
+	# Clamps cursor index when switching into a new section.
+	[void] ClampIdx() {
+		$vMax = switch ($this.Section) {
+			"tests"    { 0 }  # tests panel is a single entry — sub-screen opened via Space
+			"opts"     { $this.Opts.Count   - 1 }
+			"build"    { $this.Builds.Count - 1 }
+			"compiler" { $this.Fields.Count - 1 }
+		}
+		if ($this.Idx -gt $vMax) { $this.Idx = $vMax }
+	}
+
+	# Renders the full TUI as a single buffered write to eliminate flicker.
+	# Fixed height: 27 lines total — no variable test rows in main screen.
+	[void] Render() {
+		$e    = [char]27
+		$kCy  = "${e}[36m";  $kYl = "${e}[33m";  $kGr  = "${e}[90m"
+		$kWh  = "${e}[97m";  $kRst = "${e}[0m"
+		$vW   = [Math]::Min(62, [Console]::WindowWidth - 2)
+
+		$vSep = "─" * $vW
+		$vDSp = "═" * $vW
+		$vSel = @($this.Tests | Where-Object { $_.On }).Count
+		$vCompiler = ($this.Fields | Where-Object { $_.Key -eq "Compiler" }).Value
+
+		# Build compact 2-line test summary (split at last ", " boundary, truncate with "...")
+		$vMaxSumW  = $vW - 2
+		$vSelNames = @($this.Tests | Where-Object { $_.On } | ForEach-Object { $_.Name })
+		$vSumFull  = if ($vSelNames.Count -eq 0)               { "(none selected)" }
+		             elseif ($vSelNames.Count -eq $this.Tests.Count) { "All $($this.Tests.Count) tests selected" }
+		             else                                        { $vSelNames -join ", " }
+		$vSumLine1 = ""; $vSumLine2 = ""
+		if ($vSumFull.Length -le $vMaxSumW) {
+			$vSumLine1 = $vSumFull
+		} else {
+			$vCutStr   = $vSumFull.Substring(0, [Math]::Min($vSumFull.Length, $vMaxSumW + 1))
+			$vCut      = $vCutStr.LastIndexOf(", ")
+			if ($vCut -le 0) { $vCut = $vMaxSumW }
+			$vSumLine1 = $vSumFull.Substring(0, $vCut)
+			$vSumRest  = $vSumFull.Substring([Math]::Min($vCut + 2, $vSumFull.Length)).Trim()
+			$vSumLine2 = if ($vSumRest.Length -le $vMaxSumW) { $vSumRest }
+			             else { $vSumRest.Substring(0, $vMaxSumW - 3) + "..." }
+		}
+
+		$vSb = [System.Text.StringBuilder]::new(4096)
+		[void]$vSb.Append("${e}[H")    # move to top-left of alternate screen
+
+		# Title
+		[void]$vSb.Append($kCy + (" KotlinToC Test Runner  ─  Interactive Mode  [$vCompiler]").PadRight($vW + 2) + $kRst + "`n")
+		[void]$vSb.Append($kGr + (" $vDSp") + $kRst + "`n")
+
+		# TESTS — compact 2-line summary; Space opens the full selector sub-screen
+		$vTActive = ($this.Section -eq "tests")
+		$vTPtr    = if ($vTActive) { "►" } else { " " }
+		$vTHdr    = " $vTPtr TESTS ($($this.Tests.Count) found, $vSel selected)"
+		if ($vTActive) { $vTHdr += "   Space=select" }
+		[void]$vSb.Append($kYl + $vTHdr.PadRight($vW + 2) + $kRst + "`n")
+		[void]$vSb.Append($kGr + (" $vSep") + $kRst + "`n")
+		[void]$vSb.Append($kGr + ("  $vSumLine1").PadRight($vW + 2) + $kRst + "`n")
+		[void]$vSb.Append($kGr + ("  $vSumLine2").PadRight($vW + 2) + $kRst + "`n")
+
+		# OPTIONS
+		[void]$vSb.Append("".PadRight($vW + 2) + "`n")
+		[void]$vSb.Append($kYl + (" OPTIONS").PadRight($vW + 2) + $kRst + "`n")
+		[void]$vSb.Append($kGr + (" $vSep") + $kRst + "`n")
+		for ($vi = 0; $vi -lt $this.Opts.Count; $vi++) {
+			$vO   = $this.Opts[$vi]
+			$vCur = ($this.Section -eq "opts" -and $vi -eq $this.Idx)
+			$vFg  = if ($vCur) { $kWh } else { $kGr }
+			$vPtr = if ($vCur) { "►" } else { " " }
+			$vBox = if ($vO.On) { "[✓]" } else { "[ ]" }
+			[void]$vSb.Append($vFg + (" $vPtr $vBox $($vO.Label)").PadRight($vW + 2) + $kRst + "`n")
+		}
+
+		# BUILD MODE
+		[void]$vSb.Append("".PadRight($vW + 2) + "`n")
+		[void]$vSb.Append($kYl + (" BUILD MODE").PadRight($vW + 2) + $kRst + "`n")
+		[void]$vSb.Append($kGr + (" $vSep") + $kRst + "`n")
+		for ($vi = 0; $vi -lt $this.Builds.Count; $vi++) {
+			$vB   = $this.Builds[$vi]
+			$vCur = ($this.Section -eq "build" -and $vi -eq $this.Idx)
+			$vFg  = if ($vCur) { $kWh } else { $kGr }
+			$vPtr = if ($vCur) { "►" } else { " " }
+			$vBox = if ($vB.On) { "(•)" } else { "( )" }
+			[void]$vSb.Append($vFg + (" $vPtr $vBox $($vB.Label)").PadRight($vW + 2) + $kRst + "`n")
+		}
+
+		# COMPILER & FLAGS
+		[void]$vSb.Append("".PadRight($vW + 2) + "`n")
+		[void]$vSb.Append($kYl + (" COMPILER & FLAGS").PadRight($vW + 2) + $kRst + "`n")
+		[void]$vSb.Append($kGr + (" $vSep") + $kRst + "`n")
+		for ($vi = 0; $vi -lt $this.Fields.Count; $vi++) {
+			$vF   = $this.Fields[$vi]
+			$vCur = ($this.Section -eq "compiler" -and $vi -eq $this.Idx)
+			$vFg  = if ($vCur) { $kWh } else { $kGr }
+			$vPtr = if ($vCur) { "►" } else { " " }
+			$vVal = if ($vF.Value -ne "") { $vF.Value } else { "(none)" }
+			$vHint = if ($vCur) { "  Enter=edit" } else { "" }
+			[void]$vSb.Append($vFg + (" $vPtr  $($vF.Label):  $vVal$vHint").PadRight($vW + 2) + $kRst + "`n")
+		}
+
+		# Hints bar — truncated to terminal width to prevent wrapping/scroll corruption
+		$vHints = " ↑↓ Move   ◄► Panel   Space Toggle   A All   N None   Enter Edit/Run   Q Quit"
+		$vHints = $vHints.Substring(0, [Math]::Min($vHints.Length, [Console]::WindowWidth - 1))
+		[void]$vSb.Append("".PadRight($vW + 2) + "`n")
+		[void]$vSb.Append($kGr + (" $vDSp") + $kRst + "`n")
+		[void]$vSb.Append($kGr + $vHints.PadRight($vW + 2) + $kRst + "`n")
+
+		[Console]::Write($vSb.ToString())
+	}
+
+	# Inline alt-screen editor. ESC cancels (returns inCurrent), Enter confirms.
+	# Shows CC Args cheatsheet when inShowCheat is true.
+	[string] EditField([string]$inPrompt, [string]$inCurrent, [bool]$inShowCheat) {
+		$e   = [char]27
+		$kCy = "${e}[36m"; $kGr = "${e}[90m"; $kWh = "${e}[97m"
+		$kYl = "${e}[33m"; $kRst = "${e}[0m"
+		$vBuf = $inCurrent  # current input buffer
+
+		while ($true) {
+			$vSb = [System.Text.StringBuilder]::new(2048)
+			[void]$vSb.Append("${e}[H${e}[2J")
+			[void]$vSb.Append($kCy + " Edit: $inPrompt" + $kRst + "`n")
+			[void]$vSb.Append($kGr + " Current: $inCurrent" + $kRst + "`n`n")
+			[void]$vSb.Append($kWh + " > $vBuf" + $kGr + "_" + $kRst + "`n`n")
+			[void]$vSb.Append($kGr + " Enter=confirm   Esc=cancel   Backspace=delete" + $kRst + "`n")
+			if ($inShowCheat) {
+				[void]$vSb.Append("`n")
+				[void]$vSb.Append($kYl + " CC ARGS CHEATSHEET" + $kRst + "`n")
+				[void]$vSb.Append($kGr + "   -g                  debug symbols" + $kRst + "`n")
+				[void]$vSb.Append($kGr + "   -O0                 no optimization" + $kRst + "`n")
+				[void]$vSb.Append($kGr + "   -O2 / -O3           optimize binary" + $kRst + "`n")
+				[void]$vSb.Append($kGr + "   -Wall               enable warnings" + $kRst + "`n")
+				[void]$vSb.Append($kGr + "   -fsanitize=address  AddressSanitizer" + $kRst + "`n")
+				[void]$vSb.Append($kGr + "   -DDEBUG             debug define" + $kRst + "`n")
+			}
+			[Console]::Write($vSb.ToString())
+
+			$vKey = [Console]::ReadKey($true)
+			switch ($vKey.Key) {
+				([ConsoleKey]::Escape)    { return $inCurrent }
+				([ConsoleKey]::Enter)     { return $vBuf }
+				([ConsoleKey]::Backspace) {
+					if ($vBuf.Length -gt 0) { $vBuf = $vBuf.Substring(0, $vBuf.Length - 1) }
+				}
+				default {
+					if ($vKey.KeyChar -ge ' ') { $vBuf += $vKey.KeyChar }
+				}
+			}
+		}
+		return $inCurrent
+	}
+
+	# Full-screen test selector sub-screen. Modifies Tests in place. Space=toggle, Enter/Esc=back.
+	[void] SelectTests() {
+		$e    = [char]27
+		$kCy  = "${e}[36m"; $kGr = "${e}[90m"; $kWh = "${e}[97m"; $kRst = "${e}[0m"
+		$vIdx = 0; $vOff = 0
+
+		while ($true) {
+			$vTermH = [Console]::WindowHeight
+			$vW     = [Math]::Min(62, [Console]::WindowWidth - 2)
+			# Fixed: title(1) sep(1) scroll(1) blank(1) dsep(1) hints(1) = 6
+			$vViewH = [Math]::Max(1, $vTermH - 6)
+			if ($vIdx -lt $vOff)           { $vOff = $vIdx }
+			if ($vIdx -ge $vOff + $vViewH) { $vOff = $vIdx - $vViewH + 1 }
+
+			$vSel = @($this.Tests | Where-Object { $_.On }).Count
+			$vSep = "─" * $vW; $vDSp = "═" * $vW
+
+			$vSb = [System.Text.StringBuilder]::new(4096)
+			[void]$vSb.Append("${e}[H${e}[2J")
+			[void]$vSb.Append($kCy + (" SELECT TESTS  ($($this.Tests.Count) found, $vSel selected)").PadRight($vW + 2) + $kRst + "`n")
+			[void]$vSb.Append($kGr + (" $vSep") + $kRst + "`n")
+
+			$vEnd = [Math]::Min($vOff + $vViewH, $this.Tests.Count)
+			for ($vi = $vOff; $vi -lt $vEnd; $vi++) {
+				$vT   = $this.Tests[$vi]
+				$vCur = ($vi -eq $vIdx)
+				$vFg  = if ($vCur) { $kWh } else { $kGr }
+				$vPtr = if ($vCur) { "►" } else { " " }
+				$vBox = if ($vT.On) { "[✓]" } else { "[ ]" }
+				[void]$vSb.Append($vFg + (" $vPtr $vBox $($vT.Name)").PadRight($vW + 2) + $kRst + "`n")
+			}
+			[void]$vSb.Append($kGr + ("  ↕ $($vOff + 1)–$vEnd / $($this.Tests.Count)").PadRight($vW + 2) + $kRst + "`n")
+			[void]$vSb.Append("".PadRight($vW + 2) + "`n")
+			[void]$vSb.Append($kGr + (" $vDSp") + $kRst + "`n")
+			$vHints = " ↑↓ Move   Space Toggle   A All   N None   Enter/Esc Back"
+			$vHints = $vHints.Substring(0, [Math]::Min($vHints.Length, [Console]::WindowWidth - 1))
+			[void]$vSb.Append($kGr + $vHints.PadRight($vW + 2) + $kRst + "`n")
+			[Console]::Write($vSb.ToString())
+
+			$vKey = [Console]::ReadKey($true)
+			switch ($vKey.Key) {
+				([ConsoleKey]::UpArrow)   { if ($vIdx -gt 0) { $vIdx-- } }
+				([ConsoleKey]::DownArrow) { if ($vIdx -lt $this.Tests.Count - 1) { $vIdx++ } }
+				([ConsoleKey]::Spacebar)  { $this.Tests[$vIdx].On = -not $this.Tests[$vIdx].On }
+				([ConsoleKey]::Enter)     { return }
+				([ConsoleKey]::Escape)    { return }
+			}
+			switch ([char]::ToUpper($vKey.KeyChar)) {
+				'A' { $this.Tests | ForEach-Object { $_.On = $true  } }
+				'N' { $this.Tests | ForEach-Object { $_.On = $false } }
+			}
+		}
+	}
+
+	# Main key loop. Returns a selection object on Enter, or $null on Q/Escape.
+	[object] Loop() {
+		[Console]::CursorVisible = $false
+		[Console]::Write("$([char]27)[?1049h")   # enter alternate screen buffer
+		try {
+			$this.Render()
+			while ($true) {
+				$vKey = [Console]::ReadKey($true)
+				switch ($vKey.Key) {
+					([ConsoleKey]::UpArrow) {
+						switch ($this.Section) {
+							"tests"    { $this.Section = "compiler"; $this.Idx = $this.Fields.Count - 1 }
+							"opts"     {
+								if ($this.Idx -gt 0) { $this.Idx-- }
+								else { $this.Section = "tests"; $this.Idx = 0 }
+							}
+							"build"    {
+								if ($this.Idx -gt 0) { $this.Idx-- }
+								else { $this.Section = "opts"; $this.Idx = $this.Opts.Count - 1 }
+							}
+							"compiler" {
+								if ($this.Idx -gt 0) { $this.Idx-- }
+								else { $this.Section = "build"; $this.Idx = $this.Builds.Count - 1 }
+							}
+						}
+						$this.Render()
+					}
+					([ConsoleKey]::DownArrow) {
+						switch ($this.Section) {
+							"tests"    { $this.Section = "opts"; $this.Idx = 0 }
+							"opts"     {
+								if ($this.Idx -lt $this.Opts.Count - 1) { $this.Idx++ }
+								else { $this.Section = "build"; $this.Idx = 0 }
+							}
+							"build"    {
+								if ($this.Idx -lt $this.Builds.Count - 1) { $this.Idx++ }
+								else { $this.Section = "compiler"; $this.Idx = 0 }
+							}
+							"compiler" { if ($this.Idx -lt $this.Fields.Count - 1) { $this.Idx++ } }
+						}
+						$this.Render()
+					}
+					([ConsoleKey]::RightArrow) {
+						$this.Section = switch ($this.Section) { "tests" { "opts" } "opts" { "build" } "build" { "compiler" } "compiler" { "tests" } }
+						$this.ClampIdx(); $this.Render()
+					}
+					([ConsoleKey]::LeftArrow) {
+						$this.Section = switch ($this.Section) { "tests" { "compiler" } "opts" { "tests" } "build" { "opts" } "compiler" { "build" } }
+						$this.ClampIdx(); $this.Render()
+					}
+					([ConsoleKey]::Spacebar) {
+						switch ($this.Section) {
+							"tests"    { $this.SelectTests() }  # open full-screen test selector
+							"opts"     { $this.Opts[$this.Idx].On  = -not $this.Opts[$this.Idx].On  }
+							"build"    {
+								$this.Builds | ForEach-Object { $_.On = $false }
+								$this.Builds[$this.Idx].On = $true
+							}
+						}
+						$this.Render()
+					}
+					([ConsoleKey]::Enter) {
+						if ($this.Section -eq "compiler") {
+							$vF = $this.Fields[$this.Idx]
+							$vF.Value = $this.EditField($vF.Label, $vF.Value, ($vF.Key -eq "CcArgs"))
+							$this.Render()
+						} else {
+							return $this.BuildResult()
+						}
+					}
+					([ConsoleKey]::Escape) { return $null }
+				}
+				switch ([char]::ToUpper($vKey.KeyChar)) {
+					'A' { $this.Tests | ForEach-Object { $_.On = $true  }; $this.Render() }
+					'N' { $this.Tests | ForEach-Object { $_.On = $false }; $this.Render() }
+					'Q' { return $null }
+				}
+			}
+		} finally {
+			[Console]::Write("$([char]27)[?1049l")   # exit alternate screen buffer
+			[Console]::CursorVisible = $true
+		}
+		return $null
+	}
+
+	# Collects current checkbox/radio/field state into a result object.
+	[object] BuildResult() {
+		$vSelected = @($this.Tests | Where-Object { $_.On } | ForEach-Object { $_.Name })
+		if ($vSelected.Count -eq 0) { return $null }
+		return [PSCustomObject]@{
+			Tests         = $vSelected
+			SkipUnit      = ($this.Opts   | Where-Object { $_.Key -eq "SkipUnit"      }).On
+			MemTrack      = ($this.Opts   | Where-Object { $_.Key -eq "MemTrack"      }).On
+			Ast           = ($this.Opts   | Where-Object { $_.Key -eq "Ast"           }).On
+			DumpSemantics = ($this.Opts   | Where-Object { $_.Key -eq "DumpSemantics" }).On
+			Build         = ($this.Builds | Where-Object { $_.On                      }).Value
+			Compiler      = ($this.Fields | Where-Object { $_.Key -eq "Compiler"      }).Value
+			CcArgs        = ($this.Fields | Where-Object { $_.Key -eq "CcArgs"        }).Value
+		}
+	}
+}
+
+# ==================
+# MARK: Entry point
+# ==================
+
+$vCC = Find-CCompiler $Compiler
+if (-not $vCC) {
+	Write-Host "ERROR: No C compiler found (tried gcc, clang, cl). Install one and add it to PATH." -ForegroundColor Red
+	exit 1
+}
+
+# ── Interactive mode ─────────────────────────────────────────────
+if ($Interactive) {
+	$vNames = @(Get-ChildItem $vTestsDir -Directory | Sort-Object Name | ForEach-Object Name)
+	$vTui   = [TuiRunner]::new($vNames, $vCC)
+	$vSel   = $vTui.Loop()
+	Write-Host ""
+	if (-not $vSel -or $vSel.Tests.Count -eq 0) {
+		Write-Host " No tests selected." -ForegroundColor DarkGray; exit 0
+	}
+
+	$script:vBuildMode = $vSel.Build
+	$vCC    = $vSel.Compiler
+	$CCArgs = $vSel.CcArgs
+	$vArgsStr = (@(
+		if ($vSel.MemTrack)      { "--mem-track" }
+		if ($vSel.Ast)           { "--ast" }
+		if ($vSel.DumpSemantics) { "--dump-semantics" }
+	) -join " ")
+
+	Write-Info "Using C compiler: $vCC"
+	Invoke-Build
+
+	if ($vSel.Tests.Count -eq 1) {
+		$vName = $vSel.Tests[0]
+		$vSrc  = "$vTestsDir\$vName"
+		if (-not (Test-Path $vSrc -PathType Container)) {
+			Write-Host "ERROR: test directory not found: $vSrc" -ForegroundColor Red; exit 1
+		}
+		$vOk = Invoke-Test -inName $vName -inSrcDir $vSrc -inOutDir "$vSrc\out" -inExtraArgs $vArgsStr
+		exit ([int](-not $vOk))
+	}
+
+	$vResult = Run-Suite -inTestNames $vSel.Tests -inExtraArgs $vArgsStr -inSkipUnit $vSel.SkipUnit
+	Show-Summary $vResult
+}
+
+# ── Single / multi-test run mode ─────────────────────────────────
 if ($Run -ne "") {
-    Write-Info "Using C compiler: $CC"
+	Write-Info "Using C compiler: $vCC"
+	Invoke-Build
 
-    # ── Build only if -Build ───────────────────────────────────
-    if ($BuildMode -ne "gradle") {
-        Write-Section "Build"
-        if ($BuildMode -eq "proguard") {
-            Write-Cmd "gradlew $gradleProCmd"
-            & "$root\gradlew.bat" $gradleProCmd.Split(' ') 2>&1
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
-                Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
-                exit 1
-            }
-            Write-Pass "Built $releaseJar"
-        } else {
-            Write-Cmd "gradlew $gradleJarCmd"
-            & "$root\gradlew.bat" $gradleJarCmd.Split(' ') 2>&1
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
-                Write-Host "ERROR: JAR build failed" -ForegroundColor Red
-                exit 1
-            }
-            Write-Pass "Built $jar"
-        }
-    }
+	$vArgsStr = (@(
+		if ($MemTrack)              { "--mem-track" }
+		if ($Ast)                   { "--ast" }
+		if ($DumpSemantics)         { "--dump-semantics" }
+		if ($TranspilerArgs -ne "") { $TranspilerArgs }
+	) -join " ")
 
-    # ── Build transpile args from flags ───────────────────────────
-    $allArgs = ""
-    if ($MemTrack) { $allArgs += " --mem-track" }
-    if ($Ast) { $allArgs += " --ast" }
-    if ($DumpSemantics) { $allArgs += " --dump-semantics" }
-    if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
-    $allArgs = $allArgs.Trim()
-
-    # ── Split on commas, run each test ────────────────────────────
-    $runNames = $Run -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-    $anyFailed = $false
-    foreach ($testName in $runNames) {
-        $testSrcDir = "$testsDir\$testName"
-        if (-not (Test-Path $testSrcDir -PathType Container)) {
-            Write-Host "ERROR: test directory not found: $testSrcDir" -ForegroundColor Red
-            Write-Host "Available tests:" -ForegroundColor Yellow
-            Get-ChildItem $testsDir -Directory | ForEach-Object { Write-Host "  - $($_.Name)" }
-            $anyFailed = $true
-            continue
-        }
-        $result = Invoke-Test -Name $testName -TestSrcDir $testSrcDir -TestOutDir "$testSrcDir\out" -Verbose $true -ExtraArgs $allArgs
-        if (-not $result) { $anyFailed = $true }
-    }
-    if ($anyFailed) { exit 1 } else { exit 0 }
+	$vRunNames  = $Run -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+	$vAnyFailed = $false
+	foreach ($vName in $vRunNames) {
+		$vSrc = "$vTestsDir\$vName"
+		if (-not (Test-Path $vSrc -PathType Container)) {
+			Write-Host "ERROR: test directory not found: $vSrc" -ForegroundColor Red
+			Write-Host "Available tests:" -ForegroundColor Yellow
+			Get-ChildItem $vTestsDir -Directory | ForEach-Object { Write-Host "  - $($_.Name)" }
+			$vAnyFailed = $true; continue
+		}
+		if (-not (Invoke-Test -inName $vName -inSrcDir $vSrc -inOutDir "$vSrc\out" -inExtraArgs $vArgsStr)) {
+			$vAnyFailed = $true
+		}
+	}
+	exit ([int]$vAnyFailed)
 }
 
-# ════════════════════════════════════════════════════════════════
-# Normal test-suite mode
-# ════════════════════════════════════════════════════════════════
+# ── Full suite mode ───────────────────────────────────────────────
+Write-Info "Using C compiler: $vCC"
 
-Write-Info "Using C compiler: $CC"
+$vArgsStr  = (@(
+	if ($MemTrack)              { "--mem-track" }
+	if ($Ast)                   { "--ast" }
+	if ($DumpSemantics)         { "--dump-semantics" }
+	if ($TranspilerArgs -ne "") { $TranspilerArgs }
+) -join " ")
+$vAllNames = @(Get-ChildItem $vTestsDir -Directory | Sort-Object Name | ForEach-Object Name)
 
-$totalTests = 0
-$passedTests = 0
-$failedTests = 0
-$failedNames = @()
-
-# ── 1. Unit Tests ───────────────────────────────────────────────
-if ($Skip -ne "unit") {
-    Write-Section "Unit Tests (gradlew test)"
-    & "$root\gradlew.bat" test --quiet 2>&1 | Out-String -Stream | ForEach-Object {
-        if ($_ -match "(\d+) tests completed, (\d+) failed") {
-            $total = [int]$Matches[1]
-            $failed = [int]$Matches[2]
-            $totalTests += $total
-            $passedTests += ($total - $failed)
-            $failedTests += $failed
-            if ($failed -gt 0) { $failedNames += "unit-tests ($failed failures)" }
-        }
-    }
-    if ($LASTEXITCODE -eq 0) {
-        Write-Pass "All unit tests passed"
-    } else {
-        Write-Fail "Unit tests had failures (see above)"
-    }
-}
-
-# ── 2. Build transpiler if needed ────────────────────────────
-if ($BuildMode -ne "gradle") {
-    if ($BuildMode -eq "proguard") {
-        Write-Section "Building ProGuard release JAR"
-        & "$root\gradlew.bat" $gradleProCmd.Split(' ') 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $releaseJar)) {
-            Write-Host "ERROR: ProGuard build failed" -ForegroundColor Red
-            exit 1
-        }
-        Write-Pass "Built $releaseJar"
-    } else {
-        Write-Section "Building transpiler JAR"
-        & "$root\gradlew.bat" $gradleJarCmd.Split(' ') 2>&1
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jar)) {
-            Write-Host "ERROR: JAR build failed" -ForegroundColor Red
-            exit 1
-        }
-        Write-Pass "Built $jar"
-    }
-}
-
-# ── 3. Integration Tests — auto-discover from tests/ ───────────
-Write-Section "Integration Tests"
-
-$testDirs = Get-ChildItem $testsDir -Directory | Sort-Object Name
-if ($testDirs.Count -eq 0) {
-    Write-Info "No test directories found in $testsDir"
-} else {
-    # Build combined transpile args from flags
-    $allArgs = ""
-    if ($MemTrack) { $allArgs += " --mem-track" }
-    if ($Ast) { $allArgs += " --ast" }
-    if ($DumpSemantics) { $allArgs += " --dump-semantics" }
-    if ($TranspilerArgs -ne "") { $allArgs += " $TranspilerArgs" }
-    $allArgs = $allArgs.Trim()
-
-    $throttle = [Math]::Max(1, [Environment]::ProcessorCount)
-    $results = $testDirs | ForEach-Object -Parallel {
-        $dir = $_
-        $dirName = Split-Path $dir -Leaf
-        $testOutDir = "$($dir.FullName)\out"
-
-        # Local ms formatter (functions from outer scope are not available in parallel blocks)
-        function fmtMs([long]$ms) {
-            if ($ms -lt 1000) { return "${ms}ms" }
-            return ("{0:N2}s" -f ($ms / 1000.0))
-        }
-
-        $sw = [Diagnostics.Stopwatch]::StartNew()
-
-        # Collect .kt files
-        $ktFiles = @(Get-ChildItem "$dir\*.kt" -ErrorAction SilentlyContinue)
-        if ($ktFiles.Count -eq 0) {
-            Write-Host "  FAIL $dirName (no .kt files)" -ForegroundColor Red
-            return @{ Name = $dirName; Passed = $false; Reason = "no .kt files" }
-        }
-        $ktPaths = $ktFiles | ForEach-Object FullName
-
-        # Create output dir
-        if (Test-Path $testOutDir) { Remove-Item $testOutDir -Recurse -Force -ErrorAction SilentlyContinue }
-        New-Item $testOutDir -ItemType Directory -Force | Out-Null
-
-        # Transpile
-        $transpileExit = 0
-        $transpileOutput = @()
-        try {
-            if ($using:BuildMode -eq "gradle") {
-                $argsStr = "$ktPaths -o $testOutDir"
-                if ($using:allArgs) { $argsStr += " $using:allArgs" }
-                $transpileOutput = & "$using:root\gradlew.bat" run --quiet --args="$argsStr" 2>&1
-                $transpileExit = $LASTEXITCODE
-            } else {
-                $activeJar = if ($using:BuildMode -eq "proguard") { $using:releaseJar } else { $using:jar }
-                $cmdArgs = @("-jar", $activeJar) + $ktPaths + @("-o", $testOutDir)
-                if ($using:allArgs) { $cmdArgs += $using:allArgs -split '\s+' }
-                $transpileOutput = & java @cmdArgs 2>&1
-                $transpileExit = $LASTEXITCODE
-            }
-        } catch {
-            Write-Host "  FAIL $dirName (transpile: $_)" -ForegroundColor Red
-            return @{ Name = $dirName; Passed = $false; Reason = "transpile: $_" }
-        }
-        $transpileMs = $sw.ElapsedMilliseconds
-        $sw.Restart()
-
-        $warnings = @($transpileOutput | Where-Object { "$_" -match 'warning:' })
-
-        if ($transpileExit -ne 0) {
-            Write-Host "  FAIL $dirName (transpile failed)" -ForegroundColor Red
-            return @{ Name = $dirName; Passed = $false; Reason = "transpile failed" }
-        }
-
-        # Discover .c files: ktc/ subdir first (intrinsic then rest), then user files
-        $ktcSubDir = "$testOutDir\ktc"
-        $cSources = @()
-        if (Test-Path $ktcSubDir -PathType Container) {
-            $ktcIntrinsic = "$ktcSubDir\ktc_intrinsic.c"
-            if (Test-Path $ktcIntrinsic) { $cSources += $ktcIntrinsic }
-            Get-ChildItem "$ktcSubDir\*.c" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -ne "ktc_intrinsic.c" } |
-                Sort-Object Name |
-                ForEach-Object { $cSources += $_.FullName }
-        }
-        Get-ChildItem "$testOutDir\*.c" -ErrorAction SilentlyContinue |
-            Sort-Object Name |
-            ForEach-Object { $cSources += $_.FullName }
-        if ($cSources.Count -eq 0) {
-            Write-Host "  FAIL $dirName (no .c files generated)" -ForegroundColor Red
-            return @{ Name = $dirName; Passed = $false; Reason = "no .c files" }
-        }
-
-        # Compile
-        $exePath = "$testOutDir\$dirName.exe"
-        $compileArgs = @("-std=c11", "-o", $exePath)
-        if ($using:CCArgs) { $compileArgs += $using:CCArgs -split '\s+' }
-        $compileArgs += $cSources
-        try {
-            & $using:CC @compileArgs 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "  FAIL $dirName (compile failed)" -ForegroundColor Red
-                return @{ Name = $dirName; Passed = $false; Reason = "compile failed" }
-            }
-        } catch {
-            Write-Host "  FAIL $dirName (compile: $_)" -ForegroundColor Red
-            return @{ Name = $dirName; Passed = $false; Reason = "compile: $_" }
-        }
-        $compileMs = $sw.ElapsedMilliseconds
-        $sw.Restart()
-
-        # Run
-        $runOutput = @()
-        try {
-            $runOutput = & $exePath 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "  FAIL $dirName (runtime error, exit $LASTEXITCODE)" -ForegroundColor Red
-                return @{ Name = $dirName; Passed = $false; Reason = "runtime error, exit $LASTEXITCODE" }
-            }
-        } catch {
-            Write-Host "  FAIL $dirName (run: $_)" -ForegroundColor Red
-            return @{ Name = $dirName; Passed = $false; Reason = "run: $_" }
-        }
-        $runMs = $sw.ElapsedMilliseconds
-        $sw.Stop()
-
-        $hasLeak = @($runOutput | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
-        $esc = [char]27
-        $g = "${esc}[32m"; $gr = "${esc}[90m"; $y = "${esc}[33m"; $red = "${esc}[31m"; $r = "${esc}[0m"
-        $timing = "${gr}ktc: $(fmtMs $transpileMs)  comp: $(fmtMs $compileMs)  run: $(fmtMs $runMs)${r}"
-        if ($hasLeak) {
-            Write-Host "  ${y}PASS $dirName${r}  ${red}LEAK${r}  $timing"
-        } else {
-            Write-Host "  ${g}PASS $dirName${r}  $timing"
-        }
-        foreach ($w in $warnings) { Write-Host "       $w" -ForegroundColor Yellow }
-
-        return @{ Name = $dirName; Passed = $true; Reason = "" }
-    } -ThrottleLimit $throttle
-
-    foreach ($r in $results) {
-        $totalTests++
-        if ($r.Passed) {
-            $passedTests++
-        } else {
-            $failedTests++
-            $failedNames += $r.Name
-        }
-    }
-}
-
-# ── Summary ─────────────────────────────────────────────────────
-Write-Section "Summary"
-$total = $passedTests + $failedTests
-Write-Host "  Total: $total  |  " -NoNewline
-Write-Host "Passed: $passedTests" -ForegroundColor Green -NoNewline
-Write-Host "  |  " -NoNewline
-if ($failedTests -gt 0) {
-    Write-Host "Failed: $failedTests" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "  Failed tests:" -ForegroundColor Red
-    foreach ($name in $failedNames) {
-        Write-Host "    - $name" -ForegroundColor Red
-    }
-    exit 1
-} else {
-    Write-Host "Failed: 0" -ForegroundColor Green
-    exit 0
-}
+Invoke-Build
+$vResult = Run-Suite -inTestNames $vAllNames -inExtraArgs $vArgsStr -inSkipUnit ($Skip -eq "unit")
+Show-Summary $vResult
