@@ -10,7 +10,9 @@ object Config {
 }
 
 object Config2 {
-    val buffer: @Ptr Array<Int> = HeapAlloc<Array<Int>>(128)
+    val buffer: @Ptr Array<Int> = Array.allocWith(Heap, 128)
+    val buffer2: @Ptr Array<Int> = Array<Int>.allocWith(Heap, 128)
+    val buffer3 = Array<Int>.allocWith(Heap, 128)
 
     override fun dispose() {
         println("AutoFreeing Config2")
@@ -18,6 +20,7 @@ object Config2 {
     }
 
 }
+
 object Greeter {
     var greeterEnabled = true
     fun greet(name: String) {
@@ -40,7 +43,6 @@ class TestCompanion {
 }
 
 fun main() {
-    println("Value: ${Config2.buffer.size}")
     val first = Config.next()
     if (first != 1) error("FAIL Config.next first=$first")
     println("first: $first")

@@ -773,6 +773,8 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
     impl.appendLine()
 
     hdr.appendLine("// ══ object ${d.name} ($currentSourceFile) ══")
+    val typeIdValue = typeIds.getOrPut(d.name) { nextTypeId++ }
+    hdr.appendLine("#define ${cName}_TYPE_ID $typeIdValue")
     hdr.appendLine("typedef struct {")
     if (props.isEmpty()) hdr.appendLine("    ktc_Char _dummy;")
     for (p in props) {
@@ -1005,21 +1007,19 @@ internal fun CCodeGen.emitInterfaceVtable(info: IfaceInfo) {
 internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
     val cName = info.flatName
     val impls = interfaceImplementors[info.name] ?: emptyList()
+    fun implCType(name: String) = if (objects.containsKey(name)) "${typeFlatName(name)}_t" else typeFlatName(name)
     hdr.appendLine("// ══ interface ${info.name} — tagged union ($currentSourceFile) ══")
     hdr.appendLine("typedef struct $cName {")
     if (impls.isEmpty()) {
-        // Fallback: no known implementors — keep void* obj
         hdr.appendLine("    void* obj;")
     } else if (impls.size == 1) {
-        // Single implementor: no union needed, use plain field
         hdr.appendLine("    ktc_core_AnySupertype __base;")
-        hdr.appendLine("    ${typeFlatName(impls[0])} ${ifaceDataName(impls[0])};")
+        hdr.appendLine("    ${implCType(impls[0])} ${ifaceDataName(impls[0])};")
     } else {
-        // Multiple implementors: tagged union
         hdr.appendLine("    ktc_core_AnySupertype __base;")
         hdr.appendLine("    union {")
         for (className in impls) {
-            hdr.appendLine("        ${typeFlatName(className)} ${ifaceDataName(className)};")
+            hdr.appendLine("        ${implCType(className)} ${ifaceDataName(className)};")
         }
         hdr.appendLine("    } data;")
     }
@@ -1151,6 +1151,13 @@ internal fun CCodeGen.emitAnyVtable(cName: String, className: String, isData: Bo
         impl.appendLine("    ${cName}_dispose(($cName*)\$self);")
         impl.appendLine("}")
     }
+    // copyWith wrapper
+    impl.appendLine("static void* ${cName}_copyWith_any(void* \$self, void* alloc) {")
+    impl.appendLine("    ktc_std_Allocator* a = (ktc_std_Allocator*)alloc;")
+    impl.appendLine("    $cName* dst = ($cName*)a->vt->allocMem(a, sizeof($cName));")
+    impl.appendLine("    if (dst) *dst = *($cName*)\$self;")
+    impl.appendLine("    return dst;")
+    impl.appendLine("}")
     impl.appendLine()
 
     // Static vtable
@@ -1160,6 +1167,7 @@ internal fun CCodeGen.emitAnyVtable(cName: String, className: String, isData: Bo
     impl.appendLine("    (ktc_Int (*)(void*)) ${cName}_hashCode_any,")
     impl.appendLine("    (ktc_Bool (*)(void*, void*)) ${cName}_equals_any,")
     impl.appendLine("    (void (*)(void*)) ${cName}_dispose_any,")
+    impl.appendLine("    (void* (*)(void*, void*)) ${cName}_copyWith_any,")
     impl.appendLine("};")
     impl.appendLine()
 
@@ -1268,6 +1276,38 @@ internal fun CCodeGen.emitConstructorBody(cName: String, ci: ClassInfo) {
 
 /** Emit vtable struct for a class implementing an interface (shared by two interface-emission paths). */
 internal fun CCodeGen.emitVtable(cClass: String, cIface: String, ifaceName: String, className: String, props: List<PropDecl>, methods: List<FunDecl>) {
+    val isObject = objects.containsKey(className)
+
+    // For objects, emit thin wrapper functions matching vtable signatures.
+    // Object methods have no $self param but vtables require void* $self first.
+    if (isObject) {
+        if (methods.none { it.name == "dispose" } && !hasDisposeOverride(className)) {
+            impl.appendLine("static void ${cClass}_${ifaceName}_dispose_vt(void* \$self) { (void)\$self; }")
+        }
+        for (m in methods) {
+            val mReturnsNullable = m.returnType != null && m.returnType.nullable
+            val vMRetKtc = if (m.returnType != null) resolveTypeName(m.returnType) else null
+            val mRetResolved = vMRetKtc?.toInternalStr ?: ""
+            val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
+            val castExtra = m.params.joinToString("") { p ->
+                val vKtcParam = resolveTypeName(p.type); val vPStr = vKtcParam.toInternalStr
+                if (p.type.nullable) ", ${optCTypeName(vPStr)} ${p.name}" else ", ${cType(p.type)} ${p.name}"
+            }
+            val extraArgs = m.params.joinToString(", ") { it.name }
+            val vtName = "${cClass}_${ifaceName}_${m.name}_vt"
+            val targetFn = if (m.name == "dispose" && !hasDisposeOverride(className))
+                null  // no-op for dispose without override
+            else "${cClass}_${m.name}"
+            impl.appendLine("static $cRet $vtName(void* \$self$castExtra) {")
+            impl.appendLine("    (void)\$self;")
+            if (targetFn != null) {
+                if (cRet != "void") impl.appendLine("    return $targetFn($extraArgs);")
+                else impl.appendLine("    $targetFn($extraArgs);")
+            }
+            impl.appendLine("}")
+        }
+    }
+
     impl.appendLine("const ${cIface}_vt ${cClass}_${ifaceName}_vt = {")
     for (p in props) {
         val ct = if (p.type != null) cType(p.type) else "ktc_Int"
@@ -1279,23 +1319,29 @@ internal fun CCodeGen.emitVtable(cClass: String, cIface: String, ifaceName: Stri
         val mRetResolved = vMRetKtc?.toInternalStr ?: ""
         val cRet = if (mReturnsNullable) optCTypeName(mRetResolved) else if (m.returnType != null) cType(m.returnType) else "void"
         val extraCast = m.params.joinToString("") { p ->
-            val vKtcParam = resolveTypeName(p.type)
-            val vPStr = vKtcParam.toInternalStr
+            val vKtcParam = resolveTypeName(p.type); val vPStr = vKtcParam.toInternalStr
             if (p.type.nullable) ", ${optCTypeName(vPStr)}" else ", ${cType(p.type)}"
         }
-        val fn = if (m.name == "dispose" && classes[className]?.methods?.none { it.name == "dispose" } == true)
-            "ktc_core_noop_dispose"
-        else "${cClass}_${m.name}"
+        val fn = if (isObject) "${cClass}_${ifaceName}_${m.name}_vt"
+                 else if (m.name == "dispose" && !hasDisposeOverride(className)) "ktc_core_noop_dispose"
+                 else "${cClass}_${m.name}"
         impl.appendLine("    ($cRet (*)(void*$extraCast)) $fn,")
     }
     if (methods.none { it.name == "dispose" }) {
-        val fnDispose = if (classes[className]?.methods?.none { it.name == "dispose" } == true)
-            "ktc_core_noop_dispose"
-        else "${cClass}_dispose"
+        val fnDispose = if (isObject) "${cClass}_${ifaceName}_dispose_vt"
+                         else if (!hasDisposeOverride(className)) "ktc_core_noop_dispose"
+                         else "${cClass}_dispose"
         impl.appendLine("    (void (*)(void*)) $fnDispose,")
     }
     impl.appendLine("};")
     impl.appendLine()
+}
+
+/** Returns true if a class or object has an explicit dispose() override. */
+internal fun CCodeGen.hasDisposeOverride(className: String): Boolean {
+    classes[className]?.methods?.any { it.name == "dispose" }?.let { return it }
+    objects[className]?.methods?.any { it.name == "dispose" }?.let { return it }
+    return false
 }
 
 internal fun CCodeGen.hashFieldExprKtc(ktc: KtcType, valueExpr: String): String = when (ktc) { // Nullable value types: hash tag + value (or 0 if null)
@@ -1351,6 +1397,9 @@ internal fun CCodeGen.ifaceAsInit(cIface: String, cClass: String, className: Str
  */
 internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIfaceRefs: List<TypeRef>, declsOnly: Boolean = false, implsOnly: Boolean = false) {
     val cClass = typeFlatName(className)
+    val isObject = objects.containsKey(className)
+    val cSelfType = if (isObject) "${cClass}_t" else cClass
+    val cSelfPtr = "$cSelfType*"
     for (ifaceRef in superIfaceRefs) {
         val ifaceName = resolveIfaceName(ifaceRef)
         val iface = interfaces[ifaceName] ?: continue
@@ -1366,9 +1415,13 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
         for (p in allProps) {
             val ct = if (p.type != null) cType(p.type) else "ktc_Int"
             val getterName = "${cClass}_${p.name}_get"
-            if (!implsOnly) hdr.appendLine("$ct $getterName($cClass* \$self);")
+            if (!implsOnly) hdr.appendLine("$ct $getterName($cSelfPtr \$self);")
             if (!declsOnly) {
-                impl.appendLine("$ct $getterName($cClass* \$self) { return \$self->${p.name}; }")
+                if (isObject) {
+                    impl.appendLine("$ct $getterName($cSelfPtr \$self) { (void)\$self; return ${cClass}.${p.name}; }")
+                } else {
+                    impl.appendLine("$ct $getterName($cSelfPtr \$self) { return \$self->${p.name}; }")
+                }
                 impl.appendLine()
             }
         }
@@ -1380,30 +1433,23 @@ internal fun CCodeGen.emitInterfaceVtablesForClass(className: String, superIface
         }
 
         // wrapping function: ClassName_as_IfaceName
-        if (!implsOnly) hdr.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self);")
-        // Emit class method declarations for interface overrides (moved from class section)
+        if (!implsOnly) hdr.appendLine("$cIface ${cClass}_as_${ifaceName}($cSelfPtr \$self);")
         if (!implsOnly) {
             val lines = deferredHdrLines[className]
             if (lines != null) {
-                for (line in lines) {
-                    hdr.appendLine(line)
-                }
+                for (line in lines) hdr.appendLine(line)
                 deferredHdrLines.remove(className)
             }
         }
         if (!declsOnly) {
-            impl.appendLine("$cIface ${cClass}_as_${ifaceName}($cClass* \$self) {")
+            impl.appendLine("$cIface ${cClass}_as_${ifaceName}($cSelfPtr \$self) {")
+            if (isObject) impl.appendLine("    (void)\$self;")
             impl.appendLine("    return ${ifaceAsInit(cIface, cClass, className, ifaceName)};")
             impl.appendLine("}")
             impl.appendLine()
         }
 
-        // Also emit vtables for all parent interfaces (transitive)
-        // E.g., ArrayList_Int implements MutableList_Int which extends List_Int
-        // → emit ArrayList_Int_as_List_Int too
-        if (!declsOnly) {
-            emitTransitiveInterfaceVtables(className, cClass, iface)
-        }
+        if (!declsOnly) emitTransitiveInterfaceVtables(className, cClass, iface)
     }
 }
 

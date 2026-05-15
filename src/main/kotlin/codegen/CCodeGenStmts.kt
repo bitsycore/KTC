@@ -288,12 +288,21 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                 if (interfaces.containsKey(t)) {
                     val initType = inferExprType(s.init)
                     val initTypeKtc = inferExprTypeKtc(s.init)
-                    if (initType != null && classes.containsKey(initType) && classInterfaces[initType]?.contains(t) == true) {
-                        val backing = tmp()
+                    if (initType != null && (classes.containsKey(initType) || objects.containsKey(initType)) && classInterfaces[initType]?.contains(t) == true) {
+                        val isObj = objects.containsKey(initType)
+                        if (isObj && (s.type == null || s.type.annotations.none { it.name == "Ptr" })) {
+                            currentStmtLine = s.line
+                            codegenError("Object '${initType}' must be stored as @Ptr. Use: val ${s.name}: @Ptr $t = ${initType}")
+                        }
                         val expr = genExpr(s.init)
                         flushPreStmts(ind)
-                        impl.appendLine("$ind${typeFlatName(initType)} $backing = $expr;")
-                        impl.appendLine("$ind$ct ${s.name} = ${typeFlatName(initType)}_as_$t(&$backing);")
+                        if (isObj) {
+                            impl.appendLine("$ind$ct ${s.name} = ${typeFlatName(initType)}_as_$t(&$expr);")
+                        } else {
+                            val backing = tmp()
+                            impl.appendLine("$ind${typeFlatName(initType)} $backing = $expr;")
+                            impl.appendLine("$ind$ct ${s.name} = ${typeFlatName(initType)}_as_$t(&$backing);")
+                        }
                         return
                     }
                 }
@@ -1000,7 +1009,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                 val exprTypeKtc = inferExprTypeKtc(s.value)
                 val retIface = currentFnReturnType
                 if (retIface.isNotEmpty() && interfaces.containsKey(retIface)
-                    && exprType != null && classes.containsKey(exprType)
+                    && exprType != null && (classes.containsKey(exprType) || objects.containsKey(exprType))
                     && classInterfaces[exprType]?.contains(retIface) == true
                 ) {
                     val cExprType = typeFlatName(exprType)

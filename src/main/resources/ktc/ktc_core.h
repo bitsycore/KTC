@@ -117,6 +117,7 @@ typedef struct ktc_core_AnyVt {
     ktc_Int   (*hashCode)(void* $self);
     ktc_Bool  (*equals)(void* $self, void* other);
     void      (*dispose)(void* $self);
+    void*     (*copyWith)(void* $self, void* alloc);  // allocate + copy via Allocator
 } ktc_core_AnyVt;
 
 /** Type-erased fat pointer for `Any` — identity checks + vtable dispatch. */

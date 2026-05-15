@@ -67,7 +67,8 @@ data class InterfaceDecl(
 data class ObjectDecl(
     val name: String,
     val members: List<Decl>,
-    val annotations: List<Annotation> = emptyList()
+    val annotations: List<Annotation> = emptyList(),
+    val superInterfaces: List<TypeRef> = emptyList()
 ) : Decl()
 
 data class PropDecl(

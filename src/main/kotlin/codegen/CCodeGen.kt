@@ -916,6 +916,10 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                 if (!firstClass) hdr.appendLine()
                 firstClass = false
                 emitObject(d)
+                // Emit interface vtable header declarations for objects implementing interfaces
+                if (d.superInterfaces.isNotEmpty()) {
+                    emitInterfaceVtablesForClass(d.name, d.superInterfaces, declsOnly = true)
+                }
             }
             else -> {}
         }
@@ -1008,6 +1012,10 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         // Emit static vtable instances + wrapping functions for interface implementations
         // Non-generic classes:
         for (d in file.decls) if (d is ClassDecl && d.typeParams.isEmpty() && d.superInterfaces.isNotEmpty()) {
+            emitInterfaceVtablesForClass(d.name, d.superInterfaces, implsOnly = true)
+        }
+        // Objects implementing interfaces:
+        for (d in file.decls) if (d is ObjectDecl && d.superInterfaces.isNotEmpty()) {
             emitInterfaceVtablesForClass(d.name, d.superInterfaces, implsOnly = true)
         }
         // Monomorphized generic classes:
@@ -1308,6 +1316,10 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     }
                 }
                 objects[d.name] = oi
+                // Register interface implementations for objects
+                if (d.superInterfaces.isNotEmpty()) {
+                    classInterfaces[d.name] = d.superInterfaces.map { it.name }
+                }
                 // dispose()/hashCode() are implicitly overrides — always require the keyword (current file, non-stdlib)
                 if (validate && file.pkg != "ktc.std") {
                     for (m in d.members) if (m is FunDecl && (m.name == "dispose" || m.name == "hashCode") && !m.isOverride) {

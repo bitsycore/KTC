@@ -336,6 +336,9 @@ internal fun CCodeGen.genName(e: NameExpr): String {
     }
     // Top-level property: apply package prefix
     if (e.name in topProps) return typeFlatName(e.name)
+    // Object singleton: resolve to global instance name
+    if (e.name in objects) return typeFlatName(e.name)
+    if (e.name in enums) return typeFlatName(e.name)
     // Inside a class nested within an object: resolve to parent object's field/function
     val parentObj2 = currentClass?.substringBefore('$')
     if (parentObj2 != null && currentObject == null) {
@@ -661,6 +664,51 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             emitInlineCall(inlineExt, e.args, currentInd, false, receiverExpr = recvExpr, receiverType = recvKtType, resultVar = resultName)
             typeSubst = vSavedSubst
             return resultName
+        }
+        // ClassName.allocWith(allocator, args...) → allocator-based heap construction
+        if (e.callee.name == "allocWith" && e.callee.obj is NameExpr && e.args.isNotEmpty()) {
+            val className = e.callee.obj.name
+            if (classes.containsKey(className)) {
+                val cName = typeFlatName(className)
+                val allocExpr = genExpr(e.args[0].expr)
+                val ctorArgs = e.args.drop(1).joinToString(", ") { genExpr(it.expr) }
+                val t = tmp()
+                // If allocator is a class/object implementing Allocator, wrap to interface
+                val allocObjName = (e.args[0].expr as? NameExpr)?.name
+                val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
+                val allocInit = if (isAllocObj) {
+                    "${typeFlatName(allocObjName!!)}_as_Allocator(&$allocExpr)"
+                } else {
+                    allocExpr
+                }
+                preStmts += "ktc_std_Allocator $t = $allocInit;"
+                val dataField = ifaceDataName(allocObjName ?: className)
+                preStmts += "$cName* ${t}_ptr = ($cName*)${t}.vt->allocMem((void*)&${t}.${dataField}, sizeof($cName));"
+                preStmts += "if (${t}_ptr) *${t}_ptr = ${cName}_primaryConstructor($ctorArgs);"
+                return "${t}_ptr"
+            }
+            if (genericClassDecls.containsKey(className)) {
+                val typeArgs = e.typeArgs
+                if (typeArgs.isNotEmpty()) {
+                    val mangled = mangledGenericName(className, typeArgs.map { it.name })
+                    if (classes.containsKey(mangled)) {
+                        val cName = typeFlatName(mangled)
+                        val allocExpr = genExpr(e.args[0].expr)
+                        val ctorArgs = e.args.drop(1).joinToString(", ") { genExpr(it.expr) }
+                        val t = tmp()
+                        val allocObjName = (e.args[0].expr as? NameExpr)?.name
+                        val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
+                        val allocInit = if (isAllocObj) {
+                            "${typeFlatName(allocObjName!!)}_as_Allocator(&$allocExpr)"
+                        } else { allocExpr }
+                        preStmts += "ktc_std_Allocator $t = $allocInit;"
+                        val dataField = ifaceDataName(allocObjName ?: className)
+                        preStmts += "$cName* ${t}_ptr = ($cName*)${t}.vt->allocMem((void*)&${t}.${dataField}, sizeof($cName));"
+                        preStmts += "if (${t}_ptr) *${t}_ptr = ${cName}_primaryConstructor($ctorArgs);"
+                        return "${t}_ptr"
+                    }
+                }
+            }
         }
         // C package passthrough: c.printf(...) → printf(...)
         // String literals are emitted as raw C strings (not ktc_core_str wrapped)
@@ -1409,9 +1457,13 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                 val baseArgType = argKtcCore?.let {
                     if (it is KtcType.User) it.baseName else it.toInternalStr
                 }
-                parts += if (baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true) {
+                val isClassImpl = baseArgType != null && classes.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true
+                val isObjImpl = baseArgType != null && objects.containsKey(baseArgType) && classInterfaces[baseArgType]?.contains(paramType) == true
+                parts += if (isClassImpl || isObjImpl) {
                     if (argKtcCore is KtcType.Ptr) {
                         "${typeFlatName(baseArgType)}_as_$paramType($expr)"
+                    } else if (isObjImpl) {
+                        "${typeFlatName(baseArgType)}_as_$paramType(&$expr)"
                     } else {
                         "${typeFlatName(baseArgType)}_as_$paramType(&$expr)"
                     }

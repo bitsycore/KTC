@@ -328,6 +328,18 @@ class Parser(private val tokens: List<Token>) {
         expect(TokenType.OBJECT)
         val name = expectIdent()
         skipNL()
+        // Parse optional super interfaces: object Name : Interface1, Interface2 { ... }
+        val superInterfaces = mutableListOf<TypeRef>()
+        if (at(TokenType.COLON)) {
+            advance(); skipNL()
+            while (true) {
+                val iface = parseTypeRef()
+                superInterfaces += iface
+                if (at(TokenType.COMMA)) { advance(); skipNL() }
+                else break
+            }
+            skipNL()
+        }
         val members = mutableListOf<Decl>()
         if (at(TokenType.LBRACE)) {
             advance(); nesting++; skipNL()
@@ -338,7 +350,7 @@ class Parser(private val tokens: List<Token>) {
             expect(TokenType.RBRACE); nesting--
         }
         skipTerminator()
-        return ObjectDecl(name, members, anns)
+        return ObjectDecl(name, members, anns, superInterfaces)
     }
 
     // ── companion object ─────────────────────────────────────────────
