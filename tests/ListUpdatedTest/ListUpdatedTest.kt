@@ -442,8 +442,8 @@ fun arrayListAllocTest() {
     heap1.value().testValueExtNullable()
     heap2.value().testValueExtNullable()
 
-    //heap1Null1?.value()?.testValueExtNullable()  // chained safe-calls need temp tracking
-    //heap1Null2?.value()?.testValueExtNullable()
+    heap1Null1?.value()?.testValueExtNullable()
+    heap1Null2?.value()?.testValueExtNullable()
     stack1Null1.testValueExtNullable()
     stack1Null2.testValueExtNullable()
 
@@ -482,8 +482,8 @@ fun arrayListAllocTest() {
     heap1.value().testListValueExtNullable()
     heap2.value().testListValueExtNullable()
 
-//    stack1Null1.testListValueExtNullable()
-//    stack1Null2.testListValueExtNullable()
+    stack1Null1.testListValueExtNullable()
+    stack1Null2.testListValueExtNullable()
 
     stack1.ptr().testListPtrExtNullable()
     stack2.ptr().testListPtrExtNullable()
@@ -491,7 +491,7 @@ fun arrayListAllocTest() {
     heap2.testListPtrExtNullable()
 
     heap1Null1.testListPtrExtNullable()
-    //heap1Null2.testListPtrExtNullable() // runtime error
+    heap1Null2.testListPtrExtNullable()
 }
 
 fun main() {

@@ -2005,7 +2005,12 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val cConcrete = typeFlatName(pointerBase)
             val typeId = getTypeId(pointerBase)
             val t = tmp()
-            preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_${ifaceExtConcrete}_vt, (void*)$recv};"
+            val isNullable = rawRecvTypeKtc is KtcType.Nullable
+            if (isNullable) {
+                preStmts += "ktc_IfacePtr $t = ($recv) ? ((ktc_IfacePtr){{$typeId}, (const void*)&${cConcrete}_${ifaceExtConcrete}_vt, (void*)($recv)}) : ((ktc_IfacePtr){0});"
+            } else {
+                preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_${ifaceExtConcrete}_vt, (void*)$recv};"
+            }
             t
         } else recv
         val allArgs = if (argStr.isEmpty()) wrappedRecv else "$wrappedRecv, $argStr"
@@ -2133,7 +2138,15 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             when {
                 dot.obj is ThisExpr -> "\$self"
                 recvVarKtc2 is KtcType.Nullable && isValueNullableKtc(recvVarKtc2)
-                        && recvName != null && isOptional(recvName) -> recv
+                        && recvName != null && isOptional(recvName) -> {
+                    if (ifaceConcrete != null && isExtFun) {
+                        val optBase = ifaceConcrete
+                        val t = tmp()
+                        val optType2 = optCTypeName("${optBase}?")
+                        preStmts += "$optType2 $t = ($recv.tag == ktc_SOME) ? ($optType2){ktc_SOME, ${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv.value)} : ($optType2){ktc_NONE};"
+                        t
+                    } else recv
+                }
 
                 isExtFun -> {
                     if (isNullableRecv && !isPtrRecv) {
@@ -2145,8 +2158,8 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                                 val t = tmp()
                                 val optType2 = optCTypeName("${optBase}?")
                                 preStmts += "$optType2 $t = ($recv.tag == ktc_SOME) ? ($optType2){ktc_SOME, ${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv.value)} : ($optType2){ktc_NONE};"
-                                optSome(optSelfType, t)
-                            } else optSome(optSelfType, recv)
+                                t
+                            } else recv
                         } else {
                             val valExpr = if (ifaceConcrete != null) "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)" else recv
                             val optBase = ifaceConcrete ?: vClassInfo.baseName
@@ -2359,6 +2372,32 @@ internal fun CCodeGen.genSafeMethodCall(dot: SafeDotExpr, args: List<Arg>): Stri
         codegenWarning("Safe call '?.' on non-nullable '$recvType' ($vSrc.${dot.name}) is redundant; use '.' instead")
     }
     val isValueNullRecv = recvTypeKtc is KtcType.Nullable && isValueNullableKtc(recvTypeKtc)
+
+    // Handle intermediate safe-call chains (e.g., a?.b()?.c())
+    if (recvName == null) {
+        val recvExpr = genExpr(dot.obj)  // pre-compute, returns temp name from inner safe-call
+        val dotExpr2 = DotExpr(NameExpr(recvExpr), dot.name)
+        val call2 = genMethodCall(dotExpr2, args)
+        val guard2 = if (recvTypeKtc is KtcType.Nullable) nullGuardExpr(recvTypeKtc, recvExpr, recvExpr, isThis = false) else "true"
+        val retType2 = inferMethodReturnType(dotExpr2, args)
+        if (retType2 == null || retType2 == "Unit") {
+            return "($guard2 ? ($call2, 0) : 0)"
+        }
+        val retKtc2 = parseResolvedTypeName(retType2)
+        if (retKtc2 is KtcType.Ptr) {
+            val t2 = tmp()
+            preStmts += "${cTypeStr(retType2)} $t2 = $guard2 ? $call2 : NULL;"
+            defineVar(t2, "${retType2}?")
+            return t2
+        }
+        val optType2 = optCTypeName("${retType2}?")
+        val t2 = tmp()
+        preStmts += "$optType2 $t2 = $guard2 ? ($optType2){ktc_SOME, $call2} : ${optNone(optType2)};"
+        markOptional(t2)
+        defineVar(t2, "${retType2}?")
+        return t2
+    }
+
     val dotExpr = DotExpr(dot.obj, dot.name)
 
     // Handle .ptr() safe-call: guard first, then take address
