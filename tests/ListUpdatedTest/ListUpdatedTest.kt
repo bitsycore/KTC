@@ -23,4 +23,5 @@ fun arrayListAllocTest() {
 
 fun main() {
     arrayListAllocTest()
+    println("all ok")
 }

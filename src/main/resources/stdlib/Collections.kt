@@ -89,22 +89,6 @@ class ArrayList<T>(private val allocator: @Ptr Allocator, capacity: Int) : Mutab
 
 }
 
-inline fun <T> Allocator.listOf(vararg items: T): List<T> {
-	val list = ArrayList<T>(this, items.size)
-	for (item in items) {
-		list.add(item)
-	}
-	return list
-}
-
-inline fun <T> Allocator.mutableListOf(vararg items: T): MutableList<T> {
-	val list = ArrayList<T>(this, items.size)
-	for (item in items) {
-		list.add(item)
-	}
-	return list
-}
-
 fun <T> mutableListOf(vararg items: T): MutableList<T> {
     val list = ArrayList<T>(Heap, items.size)
     for (item in items) {

@@ -358,7 +358,7 @@ internal fun CCodeGen.emitExtensionFun(f: FunDecl) {
         else -> "void"
     }
     val isClassType = classes.containsKey(recvTypeName)
-    val cRecvType = cTypeStr(recvTypeName)
+    val cRecvType = cType(f.receiver!!)    // use TypeRef to honor @Ptr annotations
     // Nullable receiver: pass as Optional struct (value) or OptionalPtr (pointer type)
     val selfParam = if (recvIsNullable) {
         val recvOptType = optCTypeName(recvTypeName)

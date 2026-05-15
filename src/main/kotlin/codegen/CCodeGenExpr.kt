@@ -2055,12 +2055,13 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
     // Extension function on non-class type (Int, String, etc.)
     if (recvType != null) {
         var extFun = extensionFuns[recvType]?.find { it.name == method }
-        // Also check implemented interfaces for class receiver types
-        if (extFun == null && classes.containsKey(recvType)) {
+        var extFunOwner: String = recvType
+        // Also check implemented interfaces for class/object receiver types
+        if (extFun == null && (classes.containsKey(recvType) || objects.containsKey(recvType))) {
             val ifaces = classInterfaces[recvType] ?: emptyList()
             for (ifaceName in ifaces) {
                 extFun = extensionFuns[ifaceName]?.find { it.name == method }
-                if (extFun != null) break
+                if (extFun != null) { extFunOwner = ifaceName; break }
             }
         }
         if (extFun != null) {
@@ -2079,7 +2080,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             } else recv
             // Use the receiver's actual interface type for the call
             val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
-            return "${typeFlatName(recvType)}_$method($allArgs)"
+            return "${typeFlatName(extFunOwner)}_$method($allArgs)"
         }
         // Implicit dispose — always emitted as no-op
         if (method == "dispose" && (classes.containsKey(recvType) || enums.containsKey(recvType) || objects.containsKey(recvType))) {

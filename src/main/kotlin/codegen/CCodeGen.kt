@@ -1020,6 +1020,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         }
         // Objects implementing interfaces:
         for (d in file.decls) if (d is ObjectDecl && d.superInterfaces.isNotEmpty()) {
+            classInterfaces[d.name] = d.superInterfaces.map { it.name }
             emitInterfaceVtablesForClass(d.name, d.superInterfaces, implsOnly = true)
         }
         // Monomorphized generic classes:
