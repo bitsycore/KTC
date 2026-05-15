@@ -378,10 +378,19 @@ function Run-Suite {
 		}
 
 		# Run
-		$vTmpOut = "$vOut\__stdout.txt"
-		& $vExe > $vTmpOut 2>&1
-		$vREx = $LASTEXITCODE;  $vRMs = $vSw.ElapsedMilliseconds;  $vSw.Stop()
-		$vCapt = if (Test-Path $vTmpOut) { $c = Get-Content $vTmpOut; Remove-Item $vTmpOut; $c } else { @() }
+		$vExeRun = "$vOut\_ktcrun.exe"
+		Copy-Item $vExe $vExeRun -Force
+		$vPsi = [System.Diagnostics.ProcessStartInfo]::new($vExeRun)
+		$vPsi.RedirectStandardOutput = $true
+		$vPsi.RedirectStandardError  = $true
+		$vPsi.UseShellExecute        = $false
+		$vP = [System.Diagnostics.Process]::Start($vPsi)
+		$vRawOut = $vP.StandardOutput.ReadToEnd()
+		$vRawErr = $vP.StandardError.ReadToEnd()
+		$vP.WaitForExit()
+		$vREx = $vP.ExitCode;  $vRMs = $vSw.ElapsedMilliseconds;  $vSw.Stop()
+		Remove-Item $vExeRun -ErrorAction SilentlyContinue
+		$vCapt = (($vRawOut + $vRawErr) -split "`r?`n")
 		if ($vREx -ne 0) {
 			Write-Host "  FAIL $vName (runtime error, exit $vREx)" -ForegroundColor Red
 			return @{ Name = $vName; Passed = $false }
