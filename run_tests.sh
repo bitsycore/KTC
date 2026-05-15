@@ -43,7 +43,7 @@ INTERACTIVE=false
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--help)           sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# //'; exit 0 ;;
-		--interactive)    INTERACTIVE=true; shift ;;
+		--interactive|-I|-i)    INTERACTIVE=true; shift ;;
 		--skip-unit)      SKIP_UNIT=true; shift ;;
 		--run)            RUN_TEST="$2"; shift 2 ;;
 		--mem-track)      EXTRA_ARGS="$EXTRA_ARGS --mem-track"; shift ;;
@@ -95,6 +95,20 @@ fail()    { printf "  ${RED}FAIL${NC} %s\n" "$1"; }
 info()    { printf "  ${CYAN}----%s${NC} %s\n" "" "$1"; }
 section() { printf "\n${YELLOW}=== %s ===${NC}\n" "$1"; }
 showcmd() { printf "  ${DYELLOW}\$ ${WHITE}%s${NC}\n" "$1"; }
+
+# Returns terminal dimensions as "rows cols" using ioctl (stty) which queries
+# the actual window size. tput is unreliable on macOS where terminfo has
+# hardcoded lines#24 which ignores the real terminal dimensions.
+get_term_size() {
+	local s
+	s=$(stty size 2>/dev/null) && [[ -n "$s" ]] && { echo "$s"; return; }
+	local h w
+	h=$(tput lines 2>/dev/null || true)
+	w=$(tput cols 2>/dev/null || true)
+	[[ -n "$h" && "$h" =~ ^[0-9]+$ && $h -gt 0 ]] && [[ -n "$w" && "$w" =~ ^[0-9]+$ && $w -gt 0 ]] && { echo "$h $w"; return; }
+	[[ -n "${LINES:-}" && "${LINES:-}" =~ ^[0-9]+$ && "${LINES:-}" -gt 0 ]] && { echo "${LINES} ${COLUMNS:-80}"; return; }
+	echo "24 80"
+}
 
 # Returns current epoch time in milliseconds.
 now_ms() {
@@ -311,7 +325,6 @@ run_suite() {
 
 	local vTmpDir
 	vTmpDir="$(mktemp -d)"
-	trap 'rm -rf "$vTmpDir"' EXIT
 
 	# Run tests in parallel background jobs
 	local vPids=()
@@ -416,6 +429,7 @@ run_suite() {
 			SUITE_FAILED_NAMES+=("$vDirName")
 		fi
 	done
+	rm -rf "$vTmpDir"
 }
 
 # Prints the final pass/fail summary and exits with the appropriate code.
@@ -439,13 +453,16 @@ show_summary() {
 # MARK: Interactive TUI
 # ==================
 
+# macOS Bash 3.2 doesn't support fractional read -t timeout
+_KT_TMOUT="-t0.1"; [[ ${BASH_VERSINFO[0]:-0} -lt 4 ]] && _KT_TMOUT="-t1"
+
 # Reads a single keypress and outputs a canonical name: up | down | right | left | space | enter | esc | char:X
 tui_read_key() {
 	local vKey
 	IFS= read -rsn1 vKey
 	if [[ "$vKey" == $'\x1b' ]]; then
 		local vSeq
-		IFS= read -rsn2 -t0.1 vSeq 2>/dev/null || true
+		IFS= read -rsn2 $_KT_TMOUT vSeq 2>/dev/null || true
 		case "$vSeq" in "[A") echo "up" ;; "[B") echo "down" ;; "[C") echo "right" ;; "[D") echo "left" ;; *) echo "esc" ;; esac
 	elif [[ "$vKey" == " " ]];     then echo "space"
 	elif [[ "$vKey" == "" ]];      then echo "enter"
@@ -482,8 +499,8 @@ run_interactive() {
 	tput smcup 2>/dev/null || true
 
 	render_tui() {
-		local vTermH; vTermH=$(tput lines 2>/dev/null || echo 24)
-		local vW; vW=$(tput cols 2>/dev/null || echo 80)
+		local vTermH vW
+		read vTermH vW <<< "$(get_term_size)"
 		(( vW > 64 )) && vW=62 || vW=$(( vW - 2 ))
 		# Fixed 27 lines: title(1) dsep(1) tests-hdr(1) sep(1) sum1(1) sum2(1) blank(1)=7
 		# opts-hdr(1) sep(1) 4opts(4) blank(1)=7  build-hdr(1) sep(1) 3builds(3) blank(1)=6
@@ -491,15 +508,19 @@ run_interactive() {
 
 		# Guard: 27 fixed lines + 2-line margin = 29 minimum rows required
 		if (( vTermH < 29 )); then
-			local vBlank; printf -v vBlank '%*s' "$vW" ''; vBlank="${vBlank// / }"
-			printf '\033[H'
+			local vRows vCols; read vRows vCols <<< "$(get_term_size)"
+			(( vCols > 64 )) && vCols=62 || vCols=$(( vCols - 2 ))
+			(( vCols < 1 )) && vCols=1
+			local vBlank; printf -v vBlank '%*s' "$vCols" ''; vBlank="${vBlank// / }"
+			printf '\033[H\033[2J'
 			printf " ${YELLOW}Terminal too small — need at least 29 rows (current: %d)${NC}\n" "$vTermH"
-			local vi; for (( vi=1; vi<vTermH; vi++ )); do printf '%s\n' "$vBlank"; done
+			local vi; for (( vi=1; vi<vRows; vi++ )); do printf '%s\n' "$vBlank"; done
+			printf '%s' "$vBlank"
 			return
 		fi
 
-		# Move to top-left; blank-fill below replaces [2J without flicker
-		printf '\033[H'
+		# Move to top-left; clear-to-end erases sub-screen residue when switching panels
+		printf '\033[H\033[J'
 		local vSep; printf -v vSep '%*s' "$vW" ''; vSep="${vSep// /─}"
 		local vDSep; printf -v vDSep '%*s' "$vW" ''; vDSep="${vDSep// /═}"
 
@@ -576,13 +597,13 @@ run_interactive() {
 			local vPtr=" "; local vFg="$GRAY"
 			[[ "$vSection" == "compiler" && $i -eq $vIdx ]] && vPtr="►" && vFg="$WHITE"
 			local vVal="${vFieldVals[$i]}"; [[ -z "$vVal" ]] && vVal="(none)"
-			local vHint=""; [[ "$vSection" == "compiler" && $i -eq $vIdx ]] && vHint="  Enter=edit"
+			local vHint=""; [[ "$vSection" == "compiler" && $i -eq $vIdx ]] && vHint="  Space=edit"
 			printf " ${vFg}%s  %s:  %s%s${NC}\n" "$vPtr" "${vFieldLabels[$i]}" "$vVal" "$vHint"
 		done
 
 		# Hints bar — truncated to terminal width to prevent wrapping/scroll corruption
-		local vHints="↑↓ Move   ◄► Panel   Space Toggle   A All   N None   Enter Edit/Run   Q Quit"
-		local vMaxW=$(( $(tput cols 2>/dev/null || echo 80) - 2 ))
+		local vHints="↑↓ Move   ◄► Panel   Space Toggle/Edit   A All   N None   Enter Run   Q Quit"
+		local vMaxW=$(( vW - 2 ))
 		(( ${#vHints} > vMaxW )) && vHints="${vHints:0:$vMaxW}" || true
 		printf "\n"
 		printf " ${GRAY}%s${NC}\n" "$vDSep"
@@ -594,6 +615,7 @@ run_interactive() {
 		(( vFillCount < 0 )) && vFillCount=0 || true
 		local vi; for (( vi=0; vi < vFillCount; vi++ )); do printf '%s\n' "$vBlankRow"; done
 		printf '%s' "$vBlankRow"
+		printf '\033[J'
 
 	}
 
@@ -629,7 +651,7 @@ run_interactive() {
 			IFS= read -rsn1 vRaw
 
 			if [[ "$vRaw" == $'\x1b' ]]; then
-				local vSeq; IFS= read -rsn2 -t0.1 vSeq 2>/dev/null || true
+				local vSeq; IFS= read -rsn2 $_KT_TMOUT vSeq 2>/dev/null || true
 				[[ -z "$vSeq" ]] && return 1 || true  # pure ESC = cancel; arrow keys ignored
 			elif [[ "$vRaw" == "" || "$vRaw" == $'\r' ]]; then
 				vEditResult="$vBuf"; return 0
@@ -648,8 +670,8 @@ run_interactive() {
 	select_tests_screen() {
 		local vSIdx=0 vSOff=0
 		while true; do
-			local vTermH; vTermH=$(tput lines 2>/dev/null || echo 24)
-			local vW; vW=$(tput cols 2>/dev/null || echo 80)
+			local vTermH vW
+			read vTermH vW <<< "$(get_term_size)"
 			(( vW > 64 )) && vW=62 || vW=$(( vW - 2 ))
 			# Fixed: title(1) sep(1) scroll(1) blank(1) dsep(1) hints(1) = 6
 			local vViewH=$(( vTermH - 6 ))
@@ -677,9 +699,10 @@ run_interactive() {
 			printf "\n"
 			printf " ${GRAY}%s${NC}\n" "$vDSep"
 			local vHints=" ↑↓ Move   Space Toggle   A All   N None   Enter/Esc Back"
-			local vMaxW=$(( $(tput cols 2>/dev/null || echo 80) - 2 ))
+			local vMaxW=$(( vW - 2 ))
 			(( ${#vHints} > vMaxW )) && vHints="${vHints:0:$vMaxW}" || true
 			printf " ${GRAY}%s${NC}\n" "$vHints"
+			printf '\033[J'
 
 			local vKey; vKey=$(tui_read_key)
 			case "$vKey" in
@@ -753,24 +776,21 @@ run_interactive() {
 					compiler) vSection="build" ;;
 				esac
 				clamp_idx; adjust_view; render_tui ;;
-			space)
-				case "$vSection" in
-					tests) select_tests_screen; render_tui ;;
-					opts)  [[ ${vOptOn[$vIdx]}  -eq 1 ]] && vOptOn[$vIdx]=0  || vOptOn[$vIdx]=1; render_tui ;;
-					build) vBuildOn=(0 0 0); vBuildOn[$vIdx]=1; render_tui ;;
-				esac ;;
-			enter)
-				if [[ "$vSection" == "compiler" ]]; then
+		space)
+			case "$vSection" in
+				tests) select_tests_screen; render_tui ;;
+				opts)  [[ ${vOptOn[$vIdx]}  -eq 1 ]] && vOptOn[$vIdx]=0  || vOptOn[$vIdx]=1; render_tui ;;
+				build) vBuildOn=(0 0 0); vBuildOn[$vIdx]=1; render_tui ;;
+				compiler)
 					local vEditResult=""
 					if [[ $vIdx -eq 0 ]]; then
 						edit_field_inline "Compiler" "$vCompiler" false && vCompiler="$vEditResult"
 					else
 						edit_field_inline "CC Args" "$vCcArgs" true && vCcArgs="$vEditResult"
 					fi
-					render_tui
-				else
-					vResult=0; break
-				fi ;;
+					render_tui ;;
+			esac ;;
+			enter) vResult=0; break ;;
 			esc)   vResult=1; break ;;
 			"char:a"|"char:A") for ((i=0; i<vCount; i++)); do vTestOn[$i]=1; done; render_tui ;;
 			"char:n"|"char:N") for ((i=0; i<vCount; i++)); do vTestOn[$i]=0; done; render_tui ;;

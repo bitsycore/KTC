@@ -562,12 +562,12 @@ class TuiRunner {
 			$vFg  = if ($vCur) { $kWh } else { $kGr }
 			$vPtr = if ($vCur) { "►" } else { " " }
 			$vVal = if ($vF.Value -ne "") { $vF.Value } else { "(none)" }
-			$vHint = if ($vCur) { "  Enter=edit" } else { "" }
+			$vHint = if ($vCur) { "  Space=edit" } else { "" }
 			[void]$vSb.Append($vFg + (" $vPtr  $($vF.Label):  $vVal$vHint").PadRight($vW + 2) + $kRst + "`n")
 		}
 
 		# Hints bar — truncated to terminal width to prevent wrapping/scroll corruption
-		$vHints = " ↑↓ Move   ◄► Panel   Space Toggle   A All   N None   Enter Edit/Run   Q Quit"
+		$vHints = " ↑↓ Move   ◄► Panel   Space Toggle/Edit   A All   N None   Enter Run   Q Quit"
 		$vHints = $vHints.Substring(0, [Math]::Min($vHints.Length, [Console]::WindowWidth - 1))
 		[void]$vSb.Append("".PadRight($vW + 2) + "`n")
 		[void]$vSb.Append($kGr + (" $vDSp") + $kRst + "`n")
@@ -739,17 +739,15 @@ class TuiRunner {
 								$this.Builds | ForEach-Object { $_.On = $false }
 								$this.Builds[$this.Idx].On = $true
 							}
+							"compiler" {
+								$vF = $this.Fields[$this.Idx]
+								$vF.Value = $this.EditField($vF.Label, $vF.Value, ($vF.Key -eq "CcArgs"))
+							}
 						}
 						$this.Render()
 					}
 					([ConsoleKey]::Enter) {
-						if ($this.Section -eq "compiler") {
-							$vF = $this.Fields[$this.Idx]
-							$vF.Value = $this.EditField($vF.Label, $vF.Value, ($vF.Key -eq "CcArgs"))
-							$this.Render()
-						} else {
-							return $this.BuildResult()
-						}
+						return $this.BuildResult()
 					}
 					([ConsoleKey]::Escape) { return $null }
 				}
