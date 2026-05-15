@@ -91,7 +91,7 @@ int main(void) {
 - Smart casts on `val` after null check or `is` check
 
 **Arrays**
-- `IntArray`, `Array<T>`, `@Size(N) Array<T>`, `@Ptr Array<T>` — see [KOTLIN_TO_C.md](KOTLIN_TO_C.md)
+- `IntArray`, `Array<T>`, `@Size(N) Array<T>`, `@Ptr Array<T>` — see [KOTLIN_TO_C.md](docs/KOTLIN_TO_C.md)
 - `Pair<A,B>`, `Triple<A,B,C>` as intrinsic stack structs
 
 **Stdlib** (`package ktc.std`)
@@ -123,8 +123,8 @@ java -jar KotlinToC.jar <file.kt...> [-o <dir>] [--mem-track] [--ast] [--dump-se
 
 | Document | Contents |
 |---|---|
-| [KOTLIN_TO_C.md](KOTLIN_TO_C.md) | Full language reference: every supported feature with Kotlin → C examples and known limitations |
-| [TRANSPILER.md](TRANSPILER.md) | Transpiler internals: architecture, type system, how to add features, evolution rules |
+| [KOTLIN_TO_C.md](docs/KOTLIN_TO_C.md) | Full language reference: every supported feature with Kotlin → C examples and known limitations |
+| [TRANSPILER.md](docs/TRANSPILER.md) | Transpiler internals: architecture, type system, how to add features, evolution rules |
 | [AGENTS.md](AGENTS.md) | How to write unit and integration tests, contributor conventions |
 
 ---

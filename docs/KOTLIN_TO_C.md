@@ -2,7 +2,7 @@
 
 This document describes the **supported Kotlin subset**, its C mapping, and known
 limitations. For transpiler internals see [TRANSPILER.md](TRANSPILER.md). For how to
-write tests see [AGENTS.md](AGENTS.md).
+write tests see [AGENTS.md](../AGENTS.md).
 
 Source-to-source transpiler: Kotlin → C11. Zero runtime, stack-first, no GC.
 
@@ -12,40 +12,40 @@ Source-to-source transpiler: Kotlin → C11. Zero runtime, stack-first, no GC.
 
 ### Primitives
 
-| Kotlin | C |
-|--------|---|
-| `Byte` | `ktc_Byte` (int8_t) |
-| `Short` | `ktc_Short` (int16_t) |
-| `Int` | `ktc_Int` (int32_t) |
-| `Long` | `ktc_Long` (int64_t) |
-| `UByte` | `ktc_UByte` (uint8_t) |
-| `UShort` | `ktc_UShort` (uint16_t) |
-| `UInt` | `ktc_UInt` (uint32_t) |
-| `ULong` | `ktc_ULong` (uint64_t) |
-| `Float` | `ktc_Float` (float) |
-| `Double` | `ktc_Double` (double) |
-| `Boolean` | `ktc_Bool` (bool) |
-| `Char` | `ktc_Char` (char) |
-| `String` | `ktc_String` = `{ const char* ptr; int32_t len; }` (non-owning slice) |
+| Kotlin    | C                                                                     |
+|-----------|-----------------------------------------------------------------------|
+| `Byte`    | `ktc_Byte` (int8_t)                                                   |
+| `Short`   | `ktc_Short` (int16_t)                                                 |
+| `Int`     | `ktc_Int` (int32_t)                                                   |
+| `Long`    | `ktc_Long` (int64_t)                                                  |
+| `UByte`   | `ktc_UByte` (uint8_t)                                                 |
+| `UShort`  | `ktc_UShort` (uint16_t)                                               |
+| `UInt`    | `ktc_UInt` (uint32_t)                                                 |
+| `ULong`   | `ktc_ULong` (uint64_t)                                                |
+| `Float`   | `ktc_Float` (float)                                                   |
+| `Double`  | `ktc_Double` (double)                                                 |
+| `Boolean` | `ktc_Bool` (bool)                                                     |
+| `Char`    | `ktc_Char` (char)                                                     |
+| `String`  | `ktc_String` = `{ const char* ptr; int32_t len; }` (non-owning slice) |
 
 All primitives have `ktc_T_Optional` and `ktc_hash_*` support.
 
 ### Nullable
 
-| Kotlin | C |
-|--------|---|
+| Kotlin            | C                                                      |
+|-------------------|--------------------------------------------------------|
 | `T?` (value type) | `ktc_T_Optional` = `{ ktc_OptionalTag tag; T value; }` |
-| `@Ptr T?` | `T*` (NULL = null) |
-| `Array<T>?` | `ktc_ArrayTrampoline` with `data == NULL` |
+| `@Ptr T?`         | `T*` (NULL = null)                                     |
+| `Array<T>?`       | `ktc_ArrayTrampoline` with `data == NULL`              |
 
 ### Arrays
 
-| Kotlin | C | Notes |
-|--------|---|------|
-| `Array<T>` | `ktc_ArrayTrampoline { size, data }` | Stack-only, **cannot be returned** |
-| `@Size(N) Array<T>` | `T[N]` (out-pointer) | Fixed-size, **can be returned** |
-| `@Ptr Array<T>` | `T*` + companion `int32_t name$len` | Heap pointer, has `$len` |
-| `ByteArray`, `IntArray`, ... | `ktc_Byte*`, `ktc_Int*`, ... | Raw pointer, has `$len` |
+| Kotlin                       | C                                    | Notes                              |
+|------------------------------|--------------------------------------|------------------------------------|
+| `Array<T>`                   | `ktc_ArrayTrampoline { size, data }` | Stack-only, **cannot be returned** |
+| `@Size(N) Array<T>`          | `T[N]` (out-pointer)                 | Fixed-size, **can be returned**    |
+| `@Ptr Array<T>`              | `T*` + companion `int32_t name$len`  | Heap pointer, has `$len`           |
+| `ByteArray`, `IntArray`, ... | `ktc_Byte*`, `ktc_Int*`, ...         | Raw pointer, has `$len`            |
 
 **Array factories:**
 
@@ -103,12 +103,12 @@ class Inner : Parent { ... }                  // interface implementation
 
 ### Auto-generated methods (all classes)
 
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `hashCode()` | `ktc_Int ClassName_hashCode(ClassName* $self)` | Data: field hash; regular: identity hash with type_id mix |
-| `equals()` | `bool ClassName_equals(ClassName a, ClassName b)` | Field-by-field comparison; handles String, nullable, nested data classes |
-| `toString()` | `void ClassName_toString(ClassName* $self, ktc_StrBuf* sb)` | Data classes only |
-| `dispose()` | `void ClassName_dispose(void* $self)` | No-op by default; can be overridden |
+| Method       | Signature                                                   | Notes                                                                    |
+|--------------|-------------------------------------------------------------|--------------------------------------------------------------------------|
+| `hashCode()` | `ktc_Int ClassName_hashCode(ClassName* $self)`              | Data: field hash; regular: identity hash with type_id mix                |
+| `equals()`   | `bool ClassName_equals(ClassName a, ClassName b)`           | Field-by-field comparison; handles String, nullable, nested data classes |
+| `toString()` | `void ClassName_toString(ClassName* $self, ktc_StrBuf* sb)` | Data classes only                                                        |
+| `dispose()`  | `void ClassName_dispose(void* $self)`                       | No-op by default; can be overridden                                      |
 
 All four can be overridden with `override`. `dispose()` and `hashCode()` require `override` keyword even when implicitly overriding.
 
@@ -231,15 +231,15 @@ for (item in collection) { ... }  // requires operator iterator()
 ## Built-in Operations
 
 ### Bitwise (compiler intrinsic)
-| Kotlin | C |
-|--------|---|
-| `x.and(y)` / `x and y` | `x & y` |
-| `x.or(y)` / `x or y` | `x \| y` |
-| `x.xor(y)` / `x xor y` | `x ^ y` |
-| `x.shl(y)` / `x shl y` | `x << y` |
-| `x.shr(y)` / `x shr y` | `x >> y` |
+| Kotlin                   | C                  |
+|--------------------------|--------------------|
+| `x.and(y)` / `x and y`   | `x & y`            |
+| `x.or(y)` / `x or y`     | `x \| y`           |
+| `x.xor(y)` / `x xor y`   | `x ^ y`            |
+| `x.shl(y)` / `x shl y`   | `x << y`           |
+| `x.shr(y)` / `x shr y`   | `x >> y`           |
 | `x.ushr(y)` / `x ushr y` | `(ktc_UInt)x >> y` |
-| `x.inv()` | `~(x)` |
+| `x.inv()`                | `~(x)`             |
 
 ### String
 - `.length`, `.len`, `.runeLen`, `.runeAt(byteIndex)`
@@ -309,19 +309,19 @@ Terminates with message.
 
 These Kotlin features are **not supported** and have no planned equivalent:
 
-| Feature | Status |
-|---|---|
-| Coroutines / `suspend` | Not supported |
-| Reflection | Not supported |
-| Closures (capturing lambdas stored in variables) | Not supported — lambdas are inline-only |
-| `try`/`catch`/`throw` exceptions | Not supported — use `error()` |
-| Inheritance between classes (`open class`) | Not supported — use interfaces |
-| `sealed class` | Not supported — use `when` + interfaces |
-| String `split`, `replace`, complex operations | Limited — use C interop for complex string work |
-| Checked arithmetic, overflow detection | No — wraps like C |
-| Dynamic dispatch on value types | Not supported — use `@Ptr` for polymorphism |
-| `Array<T>` as a class field | Not supported — use `@Size(N) Array<T>` or `@Ptr Array<T>` |
-| Raw `Array<T>` returned from functions | Not supported — use `@Size(N)` or heap arrays |
+| Feature                                          | Status                                                     |
+|--------------------------------------------------|------------------------------------------------------------|
+| Coroutines / `suspend`                           | Not supported                                              |
+| Reflection                                       | Not supported                                              |
+| Closures (capturing lambdas stored in variables) | Not supported — lambdas are inline-only                    |
+| `try`/`catch`/`throw` exceptions                 | Not supported — use `error()`                              |
+| Inheritance between classes (`open class`)       | Not supported — use interfaces                             |
+| `sealed class`                                   | Not supported — use `when` + interfaces                    |
+| String `split`, `replace`, complex operations    | Limited — use C interop for complex string work            |
+| Checked arithmetic, overflow detection           | No — wraps like C                                          |
+| Dynamic dispatch on value types                  | Not supported — use `@Ptr` for polymorphism                |
+| `Array<T>` as a class field                      | Not supported — use `@Size(N) Array<T>` or `@Ptr Array<T>` |
+| Raw `Array<T>` returned from functions           | Not supported — use `@Size(N)` or heap arrays              |
 
 ---
 

@@ -2,7 +2,7 @@
 
 This document covers **transpiler internals**: architecture, type system, how to add
 features, and evolution rules. For the supported Kotlin subset see [KOTLIN_TO_C.md](KOTLIN_TO_C.md).
-For writing tests see [AGENTS.md](AGENTS.md).
+For writing tests see [AGENTS.md](../AGENTS.md).
 
 KTC translates a subset of Kotlin source to C11. The pipeline is:
 
@@ -18,36 +18,36 @@ Source files live in `src/main/kotlin/` organized by sub-package:
 
 **`com.bitsycore.ast`** — `ast/`
 
-| File | Role |
-|---|---|
-| `Ast.kt` | All AST node types (`TypeRef`, `Decl`, `Expr`, `Stmt`, …) |
-| `Token.kt` | Token enum and type definitions |
+| File       | Role                                                      |
+|------------|-----------------------------------------------------------|
+| `Ast.kt`   | All AST node types (`TypeRef`, `Decl`, `Expr`, `Stmt`, …) |
+| `Token.kt` | Token enum and type definitions                           |
 
 **`com.bitsycore.parser`** — `parser/`
 
-| File | Role |
-|---|---|
-| `Lexer.kt` | Tokenizes source text into `Token` list |
-| `Parser.kt` | Tokens → `KtFile` AST |
+| File        | Role                                    |
+|-------------|-----------------------------------------|
+| `Lexer.kt`  | Tokenizes source text into `Token` list |
+| `Parser.kt` | Tokens → `KtFile` AST                   |
 
 **`com.bitsycore.types`** — `types/`
 
-| File | Role |
-|---|---|
+| File           | Role                                                          |
+|----------------|---------------------------------------------------------------|
 | `CoreTypes.kt` | Type system: `KtcType` sealed hierarchy + `TypeDef` interface |
 
 **`com.bitsycore.codegen`** — `codegen/`
 
-| File | Role |
-|---|---|
+| File                    | Role                                                               |
+|-------------------------|--------------------------------------------------------------------|
 | `CCodeGenStructures.kt` | Symbol table data classes (`ClassInfo`, `ObjInfo`, `IfaceInfo`, …) |
-| `CCodeGen.kt` | Orchestrator: all shared state, `collectDecls()`, `generate()` |
-| `CCodeGenCTypes.kt` | Type resolution: `resolveTypeName`, `cTypeStr`, `expandParams` |
-| `CCodeGenScan.kt` | Pre-scanning: generic instantiation discovery |
-| `CCodeGenEmit.kt` | Declaration emission: structs, ctors, vtables, top-level funs |
-| `CCodeGenStmts.kt` | Statement codegen: var/if/for/while/return/inline |
-| `CCodeGenExpr.kt` | Expression codegen: calls, dot access, casts, operators |
-| `CCodeGenInfer.kt` | Type inference: `inferExprType`, `inferCallType`, `inferDotType` |
+| `CCodeGen.kt`           | Orchestrator: all shared state, `collectDecls()`, `generate()`     |
+| `CCodeGenCTypes.kt`     | Type resolution: `resolveTypeName`, `cTypeStr`, `expandParams`     |
+| `CCodeGenScan.kt`       | Pre-scanning: generic instantiation discovery                      |
+| `CCodeGenEmit.kt`       | Declaration emission: structs, ctors, vtables, top-level funs      |
+| `CCodeGenStmts.kt`      | Statement codegen: var/if/for/while/return/inline                  |
+| `CCodeGenExpr.kt`       | Expression codegen: calls, dot access, casts, operators            |
+| `CCodeGenInfer.kt`      | Type inference: `inferExprType`, `inferCallType`, `inferDotType`   |
 
 **`com.bitsycore`** — `Main.kt` (CLI entry point)
 
@@ -168,15 +168,15 @@ TypeDef  →  .flatName                             (C struct/typedef name)
 
 Type decisions must be made through `KtcType`, not by inspecting type strings.
 
-| Do this | Not this |
-|---|---|
-| `vKtc.isArrayLike` | `isArrayType(resolveTypeNameStr(t))` |
-| `vKtc is KtcType.Func` | `isFuncType(resolveTypeNameStr(t))` |
-| `vKtc is KtcType.Ptr` | `t.endsWith("*")` |
-| `vKtc is KtcType.Nullable` | `t.endsWith("?")` |
-| `vKtc.asArr?.elem` | `arrayElementCType(resolveTypeNameStr(t))` |
-| `cTypeStr(resolveTypeName(t))` | `cTypeStr(resolveTypeNameStr(t))` |
-| `defineVarKtc(name, resolveTypeName(t))` | `defineVar(name, resolveTypeNameStr(t))` |
+| Do this                                  | Not this                                   |
+|------------------------------------------|--------------------------------------------|
+| `vKtc.isArrayLike`                       | `isArrayType(resolveTypeNameStr(t))`       |
+| `vKtc is KtcType.Func`                   | `isFuncType(resolveTypeNameStr(t))`        |
+| `vKtc is KtcType.Ptr`                    | `t.endsWith("*")`                          |
+| `vKtc is KtcType.Nullable`               | `t.endsWith("?")`                          |
+| `vKtc.asArr?.elem`                       | `arrayElementCType(resolveTypeNameStr(t))` |
+| `cTypeStr(resolveTypeName(t))`           | `cTypeStr(resolveTypeNameStr(t))`          |
+| `defineVarKtc(name, resolveTypeName(t))` | `defineVar(name, resolveTypeNameStr(t))`   |
 
 ### `KtcType.User` carries its `TypeDef` — use it
 
@@ -196,12 +196,12 @@ a `KtcType`.
 
 Never construct C names by concatenating strings with prefix guesses.
 
-| Source | C name |
-|---|---|
+| Source                           | C name                                  |
+|----------------------------------|-----------------------------------------|
 | Class/object/enum/interface type | `vKtc.flatName` or `typeFlatName(name)` |
-| Top-level function | `funCName(name)` |
-| Method on class `ci` | `"${ci.flatName}_${methodName}"` |
-| Package prefix only | `pfx(name)` — last resort fallback |
+| Top-level function               | `funCName(name)`                        |
+| Method on class `ci`             | `"${ci.flatName}_${methodName}"`        |
+| Package prefix only              | `pfx(name)` — last resort fallback      |
 
 ### Scopes store `KtcType`
 
@@ -390,12 +390,12 @@ For `is IfaceName` checks, the emitter walks `interfaceImplementors` and ORs the
 
 Three representations depending on the type:
 
-| Kotlin type | C representation | Null sentinel |
-|---|---|---|
-| `T?` (primitive / struct) | `ktc_T_Optional { has, value }` | `has == 0` |
-| `@Ptr T?` | `T*` | `NULL` |
-| `Array<T>?` | `ktc_ArrayTrampoline` + `bool name$has` | `has == false` |
-| `Any?` | `ktc_Any` trampoline | `data == NULL` |
+| Kotlin type               | C representation                        | Null sentinel  |
+|---------------------------|-----------------------------------------|----------------|
+| `T?` (primitive / struct) | `ktc_T_Optional { has, value }`         | `has == 0`     |
+| `@Ptr T?`                 | `T*`                                    | `NULL`         |
+| `Array<T>?`               | `ktc_ArrayTrampoline` + `bool name$has` | `has == false` |
+| `Any?`                    | `ktc_Any` trampoline                    | `data == NULL` |
 
 Predicates: `isValueNullableType(str)`, `KtcType.Nullable`.
 Emit helpers: `optCTypeName(base)`, `optNone(cType)`, `optSome(cType, expr)`.
@@ -404,13 +404,13 @@ Emit helpers: `optCTypeName(base)`, `optNone(cType)`, `optSome(cType, expr)`.
 
 ## Arrays
 
-| Kotlin | C representation |
-|---|---|
-| `IntArray` / `Array<Int>` | `ktc_Int*` + companion `int32_t name$len` |
-| `@Size(N) IntArray` | `ktc_Int[N]` on the stack, no `$len` |
-| `@Ptr IntArray` | `ktc_Int*` raw pointer (explicit, no $len companion) |
-| `Array<Vec2>` | `game_Vec2*` + `int32_t name$len` (via `KT_ARRAY_DEF`) |
-| `RawArray<T>` | `T*` (no length tracking at all) |
+| Kotlin                    | C representation                                       |
+|---------------------------|--------------------------------------------------------|
+| `IntArray` / `Array<Int>` | `ktc_Int*` + companion `int32_t name$len`              |
+| `@Size(N) IntArray`       | `ktc_Int[N]` on the stack, no `$len`                   |
+| `@Ptr IntArray`           | `ktc_Int*` raw pointer (explicit, no $len companion)   |
+| `Array<Vec2>`             | `game_Vec2*` + `int32_t name$len` (via `KT_ARRAY_DEF`) |
+| `RawArray<T>`             | `T*` (no length tracking at all)                       |
 
 Array return values use an extra `int32_t* name_len_out` out-parameter.
 The `$len` companion is always adjacent to its array variable in scope.
