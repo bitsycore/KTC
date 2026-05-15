@@ -338,8 +338,8 @@ internal fun CCodeGen.genName(e: NameExpr): String {
     }
     // Top-level property: apply package prefix
     if (e.name in topProps) return typeFlatName(e.name)
-    // Object singleton: resolve to address of global instance (always @Ptr)
-    if (e.name in objects) return "&${typeFlatName(e.name)}"
+    // Object singleton: resolve to global instance name
+    if (e.name in objects) return typeFlatName(e.name)
     if (e.name in enums) return typeFlatName(e.name)
     // Inside a class nested within an object: resolve to parent object's field/function
     val parentObj2 = currentClass?.substringBefore('$')
@@ -671,7 +671,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         if (e.callee.name == "allocWith" && e.callee.obj is NameExpr && e.args.isNotEmpty()) {
             val className = e.callee.obj.name
             // Array.allocWith(allocator, size) → typed heap array allocation
-            if (className == "Array" || className == "RawArray" || className.endsWith("Array")) {
+            if (className == "Array" || className == "RawArray") {
                 val elemName = when {
                     e.typeArgs.isNotEmpty() ->
                         typeSubst[e.typeArgs[0].name] ?: e.typeArgs[0].name
@@ -699,8 +699,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 } else if (allocObjName != null && objects.containsKey(allocObjName)) {
                     val cConcrete = typeFlatName(allocObjName)
                     val typeId = getTypeId(allocObjName)
-                    // allocExpr already has & from genName for objects
-                    preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_Allocator_vt, (void*)$allocExpr};"
+                    preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_Allocator_vt, (void*)&$allocExpr};"
                     ifExpr = t
                 } else {
                     // Assume it's already a trampoline or compatible
@@ -710,12 +709,11 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 if (className == "Array") preStmts += "const ktc_Int ${t}_ptr\$len = $sizeExpr;"
                 return "${t}_ptr"
             }
-            if (classes.containsKey(className)) {
+            if (classes.containsKey(className) && !classes[className]!!.isGeneric) {
                 val cName = typeFlatName(className)
                 val allocExpr = genExpr(e.args[0].expr)
                 val ctorArgs = e.args.drop(1).joinToString(", ") { genExpr(it.expr) }
                 val t = tmp()
-                // If allocator is a class/object implementing Allocator, wrap to interface
                 val allocObjName = (e.args[0].expr as? NameExpr)?.name
                 val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
                 val allocInit = if (isAllocObj) {
@@ -1472,7 +1470,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                         val typeId = getTypeId(concreteName)
                         // Objects are always @Ptr (genName returns &objName), so just cast
                         val objPtr: String = if (arg.expr is NameExpr && objects.containsKey(arg.expr.name)) {
-                            "(void*)$expr"
+                            "(void*)&$expr"
                         } else if (arg.expr is NameExpr) {
                             "$expr"
                         } else {

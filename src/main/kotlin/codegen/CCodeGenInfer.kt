@@ -1,6 +1,7 @@
 package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
+import com.bitsycore.ktc.ast.Annotation
 import com.bitsycore.ktc.codegen.mapping.arrayElementKtTypeKtc
 import com.bitsycore.ktc.codegen.mapping.primitiveToArrayOptionalType
 import com.bitsycore.ktc.codegen.mapping.primitiveToArrayType
@@ -159,6 +160,14 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
                 val resolvedArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
                 return mangledGenericName(flatCallee, resolvedArgs)
             }
+        }
+        // allocWith → @Ptr ClassType
+        if (e.callee.name == "allocWith" && e.callee.obj is NameExpr) {
+            val objName = e.callee.obj.name
+            val typeArgs = e.typeArgs
+            val t = if (typeArgs.isNotEmpty()) TypeRef(objName, typeArgs = typeArgs, annotations = listOf(Annotation("Ptr")))
+                    else TypeRef(objName, annotations = listOf(Annotation("Ptr")))
+            return resolveTypeName(t).toInternalStr
         }
     }
     val name = (e.callee as? NameExpr)?.name

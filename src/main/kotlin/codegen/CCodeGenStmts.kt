@@ -664,7 +664,8 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
                 return TypeRef(objName, typeArgs = listOf(elem), annotations = listOf(Annotation("Ptr")))
             }
             if (classes.containsKey(objName) || genericClassDecls.containsKey(objName)) {
-                return TypeRef(objName, annotations = listOf(Annotation("Ptr")))
+                val typeArgs = if (inner.typeArgs.isNotEmpty()) inner.typeArgs else emptyList()
+                return TypeRef(objName, typeArgs = typeArgs, annotations = listOf(Annotation("Ptr")))
             }
         }
     }
