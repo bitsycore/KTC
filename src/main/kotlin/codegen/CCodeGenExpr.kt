@@ -338,8 +338,8 @@ internal fun CCodeGen.genName(e: NameExpr): String {
     }
     // Top-level property: apply package prefix
     if (e.name in topProps) return typeFlatName(e.name)
-    // Object singleton: resolve to global instance name
-    if (e.name in objects) return typeFlatName(e.name)
+    // Object singleton: resolve to address of global instance (always @Ptr)
+    if (e.name in objects) return "&${typeFlatName(e.name)}"
     if (e.name in enums) return typeFlatName(e.name)
     // Inside a class nested within an object: resolve to parent object's field/function
     val parentObj2 = currentClass?.substringBefore('$')
@@ -699,7 +699,8 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 } else if (allocObjName != null && objects.containsKey(allocObjName)) {
                     val cConcrete = typeFlatName(allocObjName)
                     val typeId = getTypeId(allocObjName)
-                    preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_Allocator_vt, (void*)&$allocExpr};"
+                    // allocExpr already has & from genName for objects
+                    preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_Allocator_vt, (void*)$allocExpr};"
                     ifExpr = t
                 } else {
                     // Assume it's already a trampoline or compatible
@@ -1469,8 +1470,9 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                     if (concreteName != null) {
                         val cConcrete = typeFlatName(concreteName)
                         val typeId = getTypeId(concreteName)
+                        // Objects are always @Ptr (genName returns &objName), so just cast
                         val objPtr: String = if (arg.expr is NameExpr && objects.containsKey(arg.expr.name)) {
-                            "(void*)&$expr"
+                            "(void*)$expr"
                         } else if (arg.expr is NameExpr) {
                             "$expr"
                         } else {
@@ -1856,8 +1858,14 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             return "${typeFlatName(pointerBase)}_$method($allArgs)"
         }
         when (method) {
-            "value" -> return "(*$recv)"
-            "deref" -> return "(*$recv)"
+            "value" -> {
+                if (objects.containsKey(pointerBase)) codegenError("Cannot call .value() on object '${pointerBase}' — objects are always @Ptr")
+                return "(*$recv)"
+            }
+            "deref" -> {
+                if (objects.containsKey(pointerBase)) codegenError("Cannot call .deref() on object '${pointerBase}' — objects are always @Ptr")
+                return "(*$recv)"
+            }
             "set" -> return "(*$recv = $argStr)"
             "copy" -> if (classes[pointerBase]?.isData == true) {
                 return genDataClassCopy(recv, pointerBase, args, heap = true)
