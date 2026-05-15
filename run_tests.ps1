@@ -237,13 +237,26 @@ function Invoke-Test {
 	# ── Run ──────────────────────────────────────────────────────
 	Write-Sec "Run"
 	Write-Cmd $vExe; Write-Host ""
-	$vROut  = & $vExe 2>&1
-	$vRExit = $LASTEXITCODE;  $vRMs = $vSw.ElapsedMilliseconds;  $vSw.Stop()
-	$vROut | ForEach-Object { Write-Host "  $_" }
+	# Copy to a neutral name to bypass Windows installer-detection heuristic
+	# (exe names containing "update/install/setup" trigger auto-elevation)
+	$vExeRun = "$inOutDir\_ktcrun.exe"
+	Copy-Item $vExe $vExeRun -Force
+	$vPsi = [System.Diagnostics.ProcessStartInfo]::new($vExeRun)
+	$vPsi.RedirectStandardOutput = $true
+	$vPsi.RedirectStandardError  = $true
+	$vPsi.UseShellExecute        = $false
+	$vP = [System.Diagnostics.Process]::Start($vPsi)
+	$vRawOut = $vP.StandardOutput.ReadToEnd()
+	$vRawErr = $vP.StandardError.ReadToEnd()
+	$vP.WaitForExit()
+	$vRExit = $vP.ExitCode;  $vRMs = $vSw.ElapsedMilliseconds;  $vSw.Stop()
+	Remove-Item $vExeRun -ErrorAction SilentlyContinue
+	$vCaptured = (($vRawOut + $vRawErr) -split "`r?`n")
+	$vCaptured | ForEach-Object { Write-Host "  $_" }
 	Write-Host ""
 	if ($vRExit -ne 0) { Write-Fail "Runtime error (exit $vRExit)"; return $false }
 
-	$vLeak = ($vROut | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
+	$vLeak = ($vCaptured | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
 	if ($vLeak) {
 		Write-Host "  PASS " -ForegroundColor DarkYellow -NoNewline
 		Write-Host "Program exited - memory leaks detected  " -NoNewline
@@ -365,14 +378,16 @@ function Run-Suite {
 		}
 
 		# Run
-		$vRO  = & $vExe 2>&1
+		$vTmpOut = "$vOut\__stdout.txt"
+		& $vExe > $vTmpOut 2>&1
 		$vREx = $LASTEXITCODE;  $vRMs = $vSw.ElapsedMilliseconds;  $vSw.Stop()
+		$vCapt = if (Test-Path $vTmpOut) { $c = Get-Content $vTmpOut; Remove-Item $vTmpOut; $c } else { @() }
 		if ($vREx -ne 0) {
 			Write-Host "  FAIL $vName (runtime error, exit $vREx)" -ForegroundColor Red
 			return @{ Name = $vName; Passed = $false }
 		}
 
-		$vLk  = @($vRO | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
+		$vLk  = @($vCapt | Where-Object { "$_" -match 'leaked\s+:' }).Count -gt 0
 		$e    = [char]27
 		$vTim = "${e}[90mktc: $(fmtMs $vTMs)  comp: $(fmtMs $vCMs)  run: $(fmtMs $vRMs)${e}[0m"
 		if ($vLk) { Write-Host "  ${e}[33mPASS $vName${e}[0m  ${e}[31mLEAK${e}[0m  $vTim" }
