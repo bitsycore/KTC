@@ -30,9 +30,9 @@ interface MutableList<T> : List<T> {
 	fun clear()
 }
 
-class ArrayList<T>(capacity: Int) : MutableList<T> {
+class ArrayList<T>(private val allocator: @Ptr Allocator, capacity: Int) : MutableList<T> {
 
-	private var buf: @Ptr Array<T> = Array<T>.allocWith(Heap, if (capacity > 0) capacity else 4)!!
+	private var buf: @Ptr Array<T> = Array<T>.allocWith(allocator, if (capacity > 0) capacity else 4)!!
 
 	override var size: Int = 0
 		private set
@@ -40,7 +40,7 @@ class ArrayList<T>(capacity: Int) : MutableList<T> {
     override fun add(value: T) {
         if (size >= buf.size) {
             val newSize = if (buf.size > 0) buf.size * 2 else 4
-            buf = buf.resizeWith(Heap, newSize)
+            buf = buf.resizeWith(allocator, newSize)
         }
         buf[size] = value
         size = size + 1
@@ -84,13 +84,21 @@ class ArrayList<T>(capacity: Int) : MutableList<T> {
 	}
 
     override fun dispose() {
-		Heap.freeMem(buf)
+		allocator.freeMem(buf)
     }
 
 }
 
-fun <T> listOf(vararg items: T): List<T> {
-	val list = ArrayList<T>(items.size)
+inline fun <T> Allocator.listOf(vararg items: T): List<T> {
+	val list = ArrayList<T>(this, items.size)
+	for (item in items) {
+		list.add(item)
+	}
+	return list
+}
+
+inline fun <T> Allocator.mutableListOf(vararg items: T): MutableList<T> {
+	val list = ArrayList<T>(this, items.size)
 	for (item in items) {
 		list.add(item)
 	}
@@ -98,9 +106,17 @@ fun <T> listOf(vararg items: T): List<T> {
 }
 
 fun <T> mutableListOf(vararg items: T): MutableList<T> {
-	val list = ArrayList<T>(items.size)
-	for (item in items) {
-		list.add(item)
-	}
-	return list
+    val list = ArrayList<T>(Heap, items.size)
+    for (item in items) {
+        list.add(item)
+    }
+    return list
+}
+
+fun <T> listOf(vararg items: T): List<T> {
+    val list = ArrayList<T>(Heap, items.size)
+    for (item in items) {
+        list.add(item)
+    }
+    return list
 }

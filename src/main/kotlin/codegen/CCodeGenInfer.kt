@@ -182,7 +182,8 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
             val resolvedArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
             return mangledGenericName(name, resolvedArgs)
         }
-        if (classes.containsKey(name) && classes[name]!!.isGeneric && e.args.isNotEmpty()) {
+        if (classes.containsKey(name) && classes[name]!!.isGeneric && e.args.isNotEmpty()
+            && classes[name]!!.typeParams.size == e.args.size) {
             // Infer type args from constructor arguments (e.g. Wrapper("hello") → Wrapper_String)
             val inferredArgs = e.args.map { inferExprType(it.expr) ?: "Int" }
             recordGenericInstantiation(name, inferredArgs)

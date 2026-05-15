@@ -728,13 +728,22 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 return "${t}_ptr"
             }
             if (genericClassDecls.containsKey(className)) {
-                val typeArgs = e.typeArgs
+                val typeArgs = e.typeArgs.ifEmpty { heapAllocTargetType?.typeArgs ?: emptyList() }
                 if (typeArgs.isNotEmpty()) {
                     val mangled = mangledGenericName(className, typeArgs.map { it.name })
                     if (classes.containsKey(mangled)) {
                         val cName = typeFlatName(mangled)
                         val allocExpr = genExpr(e.args[0].expr)
-                        val ctorArgs = e.args.drop(1).joinToString(", ") { genExpr(it.expr) }
+                        val ctorArgs = e.args.drop(1).joinToString(", ") { arg ->
+                            val argExpr = genExpr(arg.expr)
+                            val argName = (arg.expr as? NameExpr)?.name
+                            if (argName != null && objects.containsKey(argName)) {
+                                val cConcrete = typeFlatName(argName); val typeId = getTypeId(argName)
+                                val tCtor = tmp()
+                                preStmts += "ktc_IfacePtr $tCtor = {{$typeId}, (const void*)&${cConcrete}_Allocator_vt, (void*)&$argExpr};"
+                                tCtor
+                            } else argExpr
+                        }
                         val t = tmp()
                         val allocObjName = (e.args[0].expr as? NameExpr)?.name
                         val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
@@ -1121,6 +1130,22 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             if (classes.containsKey(nested)) resolvedName = nested
         }
     }
+    // Handle generic class constructor: explicit type args or LHS inference
+    val effectiveTypeArgs = e.typeArgs.ifEmpty { heapAllocTargetType?.typeArgs ?: emptyList() }
+    if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && effectiveTypeArgs.isNotEmpty()) {
+        val resolvedTypeArgs = effectiveTypeArgs.map { substituteTypeParams(it) }.map { it.name }
+        val mangledName = mangledGenericName(resolvedName, resolvedTypeArgs)
+        val ci = classes[mangledName] ?: error("Generic class '$mangledName' not materialized (typeSubst=$typeSubst)")
+        val templateDecl = genericClassDecls[resolvedName]
+        val vAllParams = ci.ctorProps + ci.ctorPlainParams
+        val vCtorParamList = vAllParams.map { Param(it.name, it.typeRef) }
+        val vFilledArgs = fillDefaults(args, vCtorParamList, vAllParams.associate {
+            val vCp = templateDecl?.ctorParams?.find { vP -> vP.name == it.name }
+            it.name to vCp?.default
+        }, resolvedName, strict = true)
+        val expandedArgs = expandCallArgs(vFilledArgs, vCtorParamList, isCtorCall = true)
+        return "${ci.flatName}_primaryConstructor($expandedArgs)"
+    }
     // Handle generic class constructor: MyList<Int>(8) → MyList_Int_primaryConstructor(8)
     if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && e.typeArgs.isNotEmpty()) {
         // Apply typeSubst so type params (e.g. T) resolve to concrete types (e.g. Int)
@@ -1140,6 +1165,8 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     }
     // Generic class constructor without explicit type args: infer from arguments
     if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && e.args.isNotEmpty()) {
+        val genParams = classes[resolvedName]!!.typeParams
+        if (genParams.size != e.args.size) { /* skip — ctor args != type params */ } else {
         val inferredArgs = e.args.map { inferExprType(it.expr) ?: "Int" }
         val mangledName = recordGenericInstantiation(resolvedName, inferredArgs)
         materializeGenericInstantiations()
@@ -1152,6 +1179,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             }, resolvedName, strict = true)
             val expandedArgs = expandCallArgs(vFilledArgs2, vCtorParamList2, isCtorCall = true)
             return "${ci.flatName}_primaryConstructor($expandedArgs)"               // ci.flatName replaces pfx(mangledName)
+        }
         }
     }
     if (classes.containsKey(resolvedName)) {
@@ -1813,15 +1841,21 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         val allocExpr = genExpr(args[0].expr)
         val newSizeExpr = genExpr(args[1].expr)
         val t = tmp()
-        val allocObjName = (args[0].expr as? NameExpr)?.name
-        val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
-        val allocInit = if (isAllocObj) {
-            "${typeFlatName(allocObjName!!)}_as_Allocator(&$allocExpr)"
-        } else { allocExpr }
-        val dataField = ifaceDataName(allocObjName ?: "Heap")
-        preStmts += "ktc_std_Allocator $t = $allocInit;"
-        preStmts += "$elemC* ${t}_ptr = ($elemC*)${t}.vt->reallocMem((void*)&${t}.${dataField}, $recv, sizeof($elemC) * (size_t)($newSizeExpr));"
-        // Array<T> has $len companion; RawArray<T> does not
+        val allocArgKtc = inferExprTypeKtc(args[0].expr)
+        val allocArgCore = (allocArgKtc as? KtcType.Nullable)?.inner ?: allocArgKtc
+        val isTrampoline = allocArgCore is KtcType.Ptr && allocArgCore.inner is KtcType.User && (allocArgCore.inner as KtcType.User).kind == KtcType.UserKind.Interface
+        val ifExpr: String
+        if (isTrampoline) {
+            ifExpr = allocExpr
+        } else {
+            val allocObjName = (args[0].expr as? NameExpr)?.name
+            if (allocObjName != null && objects.containsKey(allocObjName)) {
+                val cConcrete = typeFlatName(allocObjName); val typeId = getTypeId(allocObjName)
+                preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_Allocator_vt, (void*)&$allocExpr};"
+                ifExpr = t
+            } else { ifExpr = allocExpr }
+        }
+        preStmts += "$elemC* ${t}_ptr = ($elemC*)((ktc_std_Allocator_vt*)$ifExpr.vt)->reallocMem($ifExpr.obj, $recv, sizeof($elemC) * (size_t)($newSizeExpr));"
         val isRawArray = recvTypeKtc.asArr == null && recvTypeKtc is KtcType.Ptr
         if (!isRawArray) preStmts += "ktc_Int ${t}_ptr\$len = $newSizeExpr;"
         return "${t}_ptr"
