@@ -9,14 +9,49 @@ object Config {
     }
 }
 
+class SubConfig {
+
+    private val buffer: @Ptr Array<Int> = Array.allocWith(Heap, 128)
+    private val buffer2: @Ptr Array<Int> = Array<Int>.allocWith(Heap, 128)
+    private val buffer3 = Array<Int>.allocWith(Heap, 128)
+
+    private val rawBuffer: @Ptr RawArray<Float> = RawArray.allocWith(Heap, 128)
+    private val rawBuffer2: @Ptr RawArray<Float> = RawArray<Float>.allocWith(Heap, 128)
+    private val rawBuffer3 = RawArray<Float>.allocWith(Heap, 128)
+
+    override fun dispose() {
+        println("AutoFreeing SubConfig")
+        HeapFree(buffer)
+        HeapFree(buffer2)
+        HeapFree(buffer3)
+        HeapFree(rawBuffer)
+        HeapFree(rawBuffer2)
+        HeapFree(rawBuffer3)
+    }
+
+}
+
 object Config2 {
+
+    val sub = SubConfig()
+
     val buffer: @Ptr Array<Int> = Array.allocWith(Heap, 128)
     val buffer2: @Ptr Array<Int> = Array<Int>.allocWith(Heap, 128)
     val buffer3 = Array<Int>.allocWith(Heap, 128)
 
+    val rawBuffer: @Ptr RawArray<Float> = RawArray.allocWith(Heap, 128)
+    val rawBuffer2: @Ptr RawArray<Float> = RawArray<Float>.allocWith(Heap, 128)
+    val rawBuffer3 = RawArray<Float>.allocWith(Heap, 128)
+
     override fun dispose() {
         println("AutoFreeing Config2")
         HeapFree(buffer)
+        HeapFree(buffer2)
+        HeapFree(buffer3)
+        HeapFree(rawBuffer)
+        HeapFree(rawBuffer2)
+        HeapFree(rawBuffer3)
+        sub.dispose()
     }
 
 }
@@ -43,6 +78,9 @@ class TestCompanion {
 }
 
 fun main() {
+    println("Config2 buffer size: " + Config2.buffer.size.toString())
+    println("Config2 buffer2 size: " + Config2.buffer2.size.toString())
+    println("Config2 buffer3 size: " + Config2.buffer3.size.toString())
     val first = Config.next()
     if (first != 1) error("FAIL Config.next first=$first")
     println("first: $first")
