@@ -668,6 +668,32 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         // ClassName.allocWith(allocator, args...) → allocator-based heap construction
         if (e.callee.name == "allocWith" && e.callee.obj is NameExpr && e.args.isNotEmpty()) {
             val className = e.callee.obj.name
+            // Array.allocWith(allocator, size) → typed heap array allocation
+            if (className == "Array" || className == "RawArray" || className.endsWith("Array")) {
+                val elemName = when {
+                    e.typeArgs.isNotEmpty() ->
+                        typeSubst[e.typeArgs[0].name] ?: e.typeArgs[0].name
+                    heapAllocTargetType != null && heapAllocTargetType!!.name == className && heapAllocTargetType!!.typeArgs.isNotEmpty() ->
+                        typeSubst[heapAllocTargetType!!.typeArgs[0].name] ?: heapAllocTargetType!!.typeArgs[0].name
+                    heapAllocTargetType != null && heapAllocTargetType!!.name == "Array" && heapAllocTargetType!!.typeArgs.isNotEmpty() ->
+                        typeSubst[heapAllocTargetType!!.typeArgs[0].name] ?: heapAllocTargetType!!.typeArgs[0].name
+                    else -> "Int"
+                }
+                val elemC = cTypeStr(elemName)
+                val sizeExpr = genExpr(e.args[1].expr)
+                val allocObjName = (e.args[0].expr as? NameExpr)?.name
+                val allocExpr = genExpr(e.args[0].expr)
+                val t = tmp()
+                val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
+                val allocInit = if (isAllocObj) {
+                    "${typeFlatName(allocObjName!!)}_as_Allocator(&$allocExpr)"
+                } else { allocExpr }
+                val dataField = ifaceDataName(allocObjName ?: "Heap")
+                preStmts += "ktc_std_Allocator $t = $allocInit;"
+                preStmts += "$elemC* ${t}_ptr = ($elemC*)${t}.vt->allocMem((void*)&${t}.${dataField}, sizeof($elemC) * (size_t)($sizeExpr));"
+                if (className == "Array") preStmts += "const ktc_Int ${t}_ptr\$len = $sizeExpr;"
+                return "${t}_ptr"
+            }
             if (classes.containsKey(className)) {
                 val cName = typeFlatName(className)
                 val allocExpr = genExpr(e.args[0].expr)

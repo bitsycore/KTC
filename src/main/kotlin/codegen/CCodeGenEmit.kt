@@ -818,7 +818,9 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
             val pType       = p.type ?: inferInitType(p.init)
             val vKtcObjInit = resolveTypeName(pType)                   // KtcType for array checks
             val sizeAnn     = getSizeAnnotation(pType)
+            heapAllocTargetType = pType
             val expr        = genExpr(p.init)
+            heapAllocTargetType = null
             flushPreStmts("    ")
             if (vKtcObjInit.isArrayLike && sizeAnn != null) {
                 val vElemType = cTypeStr(vKtcObjInit.asArr!!.elem)     // element C type for sized array

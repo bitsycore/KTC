@@ -325,7 +325,9 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                     impl.appendLine("$ind$qual$ct ${s.name} = $expr;")
                     return
                 }
+                if (s.type != null) heapAllocTargetType = s.type
                 val expr = genExpr(s.init)
+                heapAllocTargetType = null
                 flushPreStmts(ind)
                 // Array type: deep copy from source (value semantics, not alias)
                 if (vKtcCore is KtcType.Arr && s.init !is NullLit) {
@@ -647,6 +649,19 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
                 return ta.typeArgs[0].copy(annotations = ta.typeArgs[0].annotations + sizeAnn)
             }
             return TypeRef(ta.name, typeArgs = ta.typeArgs, annotations = listOf(sizeAnn))
+        }
+        // allocWith returns @Ptr always
+        if (inner.callee is DotExpr && inner.callee.name == "allocWith") {
+            val obj = (inner.callee as DotExpr).obj
+            val objName = (obj as? NameExpr)?.name ?: ""
+            if (objName == "Array" || objName == "RawArray") {
+                val elem = inner.typeArgs.getOrNull(0) ?: TypeRef("Int")
+                if (objName == "RawArray") return elem.copy(annotations = listOf(Annotation("Ptr")))
+                return TypeRef(objName, typeArgs = listOf(elem), annotations = listOf(Annotation("Ptr")))
+            }
+            if (classes.containsKey(objName) || genericClassDecls.containsKey(objName)) {
+                return TypeRef(objName, annotations = listOf(Annotation("Ptr")))
+            }
         }
     }
     val initKtc = inferExprTypeKtc(init)

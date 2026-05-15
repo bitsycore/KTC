@@ -1296,7 +1296,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 				val vObjProps = d.members.filterIsInstance<PropDecl>().map { vP ->  // object properties
 					PropertyDef(
 						name = vP.name,
-						typeRef = vP.type ?: TypeRef("Int"),
+						typeRef = vP.type ?: inferInitType(vP.init),
 						isVal = !vP.mutable,
 						isPrivate = vP.isPrivate,
 						isPrivateSet = vP.isPrivateSet,

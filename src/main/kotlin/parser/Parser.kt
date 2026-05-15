@@ -626,14 +626,29 @@ class Parser(private val tokens: List<Token>) {
                         CallExpr(e, allArgs)
                     }
                 }
-                // Type-parameterized call: malloc<Int>(n)
+                // Type-parameterized call: malloc<Int>(n)  or  Array<Int>.method(args)
                 at(TokenType.LT) && e is NameExpr && looksLikeTypeArgs() -> {
                     val typeArgs = parseTypeArgList()
-                    expect(TokenType.LPAREN); nesting++; skipNL()
-                    val args = parseArgList()
-                    expect(TokenType.RPAREN); nesting--
-                    val allArgs = if (at(TokenType.LBRACE)) args + Arg(null, parseLambdaExpr()) else args
-                    CallExpr(e, allArgs, typeArgs)
+                    if (at(TokenType.DOT)) {
+                        // Array<Int>.method(args)
+                        advance(); skipNL()
+                        val dotExpr = DotExpr(e, expectIdent())
+                        if (at(TokenType.LPAREN)) {
+                            advance(); nesting++; skipNL()
+                            val args = parseArgList()
+                            expect(TokenType.RPAREN); nesting--
+                            val allArgs = if (at(TokenType.LBRACE)) args + Arg(null, parseLambdaExpr()) else args
+                            CallExpr(dotExpr, allArgs, typeArgs)
+                        } else if (at(TokenType.LBRACE)) {
+                            CallExpr(dotExpr, listOf(Arg(null, parseLambdaExpr())), typeArgs)
+                        } else dotExpr
+                    } else {
+                        expect(TokenType.LPAREN); nesting++; skipNL()
+                        val args = parseArgList()
+                        expect(TokenType.RPAREN); nesting--
+                        val allArgs = if (at(TokenType.LBRACE)) args + Arg(null, parseLambdaExpr()) else args
+                        CallExpr(e, allArgs, typeArgs)
+                    }
                 }
                 at(TokenType.LBRACKET) -> {
                     advance(); nesting++; skipNL()
