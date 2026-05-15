@@ -1901,8 +1901,18 @@ internal fun CCodeGen.emitFor(s: ForStmt, ind: String, method: Boolean) {
                 val iterVar = tmp()
                 val selfArg = if (isPointer) arrExpr else "&$arrExpr"
                 // For interface types, dispatch through vtable
+                val isPtrIface = isPointer && arrType != null && run {
+                    val ktc = parseResolvedTypeName(arrType)
+                    val inner = (ktc as? KtcType.Ptr)?.inner as? KtcType.User
+                    inner != null && inner.kind == KtcType.UserKind.Interface
+                }
                 if (arrType != null && interfaces.containsKey(arrType)) {
                     impl.appendLine("$ind$iterCType $iterVar = $arrExpr.vt->iterator(${ifaceVtableSelf(arrType, arrExpr)});")
+                } else if (isPtrIface) {
+                    val arrKtc = parseResolvedTypeName(arrType!!)
+                    val ifaceName = ((arrKtc as KtcType.Ptr).inner as KtcType.User).baseName
+                    val cIface = typeFlatName(ifaceName)
+                    impl.appendLine("$ind$iterCType $iterVar = ((${cIface}_vt*)$arrExpr.vt)->iterator($arrExpr.obj);")
                 } else {
                     val baseClass = if (isPointer) {
                         val arrKtc = parseResolvedTypeName(arrType!!)
@@ -1988,6 +1998,39 @@ internal fun CCodeGen.findOperatorIterator(type: String?): IteratorInfo? {
                 if (nextMethod?.returnType != null) {
                     val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
                     return IteratorInfo(iterType, vIndirectIterCI.flatName, elemType, true)
+                }
+            }
+        }
+    }
+    // Ptr to interface (e.g. @Ptr List<T> → List_Int*)
+    val isMonoIface = indirectBase != null && genericIfaceDecls.keys.any { indirectBase.startsWith(it + "_") }
+    if ((indirectBase != null && interfaces.containsKey(indirectBase)) || isMonoIface) {
+        val ifaceName = if (isMonoIface) indirectBase!! else indirectBase!!
+        val vIndirectIfaceII = interfaces[ifaceName]
+        val allIfaceMethods = if (vIndirectIfaceII != null) collectAllIfaceMethods(vIndirectIfaceII)
+            else {
+                // For monomorphized ifaces, look up methods from the template + concrete vtable info
+                val tmplName = genericIfaceDecls.keys.first { ifaceName.startsWith(it + "_") }
+                val tmplIID = interfaces[tmplName]
+                if (tmplIID != null) collectAllIfaceMethods(tmplIID) else emptyList()
+            }
+        val iterMethod = allIfaceMethods.find { it.name == "iterator" && it.isOperator }
+        if (iterMethod?.returnType != null) {
+            val iterType = resolveMethodReturnType(indirectBase, iterMethod.returnType)
+            if (classes.containsKey(iterType)) {
+                val vIndirectIterCI = classes[iterType]!!
+                val nextMethod = vIndirectIterCI.methods.find { it.name == "next" }
+                if (nextMethod?.returnType != null) {
+                    val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
+                    return IteratorInfo(iterType, vIndirectIterCI.flatName, elemType, true)
+                }
+            } else if (interfaces.containsKey(iterType)) {
+                val vIndirectIterII = interfaces[iterType]!!
+                val allIterMethods = collectAllIfaceMethods(vIndirectIterII)
+                val nextMethod = allIterMethods.find { it.name == "next" && it.isOperator }
+                if (nextMethod?.returnType != null) {
+                    val elemType = resolveMethodReturnType(iterType, nextMethod.returnType)
+                    return IteratorInfo(iterType, vIndirectIterII.flatName, elemType, true)
                 }
             }
         }

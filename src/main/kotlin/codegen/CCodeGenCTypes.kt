@@ -169,7 +169,7 @@ internal fun CCodeGen.expandParams(inParams: List<Param>): String {
 }
 
 internal fun CCodeGen.cTypeStr(t: String): String {
-    if (t == "ktc_IfacePtr") return "ktc_IfacePtr"
+    if (t == "ktc_IfacePtr" || t.startsWith("ktc_IfacePtr:")) return "ktc_IfacePtr"
     val ktc = parseResolvedTypeName(t)
     return cTypeStr(ktc)
 }
@@ -185,7 +185,12 @@ internal fun CCodeGen.resolveTypeNameStr(t: TypeRef?): String {
     val vIsPtr = vSubstituted.annotations.any { it.name == "Ptr" } // has @Ptr annotation
     if (vIsPtr) {
         // @Ptr InterfaceType → ktc_IfacePtr (trampoline value, carries vt+obj)
-        if (interfaces.containsKey(vSubstituted.name)) return "ktc_IfacePtr"
+        // For generic interfaces, include concrete type args in the resolved name
+        // so scope type resolution retains the concrete instantiation (e.g. "List_Int*")
+        if (interfaces.containsKey(vSubstituted.name)) {
+            if (vSubstituted.typeArgs.isNotEmpty()) return "ktc_IfacePtr:${vBase}"
+            return "ktc_IfacePtr"
+        }
         return "${vBase}*"
     }
     return vBase
@@ -479,8 +484,14 @@ internal fun CCodeGen.userType(inName: String, inKind: KtcType.UserKind = KtcTyp
 
 internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null): KtcType {
     // @Ptr InterfaceType → preserve interface info for dispatch
-    if (resolved == "ktc_IfacePtr" && t != null && interfaces.containsKey(t.name)) {
-        return KtcType.Ptr(userType(t.name, KtcType.UserKind.Interface))
+    if (resolved.startsWith("ktc_IfacePtr")) {
+        val concreteName = if (resolved.startsWith("ktc_IfacePtr:") && resolved.length > "ktc_IfacePtr:".length)
+            resolved.substring("ktc_IfacePtr:".length)
+        else if (t != null && interfaces.containsKey(t.name) && t.typeArgs.isNotEmpty()) {
+            val argNames = t.typeArgs.map { resolveTypeNameInnerStr(it) }
+            mangledGenericName(t.name, argNames)
+        } else t?.name ?: "Any"
+        return KtcType.Ptr(userType(concreteName, KtcType.UserKind.Interface))
     }
     // Pointer suffix — for array types that are already pointers, don't double-wrap
     if (resolved.endsWith("*?")) {
@@ -496,6 +507,7 @@ internal fun CCodeGen.parseResolvedTypeName(resolved: String, t: TypeRef? = null
     if (resolved.endsWith("*")) {
         val base = resolved.dropLast(1)
         if (base.endsWith("Array")) return parseResolvedTypeName(base, t)  // Array* → already a pointer
+        if (base.startsWith("ktc_IfacePtr")) return parseResolvedTypeName(base, t)  // ktc_IfacePtr:X* → already Ptr
         return KtcType.Ptr(parseResolvedTypeName(base, t))
     }
     // Nullable suffix

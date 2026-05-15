@@ -18,6 +18,24 @@ fun <T> testValue(list: ArrayList<T>) {
     }
 }
 
+fun <T> @Ptr ArrayList<T>.testPtrExt() {
+    println("list.testPtrExt()")
+    var counter = 0
+    for (value in this) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> ArrayList<T>.testValueExt() {
+    println("testValueExt(list)")
+    var counter = 0
+    for (value in this) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
 fun <T> testListPtr(list: @Ptr List<T>) {
     println("testListPtr(list)")
     var counter = 0
@@ -133,6 +151,11 @@ fun arrayListAllocTest() {
     testValue(heap1.value())
     testValue(heap2.value())
 
+    stack1.testValueExt()
+    stack2.testValueExt()
+    heap1.value().testValueExt()
+    heap2.value().testValueExt()
+
     testListValue(stack1)
     testListValue(stack2)
     testListValue(heap1.value())
@@ -143,10 +166,10 @@ fun arrayListAllocTest() {
     testPtr(heap1)
     testPtr(heap2)
 
-//    testListPtr(stack1.ptr())
-//    testListPtr(stack2.ptr())
-//    testListPtr(heap1)
-//    testListPtr(heap2)
+    testListPtr(stack1.ptr())
+    testListPtr(stack2.ptr())
+    testListPtr(heap1)
+    testListPtr(heap2)
 }
 
 fun main() {

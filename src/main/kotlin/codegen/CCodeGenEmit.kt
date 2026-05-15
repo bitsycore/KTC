@@ -461,6 +461,8 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
         impl.appendLine("// ══ generic ${f.name}<${typeArgs.joinToString(", ")}> ($currentSourceFile) ══")
         impl.appendLine()
 
+        // Prepend receiver as $self parameter for generic extensions
+        val hasReceiver = f.receiver != null
         // Resolve return type and params under substitution
         val returnsSizedArray = f.returnType != null && isSizedArrayTypeRef(f.returnType)
         val vRetKtcGen   = if (f.returnType != null) resolveTypeName(f.returnType) else null   // KtcType of return, or null
@@ -472,10 +474,11 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
             f.returnType != null -> cType(f.returnType)
             else -> "void"
         }
-        val cName = funCName(mangledName)
+        val cName = if (hasReceiver) {
+            val recvResolved = resolveTypeName(f.receiver).toInternalStr
+            "${typeFlatName(recvResolved)}_${f.name}"
+        } else funCName(mangledName)
         val baseParams = expandParams(f.params)
-        // Prepend receiver as $self parameter for generic extensions
-        val hasReceiver = f.receiver != null
         val selfParam = if (hasReceiver) "${cType(f.receiver)} \$self" else null
         val params = when {
             returnsSizedArray -> {
@@ -510,6 +513,21 @@ internal fun CCodeGen.emitGenericFunInstantiations(f: FunDecl) {
             } else ""
 
         pushScope()
+        // Set up receiver context for generic extension functions
+        if (hasReceiver) {
+            val recvResolved = resolveTypeName(f.receiver!!)
+            val recvName = recvResolved.toInternalStr
+            val isClassType = classes.containsKey(recvName)
+            currentExtRecvType = if (f.receiver!!.nullable) "${recvName}?" else recvName
+            defineVar("\$self", if (f.receiver!!.nullable) "${recvName}?" else recvName)
+            if (isClassType) {
+                currentClass = recvName
+                selfIsPointer = f.receiver!!.annotations.any { it.name == "Ptr" }
+            } else {
+                currentClass = null
+                selfIsPointer = false
+            }
+        }
         for (p in f.params) {
             val vKtcGenParam = resolveTypeName(p.type)             // KtcType of this parameter
             val vGenPStr     = vKtcGenParam.toInternalStr          // string for vararg/nullable/class checks

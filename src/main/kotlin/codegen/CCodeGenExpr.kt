@@ -1491,6 +1491,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                         arg.expr is NameExpr && classes.containsKey(arg.expr.name) -> arg.expr.name
                         arg.expr is NameExpr && objects.containsKey(arg.expr.name) -> arg.expr.name
                         argKtcCore is KtcType.User -> argKtcCore.baseName
+                        (argKtcCore as? KtcType.Ptr)?.inner is KtcType.User -> (argKtcCore.inner as KtcType.User).baseName
                         else -> null
                     }
                     if (concreteName != null) {
@@ -1499,7 +1500,11 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                         // Objects are always @Ptr (genName returns &objName), so just cast
                         val objPtr: String = if (arg.expr is NameExpr && objects.containsKey(arg.expr.name)) {
                             "(void*)&$expr"
+                        } else if (arg.expr is NameExpr && argKtcCore is KtcType.Ptr) {
+                            "$expr"
                         } else if (arg.expr is NameExpr) {
+                            "$expr"
+                        } else if (argKtcCore is KtcType.Ptr) {
                             "$expr"
                         } else {
                             val tVal = tmp()
@@ -1963,7 +1968,16 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             return t
         }
         val methodDecl = findOverload(method, args, vClassInfo.methods)
-        val isExtFun = methodDecl?.receiver != null
+        // Also check generic extension functions (fun <T> ArrayList<T>.method())
+        val genericExtDecl = if (methodDecl == null) genericFunDecls.find {
+            it.name == method && it.receiver != null && (
+                it.receiver.name == vClassInfo.baseName ||
+                (genericClassDecls.containsKey(it.receiver.name) && vClassInfo.baseName.startsWith("${it.receiver.name}_"))
+            )
+        } else null
+        val effectiveDecl = methodDecl ?: genericExtDecl
+        val isExtFun = effectiveDecl?.receiver != null
+        val isPtrRecv = effectiveDecl?.receiver?.annotations?.any { it.name == "Ptr" } == true
         val nullableRecv = hasNullableReceiverExt(recvType ?: "", method)
         val selfArg = if (nullableRecv) {
             val recvName = (dot.obj as? NameExpr)?.name
