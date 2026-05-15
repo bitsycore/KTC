@@ -683,16 +683,29 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
                 }
                 val elemC = cTypeStr(elemName)
                 val sizeExpr = genExpr(e.args[1].expr)
-                val allocObjName = (e.args[0].expr as? NameExpr)?.name
                 val allocExpr = genExpr(e.args[0].expr)
                 val t = tmp()
-                val isAllocObj = allocObjName != null && classInterfaces[allocObjName]?.contains("Allocator") == true
-                val allocInit = if (isAllocObj) {
-                    "${typeFlatName(allocObjName!!)}_as_Allocator(&$allocExpr)"
-                } else { allocExpr }
-                val dataField = ifaceDataName(allocObjName ?: "Heap")
-                preStmts += "ktc_std_Allocator $t = $allocInit;"
-                preStmts += "$elemC* ${t}_ptr = ($elemC*)${t}.vt->allocMem((void*)&${t}.${dataField}, sizeof($elemC) * (size_t)($sizeExpr));"
+                val allocObjName = (e.args[0].expr as? NameExpr)?.name
+
+                // Use trampoline dispatch for allocWith.
+                // If allocator is already @Ptr (trampoline), use directly.
+                // If it's a concrete object name, wrap into ktc_IfacePtr.
+                val allocArgKtc = inferExprTypeKtc(e.args[0].expr)
+                val allocArgCore = (allocArgKtc as? KtcType.Nullable)?.inner ?: allocArgKtc
+                val isTrampoline = allocArgCore is KtcType.Ptr && allocArgCore.inner is KtcType.User && (allocArgCore.inner as KtcType.User).kind == KtcType.UserKind.Interface
+                val ifExpr: String
+                if (isTrampoline) {
+                    ifExpr = allocExpr
+                } else if (allocObjName != null && objects.containsKey(allocObjName)) {
+                    val cConcrete = typeFlatName(allocObjName)
+                    val typeId = getTypeId(allocObjName)
+                    preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_Allocator_vt, (void*)&$allocExpr};"
+                    ifExpr = t
+                } else {
+                    // Assume it's already a trampoline or compatible
+                    ifExpr = allocExpr
+                }
+                preStmts += "$elemC* ${t}_ptr = ($elemC*)((ktc_std_Allocator_vt*)$ifExpr.vt)->allocMem($ifExpr.obj, sizeof($elemC) * (size_t)($sizeExpr));"
                 if (className == "Array") preStmts += "const ktc_Int ${t}_ptr\$len = $sizeExpr;"
                 return "${t}_ptr"
             }
