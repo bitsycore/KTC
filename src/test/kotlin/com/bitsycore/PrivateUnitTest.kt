@@ -126,4 +126,46 @@ class PrivateUnitTest : TranspilerTestBase() {
         """)
         r.sourceContains("PRIV_count")
     }
+
+    // ── Visibility error: access private from outside ─────────────
+
+    @Test fun privateObjectFieldAccessedFromOutsideError() {
+        transpileExpectError("""
+            package test.Main
+            object Config {
+                private val secret: Int = 42
+            }
+            fun main(args: Array<String>) {
+                println(Config.secret)
+            }
+        """.trimIndent(), "Cannot access 'secret': it is private in object 'Config'")
+    }
+
+    @Test fun privateObjectFieldAccessedFromOutsideCompanionError() {
+        transpileExpectError("""
+            package test.Main
+            class Foo {
+                companion object {
+                    private val key: Int = 99
+                }
+            }
+            fun main(args: Array<String>) {
+                println(Foo.key)
+            }
+        """.trimIndent(), "Cannot access 'key': it is private in object 'Foo.Companion'")
+    }
+
+    @Test fun privateObjectFieldAccessedFromInsideIsOk() {
+        val r = transpile("""
+            package test.Main
+            object Config {
+                private val secret: Int = 42
+                fun getSecret(): Int = secret
+            }
+            fun main(args: Array<String>) {
+                println(Config.getSecret())
+            }
+        """)
+        r.sourceContains("PRIV_secret")
+    }
 }

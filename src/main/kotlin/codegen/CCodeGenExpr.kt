@@ -2116,8 +2116,15 @@ internal fun CCodeGen.genDot(e: DotExpr): String {
     // Object / Companion field: ensure lazy init, then return flatName.field
     val vDotObjCName = resolveDotObjCName(e)
     if (vDotObjCName != null) {
+        // Visibility check: can't access private props from outside the object
+        val objInfo = resolveDotObjInfo(e)
+        if (objInfo != null && objInfo.name != currentObject && objInfo.privateProps.contains(e.name)) {
+            val displayName = objInfo.name.replace('$', '.')
+            codegenError("Cannot access '${e.name}': it is private in object '$displayName'")
+        }
         preStmts += "${vDotObjCName}_\$ensure_init();"
-        return "${vDotObjCName}.${e.name}"
+        val fieldName = if (objInfo != null && objInfo.privateProps.contains(e.name)) "PRIV_${e.name}" else e.name
+        return "${vDotObjCName}.${fieldName}"
     }
     // Array .size → trampolined param uses trampoline struct field; others use $len
     if (e.name == "size" && e.obj is NameExpr && e.obj.name in trampolinedParams) return "${e.obj.name}.size"

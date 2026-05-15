@@ -398,11 +398,11 @@ class Parser(private val tokens: List<Token>) {
         if (!isPrivate) {
             if (at(TokenType.NEWLINE)) advance()
             if (at(TokenType.PRIVATE)) {
-                if (!mutable) error("'private set' is not allowed on 'val'")
                 val savedPos = pos
                 advance()
                 skipNL()
                 if (at(TokenType.IDENT) && cur().value == "set") {
+                    if (!mutable) error("'private set' is not allowed on 'val'")
                     advance()
                     isPrivateSet = true
                 } else {
