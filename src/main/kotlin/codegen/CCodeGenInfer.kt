@@ -182,42 +182,28 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         }
         if (classes.containsKey(name)) return name
         if (name == "HeapAlloc" || name == "HeapArrayZero" || name == "HeapArrayResize" || name == "heapArrayOf") {
-            if (e.typeArgs.isNotEmpty()) {
-                val ta = e.typeArgs[0]
-                // HeapAlloc<Array<Int>>(n) → Int* (element type pointer)
-                if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
-                    val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
-                    return "${elemName}*"
-                }
-                // HeapAlloc<RawArray<T>>(n) → T* (raw pointer, no $len)
-                if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty()) {
-                    val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
-                    return "${elemName}*"
-                }
-                // HeapAlloc<MyList<Int>>(...) → MyList_Int* (generic class heap pointer)
-                if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
-                    return "${mangledGenericName(ta.name, ta.typeArgs.map { it.name })}*"
-                }
-                val resolvedName = typeSubst[ta.name] ?: ta.name
-                return "${resolvedName}*"
+            // Resolve target type: explicit type arg, else pre-set target, else opaque void*
+            val ta = e.typeArgs.getOrNull(0)
+                ?: heapAllocTargetType
+                ?: return "void*"
+
+            // Array<T> → T* (typed array pointer)
+            if (ta.name == "Array" && ta.typeArgs.isNotEmpty()) {
+                val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                return "${elemName}*"
             }
-            if (heapAllocTargetType != null) {
-                val tt = heapAllocTargetType!!
-                if (tt.name == "Array" && tt.typeArgs.isNotEmpty()) {
-                    val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
-                    return "${elemName}*"
-                }
-                if (tt.name == "RawArray" && tt.typeArgs.isNotEmpty()) {
-                    val elemName = typeSubst[tt.typeArgs[0].name] ?: tt.typeArgs[0].name
-                    return "${elemName}*"
-                }
-                if (tt.typeArgs.isNotEmpty() && classes.containsKey(tt.name) && classes[tt.name]!!.isGeneric) {
-                    return "${mangledGenericName(tt.name, tt.typeArgs.map { it.name })}*"
-                }
-                val resolvedName = typeSubst[tt.name] ?: tt.name
-                return "${resolvedName}*"
+            // RawArray<T> → T* (raw pointer, no $len companion)
+            if (ta.name == "RawArray" && ta.typeArgs.isNotEmpty()) {
+                val elemName = typeSubst[ta.typeArgs[0].name] ?: ta.typeArgs[0].name
+                return "${elemName}*"
             }
-            return "void*"
+            // MyList<Int> → MyList_Int* (generic class heap pointer)
+            if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
+                return "${mangledGenericName(ta.name, ta.typeArgs.map { it.name })}*"
+            }
+            // Plain type T → T* (user class or resolved type param)
+            val resolvedName = typeSubst[ta.name] ?: ta.name
+            return "${resolvedName}*"
         }
         if (name == "byteArrayOf" || name == "ByteArray") return "ByteArray"
         if (name == "shortArrayOf" || name == "ShortArray") return "ShortArray"
