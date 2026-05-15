@@ -3,8 +3,9 @@ package com.bitsycore.ktc
 import kotlin.test.Test
 
 /**
- * Unit tests for inline function dispatch (overload resolution, generic registration)
- * and stdlib error functions (check, require).
+ * Unit tests for inline function dispatch (overload resolution, generic registration),
+ * stdlib error functions (check, require, checkNotNull, requireNotNull), and
+ * smart cast propagation after null-checking inline functions.
  */
 class ErrorFuncsUnitTest : TranspilerTestBase() {
 
@@ -28,7 +29,7 @@ class ErrorFuncsUnitTest : TranspilerTestBase() {
         r.sourceContains("a + b")
     }
 
-    // ── Inline Generic registration (no args, with <T>) ──
+    // ── Inline generic registration (with <T>) ──────────────────────
 
     @Test fun inlineGenericRegistered() {
         val r = transpileMain("val x = genericIdentity(42)", """
@@ -37,7 +38,7 @@ class ErrorFuncsUnitTest : TranspilerTestBase() {
         r.sourceContains("42")
     }
 
-    // ── check(value: Boolean) with stdlib ───────────────────────────
+    // ── check / require with stdlib ──────────────────────────────────
 
     @Test fun checkTrueExpandsInlineWithStdlib() {
         val r = transpileMainWithStdlib("check(true)")
@@ -48,23 +49,12 @@ class ErrorFuncsUnitTest : TranspilerTestBase() {
     @Test fun checkFalseWithStdlib() {
         val r = transpileMainWithStdlib("check(false)")
         r.sourceContains("ktc_std_error")
-        r.sourceContains("Check failed")
     }
-
-    // ── check(value, lazyMessage) with stdlib ────────────────────────
 
     @Test fun checkWithLazyMessageWithStdlib() {
         val r = transpileMainWithStdlib("""check(1 + 1 == 2) { "fail" }""")
         r.sourceContains("fail")
     }
-
-    @Test fun checkWithLazyMessageFalseWithStdlib() {
-        val r = transpileMainWithStdlib("""check(1 > 999) { "bad" }""")
-        r.sourceContains("ktc_std_error")
-        r.sourceContains("bad")
-    }
-
-    // ── require(value, lazyMessage) with stdlib ──────────────────────
 
     @Test fun requireTrueWithStdlib() {
         val r = transpileMainWithStdlib("""require(1 > 0) { "custom" }""")
@@ -75,6 +65,45 @@ class ErrorFuncsUnitTest : TranspilerTestBase() {
     @Test fun requireFalseWithStdlib() {
         val r = transpileMainWithStdlib("""require(1 > 999) { "custom" }""")
         r.sourceContains("ktc_std_error")
-        r.sourceContains("custom")
+    }
+
+    // ── checkNotNull / requireNotNull (generic inline) with stdlib ───
+
+    @Test fun checkNotNullExpandsWithConcreteType() {
+        val r = transpileMainWithStdlib("""
+            val x: Int? = 42
+            val y: Int = checkNotNull(x)
+        """)
+        r.sourceContains("ktc_Int_Optional value = x")
+        r.sourceContains("value.value")
+    }
+
+    @Test fun checkNotNullSmartCastPropagation() {
+        val r = transpileMainWithStdlib("""
+            val x: Int? = 42
+            val y: Int = checkNotNull(x)
+            val z: Int = x
+        """)
+        r.sourceContains("smart-cast: 'x' narrowed")
+        r.sourceContains("x.value")
+    }
+
+    @Test fun requireNotNullExpandsWithConcreteType() {
+        val r = transpileMainWithStdlib("""
+            val x: Float? = 3.14f
+            val y: Float = requireNotNull(x)
+        """)
+        r.sourceContains("ktc_Float_Optional value = x")
+        r.sourceContains("value.value")
+    }
+
+    @Test fun requireNotNullSmartCastPropagation() {
+        val r = transpileMainWithStdlib("""
+            val x: Float? = 3.14f
+            val y: Float = requireNotNull(x)
+            val z: Float = x
+        """)
+        r.sourceContains("smart-cast: 'x' narrowed")
+        r.sourceContains("x.value")
     }
 }

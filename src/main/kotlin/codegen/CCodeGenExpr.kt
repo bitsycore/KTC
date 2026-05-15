@@ -710,14 +710,27 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         }
     }
     if (inlineDecl != null) {
+        // Set up typeSubst for generic inline functions so T → concrete type
+        val vSavedSubst = typeSubst
+        if (inlineDecl.typeParams.isNotEmpty()) {
+            val vSubst = mutableMapOf<String, String>()
+            for ((i, param) in inlineDecl.params.withIndex()) {
+                if (i >= args.size) break
+                val argType = inferExprType(args[i].expr)?.removeSuffix("?") ?: continue
+                matchTypeParam(param.type, argType, inlineDecl.typeParams.toSet(), vSubst)
+            }
+            if (vSubst.isNotEmpty()) typeSubst = vSubst
+        }
         val retType = inlineDecl.returnType
         if (retType == null) {
             emitInlineCall(inlineDecl, e.args, currentInd, false)
+            typeSubst = vSavedSubst
             return ""
         }
         val resultName = "\$ir${inlineCounter++}"
         impl.appendLine("$currentInd${cType(retType)} $resultName;")
         emitInlineCall(inlineDecl, e.args, currentInd, false, resultVar = resultName)
+        typeSubst = vSavedSubst
         return resultName
     }
 

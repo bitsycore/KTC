@@ -5,7 +5,9 @@ package ktc.std
  * [error] if the [value] is false.
  */
 inline fun require(value: Boolean): Unit {
-    require(value) { "Failed requirement." }
+    if (!value) {
+        error("Failed requirement.")
+    }
 }
 
 /**
@@ -22,7 +24,11 @@ inline fun require(value: Boolean, lazyMessage: () -> String): Unit {
  * [error] if the [value] is null. Otherwise returns the not null value.
  */
 inline fun <T> requireNotNull(value: T?): T {
-    return requireNotNull(value) { "Required value was null." }
+    if (value == null) {
+        error("Required value was null.")
+    } else {
+        return value
+    }
 }
 
 /**
@@ -62,7 +68,11 @@ inline fun check(value: Boolean, lazyMessage: () -> String): Unit {
  * returns the not null value.
  */
 inline fun <T> checkNotNull(value: T?): T {
-    return checkNotNull(value) { "Required value was null." }
+    if (value == null) {
+        error("Required value was null.")
+    } else {
+        return value
+    }
 }
 
 /**

@@ -120,6 +120,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
     val vKtcCore = (vKtc as? KtcType.Nullable)?.inner ?: vKtc
     val tRaw = vKtc.toInternalStr                                                                    // string type (for structural checks — retained during migration)
     val inferredNullable = s.type == null && vKtc is KtcType.Nullable
+    // Strip ? suffix for nullable types; it gets added back at defineVar and optCTypeName
     val t = if (inferredNullable) tRaw.removeSuffix("?") else tRaw
     // malloc/calloc/realloc return nullable pointers (may return NULL)
     val isAlloc = s.type == null && isAllocCall(s.init)
@@ -1044,7 +1045,20 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
             }
         }
         if (inlineDecl != null) {
-            emitInlineCall(inlineDecl, e.args, ind, method); return
+            // Set up typeSubst for generic inline functions
+            val vSavedSubst = typeSubst
+            if (inlineDecl.typeParams.isNotEmpty()) {
+                val vSubst = mutableMapOf<String, String>()
+                for ((i, param) in inlineDecl.params.withIndex()) {
+                    if (i >= e.args.size) break
+                    val argType = inferExprType(e.args[i].expr)?.removeSuffix("?") ?: continue
+                    matchTypeParam(param.type, argType, inlineDecl.typeParams.toSet(), vSubst)
+                }
+                if (vSubst.isNotEmpty()) typeSubst = vSubst
+            }
+            emitInlineCall(inlineDecl, e.args, ind, method)
+            typeSubst = vSavedSubst
+            return
         }
         // Active lambda call (inside an inline body expansion)
         val lambda = activeLambdas[name]
@@ -1219,11 +1233,19 @@ internal fun CCodeGen.emitInlineCall(
             val retType = param.type.funcReturn?.let { resolveTypeName(it).toInternalStr }
             newLambdas[param.name] = ActiveLambda(expr, paramTypes, retType)
         } else {
-            val cTypeName = cType(param.type)
+            val resolvedKtc = resolveTypeName(param.type)
+            val isValueNullable = param.type.nullable && !param.type.annotations.any { it.name == "Ptr" }
+            val (cTypeName, scopeKtc) = if (isValueNullable) {
+                markOptional(param.name)
+                val innerKtc = resolveTypeName(param.type.copy(nullable = false))
+                optCTypeName(innerKtc.toInternalStr) to KtcType.Nullable(innerKtc)
+            } else {
+                cTypeStr(resolvedKtc) to resolvedKtc
+            }
             val cVal = genExpr(expr)
             flushPreStmts(ind)
             impl.appendLine("$ind    $cTypeName ${param.name} = $cVal;")
-            defineVarKtc(param.name, resolveTypeName(param.type))
+            defineVarKtc(param.name, scopeKtc)
         }
     }
     activeLambdas = newLambdas
@@ -1241,7 +1263,26 @@ internal fun CCodeGen.emitInlineCall(
         if (savedThisType != null) lambdaParamTypes["\$this"] = savedThisType else lambdaParamTypes.remove("\$this")
     }
     popScope()
+    // Smart cast propagation: if a nullable param was null-checked and bound to
+    // a simple NameExpr, narrow the argument in the caller scope (e.g. checkNotNull(x)).
+    val propCasts = mutableListOf<Pair<String, String>>()
+    for ((i, arg) in callArgs.withIndex()) {
+        val param = decl.params.getOrNull(i) ?: continue
+        if (arg.expr !is NameExpr) continue
+        val argName = arg.expr.name
+        if (isMutable(argName)) continue  // var cannot be smart-cast
+        val paramKtc = resolveTypeName(param.type.copy(nullable = false))
+        val retKtc = decl.returnType?.let { resolveTypeName(it) }
+        if (param.type.nullable && retKtc != null
+            && retKtc.toInternalStr == paramKtc.toInternalStr) {
+            defineVar(argName, retKtc.toInternalStr)
+            propCasts.add(argName to retKtc.toInternalStr)
+        }
+    }
     impl.appendLine("$ind}")
+    for ((name, narrowedType) in propCasts) {
+        impl.appendLine("$ind// smart-cast: '$name' narrowed to '$narrowedType'")
+    }
 }
 
 /* Expand a lambda call inside an inline body (statement position).
