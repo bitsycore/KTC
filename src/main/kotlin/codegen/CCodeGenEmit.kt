@@ -784,15 +784,18 @@ internal fun CCodeGen.emitObject(d: ObjectDecl) {
         if (vKtcObj.isArrayLike && sizeAnn != null) {
             val vElemType = cTypeStr(vKtcObj.asArr!!.elem)              // element C type for sized array
             val fn = privPrefix(p) + p.name
-            hdr.appendLine("    $vElemType ${fn}[${sizeAnn}];")
+            val mutComment = if (p.mutable) "/*VAR*/ " else "/*VAL*/ "
+            hdr.appendLine("    $mutComment$vElemType ${fn}[${sizeAnn}];")
             hdr.appendLine("    ktc_Int ${fn}\$len;")
         } else if (vKtcObj.isArrayLike) {
             val fn = privPrefix(p) + p.name
-            hdr.appendLine("    ${cTypeStr(vKtcObj)} ${fn};")
+            val mutComment = if (p.mutable) "/*VAR*/ " else "/*VAL*/ "
+            hdr.appendLine("    $mutComment${cTypeStr(vKtcObj)} ${fn};${ptrNullComment(vKtcObj)}")
             hdr.appendLine("    ktc_Int ${fn}\$len;")
         } else {
             val fn = privPrefix(p) + p.name
-            hdr.appendLine("    ${cTypeStr(vKtcObj)} ${fn};${ptrNullComment(vKtcObj)}")
+            val mutComment = if (p.mutable) "/*VAR*/ " else "/*VAL*/ "
+            hdr.appendLine("    ${mutComment}${cTypeStr(vKtcObj)} ${fn};${ptrNullComment(vKtcObj)}")
         }
     }
     hdr.appendLine("} ${cName}_t;")
@@ -1200,7 +1203,7 @@ internal fun CCodeGen.emitStructFields(ci: ClassInfo) {
                 val vElemCt = cTypeStr(vKtcField.asArr!!.elem)
                 hdr.appendLine("    $vMutComment$vElemCt $vFieldName[${vSizeAnn}];")
             } else {
-                hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;")
+                hdr.appendLine("    $vMutComment${cTypeStr(vKtcField)} $vFieldName;${ptrNullComment(vKtcField)}")
                 hdr.appendLine("    ktc_Int ${vFieldName}\$len;")
             }
         } else if (type.nullable) {

@@ -120,6 +120,7 @@ internal fun CCodeGen.emitArrayParamCopies(inParams: List<Param>, inInd: String)
 internal fun ptrNullComment(kt: KtcType): String = when (kt) {
     is KtcType.Nullable if kt.inner is KtcType.Ptr -> " /** nullable */"
     is KtcType.Ptr -> " /** notnull */"
+    is KtcType.Arr -> " /** notnull */"
     else -> ""
 }
 
