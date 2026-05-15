@@ -5,7 +5,7 @@ package test.list.updated
 // ===================================================
 
 fun <T> testPtr(list: @Ptr ArrayList<T>) {
-    println("testPtr(list)")
+    println("testPtr(ArrayList)")
     var counter = 0
     for (value in list) {
         println("list[$counter] = ${value}")
@@ -14,7 +14,7 @@ fun <T> testPtr(list: @Ptr ArrayList<T>) {
 }
 
 fun <T> testValue(list: ArrayList<T>) {
-    println("testValue(list)")
+    println("testValue(ArrayList)")
     var counter = 0
     for (value in list) {
         println("list[$counter] = ${value}")
@@ -23,7 +23,7 @@ fun <T> testValue(list: ArrayList<T>) {
 }
 
 fun <T> @Ptr ArrayList<T>.testPtrExt() {
-    println("list.testPtrExt()")
+    println("ArrayList.testPtrExt()")
     var counter = 0
     for (value in this) {
         println("list[$counter] = ${value}")
@@ -32,7 +32,7 @@ fun <T> @Ptr ArrayList<T>.testPtrExt() {
 }
 
 fun <T> ArrayList<T>.testValueExt() {
-    println("testValueExt(list)")
+    println("ArrayList.testValueExt()")
     var counter = 0
     for (value in this) {
         println("list[$counter] = ${value}")
@@ -45,7 +45,7 @@ fun <T> ArrayList<T>.testValueExt() {
 // ===================================================
 
 fun <T> testListPtr(list: @Ptr List<T>) {
-    println("testListPtr(list)")
+    println("testListPtr(List)")
     var counter = 0
     for (value in list) {
         println("list[$counter] = ${value}")
@@ -54,9 +54,139 @@ fun <T> testListPtr(list: @Ptr List<T>) {
 }
 
 fun <T> testListValue(list: List<T>) {
-    println("testListValue(list)")
+    println("testListValue(List)")
     var counter = 0
     for (value in list) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> @Ptr List<T>.testListPtrExt() {
+    println("List.testListPtrExt()")
+    var counter = 0
+    for (value in this) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> List<T>.testListValueExt() {
+    println("List.testListValueExt()")
+    var counter = 0
+    for (value in this) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+// ===================================================
+// MARK: Concrete Nullable
+// ===================================================
+
+fun <T> testPtrNullable(list: @Ptr ArrayList<T>?) {
+    println("testPtrNullable(ArrayList)")
+    if (list == null) {
+        println("ArrayList is null")
+        return
+    }
+    var counter = 0
+    for (value in list) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> testValueNullable(list: ArrayList<T>?) {
+    println("testValueNullable(ArrayList)")
+    if (list == null) {
+        println("ArrayList is null")
+        return
+    }
+    var counter = 0
+    for (value in list) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> @Ptr ArrayList<T>?.testPtrExtNullable() {
+    println("ArrayList.testPtrExtNullable()")
+    if (this == null) {
+        println("ArrayList is null")
+        return
+    }
+    var counter = 0
+    for (value in this) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> ArrayList<T>?.testValueExtNullable() {
+    println("ArrayList.testValueExtNullable()")
+    if (this == null) {
+        println("ArrayList is null")
+        return
+    }
+    var counter = 0
+    for (value in this) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+// ===================================================
+// MARK: Interface Nullable
+// ===================================================
+
+fun <T> testListPtrNullable(list: @Ptr List<T>?) {
+    println("testListPtrNullable(list)")
+    if (list == null) {
+        println("List is null")
+        return
+    }
+    var counter = 0
+    for (value in list) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> testListValueNullable(list: List<T>?) {
+    println("testListValueNullable(list)")
+    if (list == null) {
+        println("List is null")
+        return
+    }
+    var counter = 0
+    for (value in list) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> @Ptr List<T>?.testListPtrExtNullable() {
+    println("list.testListPtrExtNullable()")
+    if (this == null) {
+        println("List is null")
+        return
+    }
+    var counter = 0
+    for (value in this) {
+        println("list[$counter] = ${value}")
+        counter++
+    }
+}
+
+fun <T> List<T>?.testListValueExtNullable() {
+    println("list.testListValueExtNullable()")
+    if (this == null) {
+        println("List is null")
+        return
+    }
+    var counter = 0
+    for (value in this) {
         println("list[$counter] = ${value}")
         counter++
     }
@@ -154,6 +284,8 @@ fun arrayListAllocTest() {
         counter++
     }
 
+    // CONCRETE
+
     testValue(stack1)
     testValue(stack2)
     testValue(heap1.value())
@@ -163,6 +295,8 @@ fun arrayListAllocTest() {
     testPtr(stack2.ptr())
     testPtr(heap1)
     testPtr(heap2)
+
+    // CONCRETE EXTENSION
 
     stack1.testValueExt()
     stack2.testValueExt()
@@ -174,6 +308,8 @@ fun arrayListAllocTest() {
     heap1.testPtrExt()
     heap2.testPtrExt()
 
+    // INTERFACE
+
     testListValue(stack1)
     testListValue(stack2)
     testListValue(heap1.value())
@@ -183,6 +319,18 @@ fun arrayListAllocTest() {
     testListPtr(stack2.ptr())
     testListPtr(heap1)
     testListPtr(heap2)
+
+    // INTERFACE EXTENSION
+
+    stack1.testListValueExt()
+    stack2.testListValueExt()
+    heap1.value().testListValueExt()
+    heap2.value().testListValueExt()
+
+    stack1.ptr().testListPtrExt()
+    stack2.ptr().testListPtrExt()
+    heap1.testListPtrExt()
+    heap2.testListPtrExt()
 }
 
 fun main() {

@@ -1918,9 +1918,53 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                 (genericClassDecls.containsKey(it.receiver.name) && pointerBase.startsWith("${it.receiver.name}_"))
             )
         }
-        val isPtrExt = genExt?.receiver?.annotations?.any { it.name == "Ptr" } == true
-        val flatPtrBase = if (isPtrExt) "${typeFlatName(pointerBase).removeSuffix("_$pointerBase")}_Ptr_${pointerBase}" else typeFlatName(pointerBase)
-        val allArgs = if (argStr.isEmpty()) recv else "$recv, $argStr"
+        // Also search interfaces implemented by the class for @Ptr generic ext funs
+        var ifaceExt: FunDecl? = null
+        var ifaceExtConcrete: String? = null
+        if (genExt == null) {
+            val ifaces = classInterfaces[pointerBase] ?: emptyList()
+            for (iface in ifaces) {
+                val m = genericFunDecls.find {
+                    it.name == method && it.receiver != null && (
+                        it.receiver.name == iface ||
+                        (genericIfaceDecls.containsKey(it.receiver.name) && iface.startsWith("${it.receiver.name}_"))
+                    )
+                }
+                if (m != null) {
+                    ifaceExt = m
+                    ifaceExtConcrete = if (iface.startsWith("${m.receiver!!.name}_")) iface
+                        else {
+                            val binding = genericTypeBindings[pointerBase]
+                            if (binding != null) {
+                                val tArgs = m.typeParams.map { binding[it] ?: "Int" }
+                                mangledGenericName(m.receiver!!.name, tArgs)
+                            } else iface
+                        }
+                    break
+                }
+            }
+        }
+        val effectiveGenExt = genExt ?: ifaceExt
+        if (ifaceExt != null && ifaceExtConcrete != null) {
+            val tArgs = ifaceExt.typeParams.map { tp ->
+                val prefix = "${ifaceExt.receiver!!.name}_"
+                if (ifaceExtConcrete!!.startsWith(prefix)) ifaceExtConcrete!!.substring(prefix.length) else "Int"
+            }
+            genericFunInstantiations.getOrPut(ifaceExt.name) { mutableSetOf() }.add(tArgs)
+        }
+        val isPtrExt = effectiveGenExt?.receiver?.annotations?.any { it.name == "Ptr" } == true
+        val flatPtrBase = if (ifaceExtConcrete != null) {
+            val f = typeFlatName(ifaceExtConcrete)
+            if (isPtrExt) "${f.removeSuffix("_$ifaceExtConcrete")}_Ptr_${ifaceExtConcrete}" else f
+        } else if (isPtrExt) "${typeFlatName(pointerBase).removeSuffix("_$pointerBase")}_Ptr_${pointerBase}" else typeFlatName(pointerBase)
+        val wrappedRecv = if (ifaceExtConcrete != null && isPtrExt) {
+            val cConcrete = typeFlatName(pointerBase)
+            val typeId = getTypeId(pointerBase)
+            val t = tmp()
+            preStmts += "ktc_IfacePtr $t = {{$typeId}, (const void*)&${cConcrete}_${ifaceExtConcrete}_vt, (void*)$recv};"
+            t
+        } else recv
+        val allArgs = if (argStr.isEmpty()) wrappedRecv else "$wrappedRecv, $argStr"
         return "${flatPtrBase}_$method($allArgs)"
     }
 
@@ -1978,16 +2022,55 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         }
         val methodDecl = findOverload(method, args, vClassInfo.methods)
         // Also check generic extension functions (fun <T> ArrayList<T>.method())
-        val genericExtDecl = if (methodDecl == null) genericFunDecls.find {
+        var genericExtDecl = if (methodDecl == null) genericFunDecls.find {
             it.name == method && it.receiver != null && (
                 it.receiver.name == vClassInfo.baseName ||
                 (genericClassDecls.containsKey(it.receiver.name) && vClassInfo.baseName.startsWith("${it.receiver.name}_"))
             )
         } else null
+        // Also check interfaces implemented by the class for generic ext funs
+        var ifaceConcrete: String? = null
+        if (genericExtDecl == null) {
+            val ifaces = classInterfaces[vClassInfo.baseName] ?: emptyList()
+            for (iface in ifaces) {
+                val match = genericFunDecls.find {
+                    it.name == method && it.receiver != null && (
+                        it.receiver.name == iface ||
+                        (genericIfaceDecls.containsKey(it.receiver.name) && iface.startsWith("${it.receiver.name}_"))
+                    )
+                }
+                if (match != null) {
+                    genericExtDecl = match
+                    // Determine the concrete interface name (e.g. List_Int)
+                    ifaceConcrete = if (iface.startsWith("${match.receiver!!.name}_")) iface
+                        else {
+                            // Infer from the class name: ArrayList_Int → T=Int → List_Int
+                            val binding = genericTypeBindings[vClassInfo.baseName]
+                            if (binding != null) {
+                                val tArgs = match.typeParams.map { binding[it] ?: "Int" }
+                                mangledGenericName(match.receiver!!.name, tArgs)
+                            } else iface
+                        }
+                    break
+                }
+            }
+        }
+        // Register generic instantiation if found via interface
+        if (genericExtDecl != null && ifaceConcrete != null) {
+            val tArgs = genericExtDecl.typeParams.map { tp ->
+                // Infer from the concrete iface name: List_Int → Int
+                    val prefix = "${genericExtDecl.receiver!!.name}_"
+                if (ifaceConcrete.startsWith(prefix)) ifaceConcrete.substring(prefix.length) else "Int"
+            }
+            genericFunInstantiations.getOrPut(genericExtDecl.name) { mutableSetOf() }.add(tArgs)
+        }
         val effectiveDecl = methodDecl ?: genericExtDecl
         val isExtFun = effectiveDecl?.receiver != null
         val isPtrRecv = effectiveDecl?.receiver?.annotations?.any { it.name == "Ptr" } == true
-        val flatBase = if (isPtrRecv) "${vClassInfo.flatName.removeSuffix("_${vClassInfo.baseName}")}_Ptr_${vClassInfo.baseName}" else vClassInfo.flatName
+        val flatBase = if (ifaceConcrete != null) {
+            val f = typeFlatName(ifaceConcrete)
+            if (isPtrRecv) "${f.removeSuffix("_$ifaceConcrete")}_Ptr_${ifaceConcrete}" else f
+        } else if (isPtrRecv) "${vClassInfo.flatName.removeSuffix("_${vClassInfo.baseName}")}_Ptr_${vClassInfo.baseName}" else vClassInfo.flatName
         val nullableRecv = hasNullableReceiverExt(recvType ?: "", method)
         val selfArg = if (nullableRecv) {
             val recvName = (dot.obj as? NameExpr)?.name
@@ -1998,11 +2081,16 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
                 recvVarKtc2 is KtcType.Nullable && isValueNullableKtc(recvVarKtc2)
                         && recvName != null && isOptional(recvName) -> recv
 
-                isExtFun -> optSome(optSelfType, recv)
+                isExtFun -> {
+                    if (ifaceConcrete != null && !isPtrRecv) optSome(optSelfType, "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)")
+                    else optSome(optSelfType, recv)
+                }
                 else -> optSome(optSelfType, "&$recv")
             }
-        } else if (isExtFun) recv
-        else "&$recv"
+        } else if (isExtFun) {
+            if (ifaceConcrete != null && !isPtrRecv) "${typeFlatName(vClassInfo.baseName)}_as_$ifaceConcrete(&$recv)"
+            else recv
+        } else "&$recv"
         // Use expandCallArgs for proper @Ptr expansion and default arg filling
         val expandedArgs = if (methodDecl != null) {
             val filled = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
