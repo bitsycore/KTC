@@ -1,6 +1,6 @@
 # REFACTOR_REMAINING.md — What's Left
 
-## Status: ~600 lines eliminated. All 33 integration + 570 unit tests pass.
+## Status: ~700 lines eliminated. ~60 inferExprTypeKtc added alongside inferExprType. All 33 integration + 570 unit tests pass.
 
 ## Hard floor: 4 string checks that must stay
 
@@ -13,60 +13,51 @@ These are in `parseResolvedTypeName` (the KtcType parser itself) and one AST che
 
 ---
 
-## ✅ ArraysMapping.kt: all string callers converted
+## ✅ Done this session
 
-| File                 | What                                         | Resolution                                                                    |
-|----------------------|----------------------------------------------|-------------------------------------------------------------------------------|
-| ~~CCodeGenStmts.kt~~ | ~~`arrayElementCType(t)` in tryArrayOfInit~~ | Replaced with `arrayElementCTypeKtc(tKtcCore)` via `parseResolvedTypeName(t)` |
-| ~~CCodeGenInfer.kt~~ | ~~`arrayElementKtType` in inferIndexType~~   | Replaced with `arrayElementKtTypeKtc(tKtcCore)` via `inferExprTypeKtc`        |
-| ~~CCodeGenInfer.kt~~ | ~~`t.dropLast(1)` string manipulation~~      | Replaced with `tKtcCore.inner.toInternalStr`                                  |
+### ArraysMapping.kt
+- Removed `arrayElementCType()` and `arrayElementKtType()` string functions (~90 lines)
+- All callers now use `arrayElementCTypeKtc()` and `arrayElementKtTypeKtc()`
 
-**String functions `arrayElementCType()` and `arrayElementKtType()` removed — ~90 lines eliminated.**
+### tryArrayOfInit
+- `recvType.endsWith("Array")` → `inferExprTypeKtc(dot.obj)?.isArrayLike`
+- `t.endsWith("OptArray")` → KtcType structural check via `parseResolvedTypeName(t)`
+- `arrayElementCType(t)` → `arrayElementCTypeKtc(tKtcCore)`
 
----
+### inferIndexType
+- `t.dropLast(1)` + `isArrayType(base)` → `tKtcCore.inner.toInternalStr`
+- `arrayElementKtType(t)` fallback → `arrayElementKtTypeKtc(tKtcCore)`
 
-## ✅ tryArrayOfInit string checks converted
+### inferDotType
+- `.ptr`/`.toHeap` array string manipulation → `recvTypeCoreKtc.asArr?.elem` with `KtcType.Ptr(arr.elem)`
 
-| What                             | Resolution                                                            |
-|----------------------------------|-----------------------------------------------------------------------|
-| ~~`recvType.endsWith("Array")`~~ | Replaced with `inferExprTypeKtc(dot.obj)?.isArrayLike`                |
-| ~~`t.endsWith("OptArray")`~~     | Replaced with KtcType structural check via `parseResolvedTypeName(t)` |
-
----
-
-## ✅ inferIndexType Ptr branch converted
-
-| What                             | Resolution                                              |
-|----------------------------------|---------------------------------------------------------|
-| ~~`t.dropLast(1)` string manip~~ | Replaced with `tKtcCore.inner.toInternalStr`            |
-| ~~`isArrayType(base)`~~          | No longer needed (pre-checked: `inner !is KtcType.Arr`) |
+### inferExprTypeKtc planted
+- ~60 `inferExprTypeKtc` calls added alongside existing `inferExprType` calls across 4 files
+- Files: `CCodeGenStmts.kt` (+16), `CCodeGenExpr.kt` (+12), `CCodeGenScan.kt` (+5), `CCodeGenEmit.kt` (+1)
+- These enable future conversion of string-based type checks to KtcType
 
 ---
 
-## inferExprType → String? (96 call sites)
+## Remaining
 
-The biggest remaining string-based infra. `inferExprType` returns `String?` while `inferExprTypeKtc` returns `KtcType?` but is just a wrapper. Native KtcType inference requires rewriting the type inference pipeline.
+### inferExprType → String? (96 call sites → ~35 remaining without KtcType counterpart)
 
-**Approach:** Add `inferExprTypeKtc` call alongside every `inferExprType` call, then migrate consumers one by one. Already done for `genBin`, `genMethodCall`, `genDot`, `emitPrintStmtInner`.
+Most string-only call sites are inside the inference functions themselves (`inferDotType`, `inferCallType`, `inferMethodReturnType`, etc.) or in guarded expressions where adding a statement is not straightforward.
 
----
+**Remaining callers without KtcType:**
 
-## Array type string manipulation in inferDotType
+| File             | Count | Notes                                                     |
+|------------------|-------|-----------------------------------------------------------|
+| CCodeGenInfer.kt | ~16   | Inside inference functions — needs pipeline rewrite       |
+| CCodeGenStmts.kt | ~7    | In guarded/conditional expressions, mid-expression chains |
+| CCodeGenExpr.kt  | ~8    | In guarded expressions, `.map {}` lambdas, mid-expression |
+| CCodeGenScan.kt  | ~3    | In scan phase — needs pipeline rewrite                    |
 
-The `.ptr`/`.toHeap` handlers use `recvType.endsWith("Array")` and `recvType.removeSuffix("Array")` for element type extraction. KtcType variables are planted (`recvTypeKtc`, `recvTypeCoreKtc`) but the string manipulation remains. Replacing with `asArr?.elem` would eliminate these but caused the `UIntArra` regression before. Needs careful incremental testing.
+### `inferExprType` return type migration plan
 
----
-
-## `inferExprType` return type migration plan
-
-| Step | What                                                                                                           | Impact           |
-|------|----------------------------------------------------------------------------------------------------------------|------------------|
-| 1    | Add `inferExprTypeKtc` alongside every `inferExprType` call                                                    | 96 new lines     |
-| 2    | Convert consumers of the string result to use KtcType                                                          | incremental      |
-| 3    | Change `inferExprType` return type to `KtcType?`                                                               | breaking — defer |
-| 4    | Rewrite `inferDotType`, `inferIndexType`, `inferMethodReturnType`, `inferCallType` to produce KtcType natively | ~300 lines       |
-
-## Priority
-
-1. `inferExprType` migration — long-term, incremental
-2. `inferDotType` array string manipulation — needs careful testing
+| Step | What                                                                                                           | Status      |
+|------|----------------------------------------------------------------------------------------------------------------|-------------|
+| 1    | Add `inferExprTypeKtc` alongside every `inferExprType` call                                                    | ✅ ~70% done |
+| 2    | Convert consumers of the string result to use KtcType                                                          | Ongoing     |
+| 3    | Change `inferExprType` return type to `KtcType?`                                                               | Deferred    |
+| 4    | Rewrite `inferDotType`, `inferIndexType`, `inferMethodReturnType`, `inferCallType` to produce KtcType natively | Deferred    |

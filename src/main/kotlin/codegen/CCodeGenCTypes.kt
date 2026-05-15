@@ -1,7 +1,10 @@
 package com.bitsycore.ktc.codegen
 
 import com.bitsycore.ktc.ast.*
-import com.bitsycore.ktc.codegen.mapping.*
+import com.bitsycore.ktc.codegen.mapping.arrayElementCTypeKtc
+import com.bitsycore.ktc.codegen.mapping.primitiveArraySet
+import com.bitsycore.ktc.codegen.mapping.primitiveToArrayOptionalType
+import com.bitsycore.ktc.codegen.mapping.primitiveToArrayType
 import com.bitsycore.ktc.types.BuiltinTypeDef
 import com.bitsycore.ktc.types.KtcType
 import com.bitsycore.ktc.types.TypeDef
@@ -36,7 +39,6 @@ import com.bitsycore.ktc.types.TypeDef
  *   [expandCallArgs]         — call args → C arg list string
  *
  *   (helpers) [isArrayType], [isRawArrayTypeRef], [isSizedArrayTypeRef],
- *             [arrayElementCType], [com.bitsycore.ktc.codegen.mapping.arrayElementKtType],
  *             [com.bitsycore.ktc.codegen.CCodeGen.optCTypeName], [com.bitsycore.ktc.codegen.CCodeGen.optNone], [com.bitsycore.ktc.codegen.CCodeGen.optSome],
  *             [com.bitsycore.ktc.codegen.CCodeGen.isFuncType], [com.bitsycore.ktc.codegen.CCodeGen.parseFuncType], [com.bitsycore.ktc.codegen.CCodeGen.cFuncPtrDecl],
  *             [defaultVal], [hasSizeAnnotation], [getSizeAnnotation]

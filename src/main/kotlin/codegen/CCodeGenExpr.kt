@@ -161,6 +161,7 @@ fun CCodeGen.genExpr(e: Expr): String = when (e) {
         val lt = inferExprType(e.left)
         val l = genExpr(e.left)
         val rt = inferExprType(e.right)
+        val rtKtc = inferExprTypeKtc(e.right)
         // If right side returns Nothing or Unit/void (e.g., error("msg")), emit non-null assertion
         if (rt != null && (rt == "Nothing" || rt == "Unit" || rt.removeSuffix("?") == "Nothing")) {
             val baseType = lt?.removeSuffix("?") ?: "void*"
@@ -364,7 +365,9 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     /* `to` infix → Pair; use stdlib path when stdlib Pair class is loaded, else intrinsic */
     if (e.op == "to") {
         val aType = inferExprType(e.left) ?: "Int" // left operand type
+        val aTypeKtc = inferExprTypeKtc(e.left)
         val bType = inferExprType(e.right) ?: "Int" // right operand type
+        val bTypeKtc = inferExprTypeKtc(e.right)
         if (genericClassDecls.containsKey("Pair")) {
             // stdlib Pair<A,B> is active — emit primaryConstructor call
             val vMangledName = recordGenericInstantiation("Pair", listOf(aType, bType)) // e.g. "Pair_Int_String"
@@ -381,7 +384,9 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     val vInfixDecl = inlineExtFunDecls[e.op]
     if (vInfixDecl != null) {
         val vRecvType = inferExprType(e.left) // receiver type string
+        val vRecvTypeKtc = inferExprTypeKtc(e.left)
         val vArgType = inferExprType(e.right) // single argument type string
+        val vArgTypeKtc = inferExprTypeKtc(e.right)
         val vSavedSubst = typeSubst // save outer typeSubst
         if (vInfixDecl.typeParams.isNotEmpty()) {
             typeSubst = inferInlineFunSubst(vInfixDecl, vRecvType, listOf(vArgType))
@@ -579,6 +584,7 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     if (e.op == "shr") return "(${genExpr(e.left)} >> ${genExpr(e.right)})"
     if (e.op == "ushr") {
         val leftType = inferExprType(e.left)
+        val leftTypeKtc = inferExprTypeKtc(e.left)
         val l = genExpr(e.left)
         val r = genExpr(e.right)
         // For unsigned types, >> is already unsigned; for signed, cast to unsigned first
@@ -637,6 +643,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
         if (inlineExt != null) {
             val recvExpr = genExpr(e.callee.obj)
             val recvKtType = inferExprType(e.callee.obj)?.removeSuffix("?")
+            val recvKtTypeKtc = inferExprTypeKtc(e.callee.obj)
             val retType = inlineExt.returnType
             // Set up typeSubst for generic inline extension functions so return-type resolution works
             val vSavedSubst = typeSubst
@@ -717,6 +724,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             for ((i, param) in inlineDecl.params.withIndex()) {
                 if (i >= args.size) break
                 val argType = inferExprType(args[i].expr)?.removeSuffix("?") ?: continue
+                val argTypeKtc = inferExprTypeKtc(args[i].expr)
                 matchTypeParam(param.type, argType, inlineDecl.typeParams.toSet(), vSubst)
             }
             if (vSubst.isNotEmpty()) typeSubst = vSubst
@@ -1087,6 +1095,7 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             for ((i, param) in genFun.params.withIndex()) {
                 if (i >= args.size) break
                 val argType = inferExprType(args[i].expr) ?: continue
+                val argTypeKtc = inferExprTypeKtc(args[i].expr)
                 matchTypeParam(param.type, argType, genFun.typeParams.toSet(), subst)
             }
             if (subst.size == genFun.typeParams.size) genFun.typeParams.map { subst[it]!! } else null
@@ -1491,6 +1500,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "toString" -> {
             if (args.size == 1) {
                 val argType = inferExprType(args[0].expr)
+                val argTypeKtc = inferExprTypeKtc(args[0].expr)
                 if (argType == "ktc_StrBuf" || argType == "StringBuffer") {
                     return genToStringInto(recv, recvType ?: "Int", genExpr(args[0].expr))
                 }
@@ -2741,6 +2751,7 @@ internal fun CCodeGen.templateMaxLen(tmpl: StrTemplateExpr): Int? {
             is LitPart -> total += part.text.length
             is ExprPart -> {
                 val t = inferExprType(part.expr) ?: return null
+                val tKtc = inferExprTypeKtc(part.expr)
                 val max = toStringMaxLen(t) ?: return null
                 total += max
             }
@@ -3117,6 +3128,7 @@ internal fun CCodeGen.genHeapArrayOfExpr(args: List<Arg>, inTypeArg: TypeRef? = 
     val elemType = if (inTypeArg != null) cTypeStr(typeSubst[inTypeArg.name] ?: inTypeArg.name)
     else if (args.isNotEmpty()) {
         val inferred = inferExprType(args[0].expr) ?: "Int"
+        val inferredKtc = inferExprTypeKtc(args[0].expr) ?: KtcType.Prim(KtcType.PrimKind.Int)
         cTypeStr(inferred)
     } else "ktc_Int"
     val n = args.size

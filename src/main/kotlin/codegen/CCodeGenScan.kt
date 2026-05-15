@@ -359,6 +359,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
             if (i >= callArgs.size) break
             val argExpr = callArgs[i].expr
             val argType = inferExprType(argExpr) ?: continue
+            inferExprTypeKtc(argExpr)
             /* Materialize before matching so genericTypeBindings is populated for
             any generic instantiations inferred by inferExprType above (e.g. Pair_A_B). */
             materializeGenericInstantiations()
@@ -386,6 +387,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
             if (i >= callArgs.size) break
             val argExpr = callArgs[i].expr
             val argType = inferExprType(argExpr) ?: continue
+            inferExprTypeKtc(argExpr)
             materializeGenericInstantiations()
             matchTypeParam(param.type, argType, f.typeParams.toSet(), subst)
         }
@@ -415,6 +417,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                         if (genFunsByName.containsKey(dotName)) {
                             val f = genFunsByName[dotName]!!
                             val recvType = inferExprType(e.callee.obj)
+                            inferExprTypeKtc(e.callee.obj)
                             val typeArgs = if (f.receiver != null && recvType != null) {
                                 // Infer type args from receiver type
                                 inferTypeArgsFromReceiver(f, recvType, e.args, e.typeArgs)
@@ -437,6 +440,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                     val vInfixDecl = inlineExtFunDecls[e.op]
                     if (vInfixDecl != null && vInfixDecl.typeParams.isNotEmpty()) {
                         val vRecvType = inferExprType(e.left)
+                        inferExprTypeKtc(e.left)
                         if (vRecvType != null) {
                             val vArgs = inferTypeArgsFromReceiver(vInfixDecl, vRecvType, listOf(Arg(expr = e.right)), emptyList())
                             if (vArgs != null) genericFunInstantiations.getOrPut(e.op) { mutableSetOf() }.add(vArgs)
@@ -464,6 +468,7 @@ internal fun CCodeGen.scanForGenericFunCalls() {
                     /* Track variable type as KtcType for subsequent inference in this function. */
                     val vVarKtc: KtcType? = if (s.type != null) resolveTypeName(s.type)  // typed: resolve directly
                         else inferExprType(s.init)?.let { parseResolvedTypeName(it) }     // inferred: parse inferred string
+                    inferExprTypeKtc(s.init)
                     if (vVarKtc != null) preScanVarTypes?.set(s.name, vVarKtc)
                 }
                 is AssignStmt -> { scanExpr(s.target); scanExpr(s.value) }

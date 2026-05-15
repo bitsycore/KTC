@@ -62,7 +62,7 @@ fun CCodeGen.primitiveToArrayOptionalType(vElem: String): String = when (vElem) 
 // ══ KtcType overloads ═══════════════════════════════════════════════
 
 /** Extract element C type from an array KtcType: Ptr<Arr<Int>> → "ktc_Int". */
-internal fun CCodeGen.arrayElementCTypeKtc(arrKtc: KtcType): String = arrKtc.asArr?.elem?.toCType() ?: "ktc_Int"
+internal fun arrayElementCTypeKtc(arrKtc: KtcType): String = arrKtc.asArr?.elem?.toCType() ?: "ktc_Int"
 
 /** Extract element internal type from an array KtcType: Ptr<Arr<Int>> → "Int". */
-internal fun CCodeGen.arrayElementKtTypeKtc(arrKtc: KtcType): String = arrKtc.asArr?.elem?.toInternalStr ?: "Int"
+internal fun arrayElementKtTypeKtc(arrKtc: KtcType): String = arrKtc.asArr?.elem?.toInternalStr ?: "Int"

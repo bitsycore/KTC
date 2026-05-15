@@ -1498,7 +1498,7 @@ internal fun CCodeGen.emitFun(f: FunDecl) {
 // ── top-level property ───────────────────────────────────────────
 
 internal fun CCodeGen.emitTopProp(d: PropDecl) {
-    val vKtcTop = if (d.type != null) resolveTypeName(d.type) else null  // KtcType of prop type, or null
+    val vKtcTop = if (d.type != null) resolveTypeName(d.type) else inferExprTypeKtc(d.init)  // KtcType of prop type, or inferred
     val t       = vKtcTop?.toInternalStr ?: (inferExprType(d.init) ?: "Int")  // string for cTypeStr/defaultVal
     val ct      = cTypeStr(t)
     val cName = typeFlatName(d.name)  // top-level prop — typeFlatName falls back to prefix+name

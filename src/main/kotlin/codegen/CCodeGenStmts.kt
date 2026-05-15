@@ -116,6 +116,7 @@ internal fun CCodeGen.emitBlock(b: Block, ind: String, insideMethod: Boolean = f
 
 internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
     val vKtc = if (s.type != null) resolveTypeName(s.type) else parseResolvedTypeName(inferExprType(s.init) ?: "Int") // KtcType (for C type emission)
+    val vKtcKtc = inferExprTypeKtc(s.init)
     val vKtcCore = (vKtc as? KtcType.Nullable)?.inner ?: vKtc
     val tRaw = vKtc.toInternalStr                                                                    // string type (for structural checks — retained during migration)
     val inferredNullable = s.type == null && vKtc is KtcType.Nullable
@@ -241,6 +242,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                 } else if (s.init is DotExpr && s.init.name == "buffer") {
                     val dotInit = s.init
                     val dotRecvType = inferExprType(dotInit.obj)
+                    val dotRecvTypeKtc = inferExprTypeKtc(dotInit.obj)
                     if (dotRecvType == "ktc_StrBuf" || dotRecvType == "StringBuffer") {
                         val recvExpr = genExpr(dotInit.obj)
                         val expr = genExpr(s.init)
@@ -270,6 +272,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                     impl.appendLine("$ind$mutComment$ct ${s.name} = (ktc_Any){0};")
                 } else {
                     val initType = inferExprType(s.init)?.removeSuffix("?") ?: "Int"
+                    val initTypeKtc = inferExprTypeKtc(s.init)
                     val typeId = getTypeId(initType)
                     val initCT = cTypeStr(initType)
                     val expr = genExpr(s.init)
@@ -284,6 +287,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                 // Interface variable initialized from implementing class → auto-wrap
                 if (interfaces.containsKey(t)) {
                     val initType = inferExprType(s.init)
+                    val initTypeKtc = inferExprTypeKtc(s.init)
                     if (initType != null && classes.containsKey(initType) && classInterfaces[initType]?.contains(t) == true) {
                         val backing = tmp()
                         val expr = genExpr(s.init)
@@ -325,6 +329,7 @@ internal fun CCodeGen.emitVarDecl(s: VarDeclStmt, ind: String) {
                     // Auto-wrap init into ktc_Any trampoline when variable is typed Any
                     if (vKtc is KtcType.Any && s.init !is NullLit) {
                         val initType = inferExprType(s.init)?.removeSuffix("?") ?: "Int"
+                        val initTypeKtc = inferExprTypeKtc(s.init)
                         val typeId = getTypeId(initType)
                         val initCT = cTypeStr(initType)
                         val tVal = tmp()
@@ -447,6 +452,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
                         // Local val/var inside the loop body
                         val vTypeKtc =
                             stmt.type?.let { resolveTypeName(it) } ?: parseResolvedTypeName(inferExprType(stmt.init) ?: "Int") // KtcType for emission
+                        val vTypeKtcKtc = inferExprTypeKtc(stmt.init)
                         defineVarKtc(stmt.name, vTypeKtc)
                         val vCT = cTypeStr(vTypeKtc)  // C type from KtcType
                         val mut = if (stmt.mutable) "" else "const "
@@ -485,7 +491,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         val tKtc = parseResolvedTypeName(t)
         val tKtcCore = (tKtc as? KtcType.Nullable)?.inner ?: tKtc
         val isOptArray = tKtcCore is KtcType.Ptr && tKtcCore.inner is KtcType.Arr
-            && (tKtcCore.inner as KtcType.Arr).elem is KtcType.Nullable
+            && tKtcCore.inner.elem is KtcType.Nullable
         val vIsNullableElem = vTypeArg?.nullable == true || isOptArray
         if (vIsNullableElem) {
             val vOptCType = if (isOptArray) arrayElementCTypeKtc(tKtcCore)
@@ -502,6 +508,7 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         val elemType = if (init.typeArgs.isNotEmpty()) cTypeStr(typeSubst[init.typeArgs[0].name] ?: init.typeArgs[0].name)
         else if (init.args.isNotEmpty()) {
             val inferred = inferExprType(init.args[0].expr) ?: "Int"
+            val inferredKtc = inferExprTypeKtc(init.args[0].expr)
             cTypeStr(inferred)
         } else "ktc_Int"
         val n = init.args.size
@@ -530,7 +537,9 @@ internal fun CCodeGen.tryArrayOfInit(varName: String, init: Expr, ct: String, t:
         "arrayOf" -> {
             if (init.typeArgs.isNotEmpty()) cTypeStr(typeSubst[init.typeArgs[0].name] ?: init.typeArgs[0].name)
             else {
-                val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"; cTypeStr(elemKt)
+                val elemKt = if (init.args.isNotEmpty()) inferExprType(init.args[0].expr) ?: "Int" else "Int"
+                val elemKtKtc = if (init.args.isNotEmpty()) inferExprTypeKtc(init.args[0].expr) else null
+                cTypeStr(elemKt)
             }
         }
 
@@ -631,6 +640,7 @@ internal fun CCodeGen.inferInitType(init: Expr?): TypeRef {
             return TypeRef(ta.name, typeArgs = ta.typeArgs, annotations = listOf(sizeAnn))
         }
     }
+    val initKtc = inferExprTypeKtc(init)
     return TypeRef(inferExprType(init) ?: "Int")
 }
 
@@ -915,6 +925,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                 impl.appendLine("${ind}return (ktc_Any){0};")
             } else {
                 val srcType = inferExprType(s.value)?.removeSuffix("?") ?: "Int"
+                val srcTypeKtc = inferExprTypeKtc(s.value)
                 val typeId = getTypeId(srcType)
                 val ct = cTypeStr(srcType)
                 val expr = genExpr(s.value)
@@ -978,6 +989,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
             } else if (deferStack.isNotEmpty()) {
                 // Evaluate return value into temp, run defers, then return
                 val retType = currentFnReturnType.ifEmpty { inferExprType(s.value) ?: "Int" }
+                val retTypeKtc = inferExprTypeKtc(s.value)
                 val t = tmp()
                 impl.appendLine("$ind${cTypeStr(retType)} $t = $expr;")
                 emitDeferredBlocks(ind)
@@ -985,6 +997,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
             } else {
                 // Auto-wrap class → interface if return type is an interface
                 val exprType = inferExprType(s.value)
+                val exprTypeKtc = inferExprTypeKtc(s.value)
                 val retIface = currentFnReturnType
                 if (retIface.isNotEmpty() && interfaces.containsKey(retIface)
                     && exprType != null && classes.containsKey(exprType)
@@ -1007,6 +1020,7 @@ internal fun CCodeGen.emitReturn(s: ReturnStmt, ind: String) {
                     // Auto-wrap Any return → ktc_Any trampoline
                     if (currentFnReturnKtcType is KtcType.Any) {
                         val srcTy = inferExprType(s.value)?.removeSuffix("?") ?: "Int"
+                        val srcTyKtc = inferExprTypeKtc(s.value)
                         val typeId = getTypeId(srcTy)
                         val ct = cTypeStr(srcTy)
                         val tVal = tmp()
@@ -1055,6 +1069,7 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
                 for ((i, param) in inlineDecl.params.withIndex()) {
                     if (i >= e.args.size) break
                     val argType = inferExprType(e.args[i].expr)?.removeSuffix("?") ?: continue
+                    val argTypeKtc = inferExprTypeKtc(e.args[i].expr)
                     matchTypeParam(param.type, argType, inlineDecl.typeParams.toSet(), vSubst)
                 }
                 if (vSubst.isNotEmpty()) typeSubst = vSubst
@@ -1078,10 +1093,12 @@ internal fun CCodeGen.emitExprStmt(s: ExprStmt, ind: String, method: Boolean) {
             val recvObj = if (isSafe) e.callee.obj else (e.callee as DotExpr).obj
             val recvExpr = genExpr(recvObj)
             val recvKtType = inferExprType(recvObj)?.removeSuffix("?")
+            val recvKtTypeKtc = inferExprTypeKtc(recvObj)
             // Set up typeSubst for generic inline extension functions
             val vSavedSubst = typeSubst
             if (inlineExt.typeParams.isNotEmpty()) {
                 val vArgTypes = e.args.map { inferExprType(it.expr) } // concrete arg types
+                val vArgTypesKtc = e.args.map { inferExprTypeKtc(it.expr) }
                 typeSubst = inferInlineFunSubst(inlineExt, recvKtType, vArgTypes)
             }
             if (isSafe) {
