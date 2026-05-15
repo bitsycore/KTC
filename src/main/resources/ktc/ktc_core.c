@@ -868,6 +868,12 @@ void* ktc_core_realloc(void* old, ktc_ULong sz, const ktc_Char* file, ktc_Int li
     return (realloc)(old, sz);
 }
 
+void* ktc_core_calloc(ktc_ULong n, ktc_ULong sz, const ktc_Char* file, ktc_Int line) {
+    (void)file; (void)line;
+    void* p = (calloc)(n, sz);
+    return p;
+}
+
 void ktc_core_mem_report(void) {}
 
 #endif /* KTC_MEM_TRACK */

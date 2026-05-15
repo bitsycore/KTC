@@ -184,6 +184,8 @@ KTC_OPTIONAL(ktc_ULong);
 void* ktc_core_malloc(ktc_ULong sz, const ktc_Char* file, ktc_Int line);
 void  ktc_core_free(void* p, const ktc_Char* file, ktc_Int line);
 void* ktc_core_realloc(void* old, ktc_ULong sz, const ktc_Char* file, ktc_Int line);
+void* ktc_core_calloc(ktc_ULong n, ktc_ULong sz, const ktc_Char* file, ktc_Int line);
+
 void  ktc_core_mem_report(void);
 
 #ifdef KTC_MEM_TRACK
