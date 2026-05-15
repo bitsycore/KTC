@@ -1059,6 +1059,7 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
                     .ifEmpty { genericTypeBindings[mangledName] ?: emptyMap() }
                 val resolvedIfaces = templateDecl.superInterfaces.map { substituteTypeRef(it, subst) }
                 typeSubst = subst
+                classInterfaces[mangledName] = resolvedIfaces.map { resolveTypeNameStr(it) }
                 emitInterfaceVtablesForClass(mangledName, resolvedIfaces, implsOnly = true)
                 typeSubst = emptyMap()
             }

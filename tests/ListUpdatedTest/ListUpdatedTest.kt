@@ -442,7 +442,7 @@ fun arrayListAllocTest() {
     heap1.value().testValueExtNullable()
     heap2.value().testValueExtNullable()
 
-    //heap1Null1?.value()?.testValueExtNullable()
+    //heap1Null1?.value()?.testValueExtNullable()  // chained safe-calls need temp tracking
     //heap1Null2?.value()?.testValueExtNullable()
     stack1Null1.testValueExtNullable()
     stack1Null2.testValueExtNullable()
