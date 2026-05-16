@@ -207,13 +207,16 @@ internal fun CCodeGen.typeRefToStr(t: TypeRef?): String {
 /** Recursively substitute type parameters throughout a TypeRef tree. */
 internal fun CCodeGen.substituteTypeParams(t: TypeRef): TypeRef {
     if (typeSubst.isEmpty()) return t
-    val newName = typeSubst[t.name] ?: t.name
+    val rawNewName = typeSubst[t.name] ?: t.name
+    val hasNullableSuffix = rawNewName.endsWith("?")
+    val newName = if (hasNullableSuffix) rawNewName.dropLast(1) else rawNewName
     val newTypeArgs = t.typeArgs.map { substituteTypeParams(it) }
     val newFuncParams = t.funcParams?.map { substituteTypeParams(it) }
     val newFuncReturn = t.funcReturn?.let { substituteTypeParams(it) }
     val newFuncReceiver = t.funcReceiver?.let { substituteTypeParams(it) }
-    return if (newName != t.name || newTypeArgs != t.typeArgs || newFuncParams != t.funcParams || newFuncReturn != t.funcReturn || newFuncReceiver != t.funcReceiver) {
-        TypeRef(newName, t.nullable, newTypeArgs, newFuncParams, newFuncReturn, newFuncReceiver, t.annotations)
+    val newNullable = t.nullable || hasNullableSuffix
+    return if (newName != t.name || newNullable != t.nullable || newTypeArgs != t.typeArgs || newFuncParams != t.funcParams || newFuncReturn != t.funcReturn || newFuncReceiver != t.funcReceiver) {
+        TypeRef(newName, newNullable, newTypeArgs, newFuncParams, newFuncReturn, newFuncReceiver, t.annotations)
     } else t
 }
 
@@ -248,7 +251,9 @@ internal fun CCodeGen.resolveTypeNameInnerStr(t: TypeRef): String {
     }
     // User-defined generic class takes priority over built-in aliases
     if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {
-        val vTypeArgNames = t.typeArgs.map { it.name } // raw type argument names
+        val vTypeArgNames = t.typeArgs.map { typeRef ->
+            if (typeRef.nullable) "${resolveTypeNameStr(typeRef)}?" else resolveTypeNameStr(typeRef)
+        }
         // Don't register as concrete instantiation if any type arg is still a type parameter
         if (vTypeArgNames.any { it in allGenericTypeParamNames })
             return mangledGenericName(t.name, vTypeArgNames)
@@ -462,7 +467,10 @@ internal fun CCodeGen.resolveTypeName(inT: TypeRef?): KtcType {
         return KtcType.Func(vParams, vRet, receiver = vReceiver)
     }
     val vResolved = resolveTypeNameStr(inT)                     // string-based resolution (bridge)
-    return parseResolvedTypeName(vResolved, inT)
+    val base = parseResolvedTypeName(vResolved, inT)
+    // Preserve nullability from type substitution (e.g., T→Int? produces nullable=true on vSubstituted)
+    val isSubstNullable = vSubstituted.nullable && !inT.nullable
+    return if (isSubstNullable && base !is KtcType.Ptr && base !is KtcType.Nullable) KtcType.Nullable(base) else base
 }
 
 /** Create KtcType.User by looking up the TypeDef from symbol tables, or creating a BuiltinTypeDef. */

@@ -860,6 +860,8 @@ class Parser(private val tokens: List<Token>) {
             val name = tokens[pos].value
             if (name.isEmpty() || name[0].isLowerCase()) return false  // types start uppercase
             advance(); skipNL()
+            // Skip nullable marker for type args like <Int?>
+            if (at(TokenType.QUESTION)) { advance(); skipNL() }
             return at(TokenType.GT) || at(TokenType.COMMA) || at(TokenType.LT)
         } finally {
             pos = saved

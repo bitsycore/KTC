@@ -128,7 +128,7 @@ internal sealed class KtcType {
     data class Nullable(val inner: KtcType) : KtcType() {
         override fun toCType(): String {
             val c = inner.toCType()
-            return if (inner is Ptr) c else "ktc_${c}_Optional"
+            return if (inner is Ptr) c else "${c}_Optional"
         }
     }
 

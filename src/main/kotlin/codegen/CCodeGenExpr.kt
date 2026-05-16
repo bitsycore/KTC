@@ -1146,7 +1146,10 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     // Handle generic class constructor: explicit type args or LHS inference
     val effectiveTypeArgs = e.typeArgs.ifEmpty { heapAllocTargetType?.typeArgs ?: emptyList() }
     if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && effectiveTypeArgs.isNotEmpty()) {
-        val resolvedTypeArgs = effectiveTypeArgs.map { substituteTypeParams(it) }.map { it.name }
+        val resolvedTypeArgs = effectiveTypeArgs.map { t ->
+            val sub = substituteTypeParams(t)
+            if (sub.nullable) "${resolveTypeNameStr(sub)}?" else resolveTypeNameStr(sub)
+        }
         val mangledName = mangledGenericName(resolvedName, resolvedTypeArgs)
         val ci = classes[mangledName] ?: error("Generic class '$mangledName' not materialized (typeSubst=$typeSubst)")
         val templateDecl = genericClassDecls[resolvedName]
@@ -1163,7 +1166,10 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
     if (classes.containsKey(resolvedName) && classes[resolvedName]!!.isGeneric && e.typeArgs.isNotEmpty()) {
         // Apply typeSubst so type params (e.g. T) resolve to concrete types (e.g. Int)
         // when inside a generic function body
-        val resolvedTypeArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
+        val resolvedTypeArgs = e.typeArgs.map { t ->
+            val sub = substituteTypeParams(t)
+            if (sub.nullable) "${resolveTypeNameStr(sub)}?" else resolveTypeNameStr(sub)
+        }
         val mangledName = mangledGenericName(resolvedName, resolvedTypeArgs)
         val ci = classes[mangledName] ?: error("Generic class '$mangledName' not materialized (typeSubst=$typeSubst)")
         val templateDecl = genericClassDecls[resolvedName]

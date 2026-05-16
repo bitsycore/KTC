@@ -221,7 +221,8 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 
     /** Mangle a generic class name with concrete type args: MyList + [Int] → "MyList_Int" */
     internal fun mangledGenericName(baseName: String, typeArgs: List<String>): String {
-        return "${baseName}_${typeArgs.joinToString("_")}"
+        val sanitized = typeArgs.joinToString("_") { it.replace("?", "\$Optional") }
+        return "${baseName}_$sanitized"
     }
 
     /** Record a concrete instantiation of a generic class and return the mangled name. */

@@ -293,7 +293,10 @@ internal fun CCodeGen.materializeGenericInstantiations() {
 /** Resolve an interface TypeRef to its concrete name (e.g. MutableList<Int> → "MutableList_Int"). */
 internal fun CCodeGen.resolveIfaceName(t: TypeRef): String {
     if (t.typeArgs.isEmpty()) return t.name
-    return mangledGenericName(t.name, t.typeArgs.map { resolveTypeName(it).toInternalStr })
+    return mangledGenericName(t.name, t.typeArgs.map { typeRef ->
+        val sub = substituteTypeParams(typeRef)
+        if (sub.nullable) "${resolveTypeNameStr(sub)}?" else resolveTypeNameStr(sub)
+    })
 }
 
 /**
@@ -334,9 +337,12 @@ internal fun CCodeGen.materializeGenericInterface(t: TypeRef) {
 
 /** Substitute type parameters in a TypeRef: T → Int when subst = {T: Int}. */
 internal fun CCodeGen.substituteTypeRef(t: TypeRef, subst: Map<String, String>): TypeRef {
-    val newName = subst[t.name] ?: t.name
+    val rawNewName = subst[t.name] ?: t.name
+    val hasNullableSuffix = rawNewName.endsWith("?")
+    val newName = if (hasNullableSuffix) rawNewName.dropLast(1) else rawNewName
     val newTypeArgs = t.typeArgs.map { substituteTypeRef(it, subst) }
-    return t.copy(name = newName, typeArgs = newTypeArgs)
+    return t.copy(name = newName, typeArgs = newTypeArgs,
+        nullable = t.nullable || hasNullableSuffix)
 }
 
 // ── generic function call-site scanning ──────────────────────────
