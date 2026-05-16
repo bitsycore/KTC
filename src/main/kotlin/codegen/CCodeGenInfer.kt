@@ -157,7 +157,10 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         if (flatCallee != null) {
             if (classes.containsKey(flatCallee)) return flatCallee
             if (genericClassDecls.containsKey(flatCallee)) {
-                val resolvedArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
+                val resolvedArgs = e.typeArgs.map { t ->
+                    val sub = substituteTypeParams(t)
+                    if (sub.nullable) "${resolveTypeNameStr(sub)}?" else resolveTypeNameStr(sub)
+                }
                 return mangledGenericName(flatCallee, resolvedArgs)
             }
         }
@@ -179,7 +182,10 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
         // Generic class constructor: MyList<Int>(8) → "MyList_Int"
         // Apply typeSubst so type params resolve inside generic function bodies
         if (classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
-            val resolvedArgs = e.typeArgs.map { substituteTypeParams(it) }.map { it.name }
+            val resolvedArgs = e.typeArgs.map { t ->
+                val sub = substituteTypeParams(t)
+                if (sub.nullable) "${resolveTypeNameStr(sub)}?" else resolveTypeNameStr(sub)
+            }
             return mangledGenericName(name, resolvedArgs)
         }
         if (classes.containsKey(name) && classes[name]!!.isGeneric && e.args.isNotEmpty()
@@ -208,7 +214,11 @@ internal fun CCodeGen.inferCallType(e: CallExpr): String? {
             }
             // MyList<Int> → MyList_Int* (generic class heap pointer)
             if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
-                return "${mangledGenericName(ta.name, ta.typeArgs.map { it.name })}*"
+                val resolvedArgs = ta.typeArgs.map { t ->
+                    val sub = substituteTypeParams(t)
+                    if (sub.nullable) "${resolveTypeNameStr(sub)}?" else resolveTypeNameStr(sub)
+                }
+                return "${mangledGenericName(ta.name, resolvedArgs)}*"
             }
             // Plain type T → T* (user class or resolved type param)
             val resolvedName = typeSubst[ta.name] ?: ta.name

@@ -483,6 +483,17 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
     if (e.op in setOf("==", "!=", "<", ">", "<=", ">=")) {
         val ltKtc = inferExprTypeKtc(e.left)
         val rtKtc = inferExprTypeKtc(e.right)
+        // Both are nullable value types — compare tags and values
+        if (ltKtc is KtcType.Nullable && isValueNullableKtc(ltKtc) &&
+            rtKtc is KtcType.Nullable && isValueNullableKtc(rtKtc)) {
+            val leftExpr = genExpr(e.left)
+            val rightExpr = genExpr(e.right)
+            return when (e.op) {
+                "==" -> "($leftExpr.tag == $rightExpr.tag && ($leftExpr.tag == ktc_NONE || $leftExpr.value == $rightExpr.value))"
+                "!=" -> "($leftExpr.tag != $rightExpr.tag || ($leftExpr.tag == ktc_SOME && $leftExpr.value != $rightExpr.value))"
+                else -> "($leftExpr.tag == ktc_SOME && $rightExpr.tag == ktc_SOME && $leftExpr.value ${e.op} $rightExpr.value)"
+            }
+        }
         // Left is nullable value type, right is non-null → wrap in tag check
         if (ltKtc is KtcType.Nullable && isValueNullableKtc(ltKtc) &&
             rtKtc != null && rtKtc !is KtcType.Nullable && e.right !is NullLit) {
@@ -741,7 +752,11 @@ internal fun CCodeGen.genCall(e: CallExpr): String {
             if (genericClassDecls.containsKey(className)) {
                 val typeArgs = e.typeArgs.ifEmpty { heapAllocTargetType?.typeArgs ?: emptyList() }
                 if (typeArgs.isNotEmpty()) {
-                    val mangled = mangledGenericName(className, typeArgs.map { it.name })
+                    val resolvedArgs = typeArgs.map { t ->
+                        val sub = substituteTypeParams(t)
+                        if (sub.nullable) "${resolveTypeNameStr(sub)}?" else resolveTypeNameStr(sub)
+                    }
+                    val mangled = mangledGenericName(className, resolvedArgs)
                     if (classes.containsKey(mangled)) {
                         val cName = typeFlatName(mangled)
                         val allocExpr = genExpr(e.args[0].expr)

@@ -337,7 +337,7 @@ fun arrayListAllocTest() {
 
     // HEAP2 TEST
 
-    heap2.add(0.10)
+    heap2.add(0.10f)
 
     println("Range")
     for (i in 0..<heap2.size) {
@@ -495,8 +495,6 @@ fun arrayListAllocTest() {
 }
 
 fun arrayListWithNullableAllocTest() {
-    // WIP: nullable-element ArrayList generics (type inference + Optional method bodies pending)
-    /*
     // alloc ArrayList on stack, right infered
     val stack1 = ArrayList<Int?>(allocator = Heap, capacity = 5)
     defer { stack1.dispose() }
@@ -515,7 +513,81 @@ fun arrayListWithNullableAllocTest() {
         heap2.dispose()
         Heap.freeMem(heap2)
     }
-    */
+
+    // STACK1 TEST
+
+    stack1.add(0)
+    stack1.add(8)
+    stack1.add(2)
+    stack1.add(7)
+    stack1.add(12)
+    stack1.add(105)
+
+    println("Range")
+    for (i in 0..<stack1.size) {
+        println("stack1[$i] = ${stack1[i]}")
+    }
+
+    println("Iterator")
+    var counter = 0
+    for (value in stack1) {
+        println("stack1[$counter] = ${value}")
+        counter++
+    }
+
+    // STACK2 TEST
+
+    stack2.add(0.5f)
+    stack2.add(8.3f)
+    stack2.add(2.0f)
+
+    println("Range")
+    for (i in 0..<stack2.size) {
+        println("stack2[$i] = ${stack2[i]}")
+    }
+
+    println("Iterator")
+    counter = 0
+    for (value in stack2) {
+        println("stack2[$counter] = ${value}")
+        counter++
+    }
+
+    // HEAP1 TEST
+
+    heap1.add(10)
+    heap1.add(20)
+    heap1.add(30)
+    heap1.add(40)
+    heap1.add(50)
+
+    println("Range")
+    for (i in 0..<heap1.size) {
+        println("heap1[$i] = ${heap1[i]}")
+    }
+
+    println("Iterator")
+    counter = 0
+    for (value in heap1) {
+        println("heap1[$counter] = ${value}")
+        counter++
+    }
+
+    // HEAP2 TEST
+
+    heap2.add(0.10f)
+
+    println("Range")
+    for (i in 0..<heap2.size) {
+        println("heap2[$i] = ${heap2[i]}")
+    }
+
+    println("Iterator")
+    counter = 0
+    for (value in heap2) {
+        println("heap2[$counter] = ${value}")
+        counter++
+    }
 }
 
 fun main() {
