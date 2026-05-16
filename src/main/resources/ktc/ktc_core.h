@@ -1,6 +1,9 @@
 //ktc_core.h — KotlinToC compiler intrinsics
 #pragma once
 
+#include "ktc_mangle.h"
+#include "ktc_types.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,22 +133,9 @@ typedef struct { ktc_core_AnySupertype __base; void* data; const ktc_core_AnyVt*
 
 typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 
-/* Value-type Optional wrapper: generates TypeName$Optional = { tag, value }. */
-#define KTC_OPTIONAL(T) typedef struct T##$Optional { ktc_OptionalTag tag; T value; } T##$Optional
-
-/* Name of the Optional wrapper for a specific generic instantiation.
-   The $Optional is placed right after the base class name, before the type arg.
-   Example: KTC_OPTIONAL_GENERIC_NAME(ktc_ArrayList, Int$Optional)
-            → ktc_ArrayList$Optional_Int$Optional */
+/* Backwards-compat: codegen still emits KTC_OPTIONAL_GENERIC until the $Opt rename step.
+   Will be removed once CCodeGenEmit is updated to use KTC_OPT_GENERIC_TYPE. */
 #define KTC_OPTIONAL_GENERIC_NAME(Base, TypeArg) Base##$Optional_##TypeArg
-
-/* Define Optional wrapper struct for a generic class instantiation.
-   T        : the full concrete class C type (value field type)
-   Base     : base class C name, e.g. ktc_std_ArrayList
-   TypeArg  : type arg part, e.g. ktc_Int or ktc_Int$Optional
-              (for multiple args or nested generics, compose with KTC_OPTIONAL_GENERIC_NAME)
-   Example: KTC_OPTIONAL_GENERIC(ktc_std_ArrayList_Int, ktc_std_ArrayList, ktc_Int)
-            → struct ktc_std_ArrayList$Optional_ktc_Int { ktc_OptionalTag tag; ktc_std_ArrayList_Int value; } */
 #define KTC_OPTIONAL_GENERIC(T, Base, TypeArg) \
     typedef struct KTC_OPTIONAL_GENERIC_NAME(Base, TypeArg) { ktc_OptionalTag tag; T value; } \
     KTC_OPTIONAL_GENERIC_NAME(Base, TypeArg)
@@ -153,18 +143,18 @@ typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 /** No-op dispose used by vtables when a class has no custom dispose. */
 static void ktc_core_noop_dispose(void* obj) { (void)obj; }
 
-KTC_OPTIONAL(ktc_Byte);
-KTC_OPTIONAL(ktc_Short);
-KTC_OPTIONAL(ktc_Int);
-KTC_OPTIONAL(ktc_Long);
-KTC_OPTIONAL(ktc_Float);
-KTC_OPTIONAL(ktc_Double);
-KTC_OPTIONAL(ktc_Bool);
-KTC_OPTIONAL(ktc_Char);
-KTC_OPTIONAL(ktc_UByte);
-KTC_OPTIONAL(ktc_UShort);
-KTC_OPTIONAL(ktc_UInt);
-KTC_OPTIONAL(ktc_ULong);
+KTC_DEFINE_OPT(ktc_Byte);
+KTC_DEFINE_OPT(ktc_Short);
+KTC_DEFINE_OPT(ktc_Int);
+KTC_DEFINE_OPT(ktc_Long);
+KTC_DEFINE_OPT(ktc_Float);
+KTC_DEFINE_OPT(ktc_Double);
+KTC_DEFINE_OPT(ktc_Bool);
+KTC_DEFINE_OPT(ktc_Char);
+KTC_DEFINE_OPT(ktc_UByte);
+KTC_DEFINE_OPT(ktc_UShort);
+KTC_DEFINE_OPT(ktc_UInt);
+KTC_DEFINE_OPT(ktc_ULong);
 
 // ══════════════════════════════════════════════════════════════════
 // MARK: Types IDs
