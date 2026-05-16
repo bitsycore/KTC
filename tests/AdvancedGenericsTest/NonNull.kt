@@ -12,7 +12,7 @@ fun <T> testPtr(list: @Ptr ArrayList<T>) {
     testPtrCounter++
     var counter = 0
     for (value in list) {
-        println("list[$counter] = ${value}")
+        println("ArrayList[$counter] = ${value}")
         counter++
     }
 }
@@ -25,7 +25,7 @@ fun <T> testValue(list: ArrayList<T>) {
     testValueCounter++
     var counter = 0
     for (value in list) {
-        println("list[$counter] = ${value}")
+        println("ArrayList[$counter] = ${value}")
         counter++
     }
 }
@@ -38,7 +38,7 @@ fun <T> @Ptr ArrayList<T>.testPtrExt() {
     testPtrExtCounter++
     var counter = 0
     for (value in this) {
-        println("list[$counter] = ${value}")
+        println("ArrayList[$counter] = ${value}")
         counter++
     }
 }
@@ -51,7 +51,7 @@ fun <T> ArrayList<T>.testValueExt() {
     testValueExtCounter++
     var counter = 0
     for (value in this) {
-        println("list[$counter] = ${value}")
+        println("ArrayList[$counter] = ${value}")
         counter++
     }
 }
@@ -68,7 +68,7 @@ fun <T> testListPtr(list: @Ptr List<T>) {
     testListPtrCounter++
     var counter = 0
     for (value in list) {
-        println("list[$counter] = ${value}")
+        println("List[$counter] = ${value}")
         counter++
     }
 }
@@ -81,7 +81,7 @@ fun <T> testListValue(list: List<T>) {
     testListValueCounter++
     var counter = 0
     for (value in list) {
-        println("list[$counter] = ${value}")
+        println("List[$counter] = ${value}")
         counter++
     }
 }
@@ -94,7 +94,7 @@ fun <T> @Ptr List<T>.testListPtrExt() {
     testListPtrExtCounter++
     var counter = 0
     for (value in this) {
-        println("list[$counter] = ${value}")
+        println("List[$counter] = ${value}")
         counter++
     }
 }
@@ -107,7 +107,7 @@ fun <T> List<T>.testListValueExt() {
     testListValueExtCounter++
     var counter = 0
     for (value in this) {
-        println("list[$counter] = ${value}")
+        println("List[$counter] = ${value}")
         counter++
     }
 }
