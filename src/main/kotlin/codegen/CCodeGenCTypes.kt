@@ -20,7 +20,7 @@ import com.bitsycore.ktc.types.TypeDef
  * Type resolution follows [resolveTypeName] → [resolveTypeNameStr] → [resolveTypeNameInnerStr]:
  *   - Primitives: Byte → ktc_Byte, Int → ktc_Int, ...
  *   - Arrays: ByteArray → ktc_Byte*, Array<Vec2> → Vec2Array → game_Vec2*
- *   - Nullable: Int? → ktc_Int_Optional (via [com.bitsycore.ktc.codegen.CCodeGen.optCTypeName])
+ *   - Nullable: Int? → ktc_Int$Optional (via [com.bitsycore.ktc.codegen.CCodeGen.optCTypeName])
  *   - Pointers: @Ptr T → T*
  *   - Function types: (P1,P2)->R → Fun(P1,P2)->R (stored as string key)
  *   - Generics: MutableList<Int> → MutableList_Int (via mangledGenericName)
@@ -616,7 +616,7 @@ internal fun CCodeGen.cTypeStr(ktc: KtcType): String = when (ktc) {
     is KtcType.Nullable -> {
         val inner = ktc.inner
         if (inner is KtcType.Ptr) cTypeStr(inner)  // T* for nullable pointers (NULL = null)
-        else optCTypeName(inner.toInternalStr)  // T_Optional for nullable value types
+        else optCTypeName(inner.toInternalStr)  // T$Optional for nullable value types
     }
 
     is KtcType.Func -> "void*"

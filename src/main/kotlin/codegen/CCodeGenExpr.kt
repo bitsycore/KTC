@@ -1776,7 +1776,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "toIntOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Int ${t}_val;"
-            preStmts += "ktc_Int_Optional $t;"
+            preStmts += "ktc_Int\$Optional $t;"
             preStmts += "$t.tag = ktc_core_str_toIntOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
@@ -1785,7 +1785,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "toLongOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Long ${t}_val;"
-            preStmts += "ktc_Long_Optional $t;"
+            preStmts += "ktc_Long\$Optional $t;"
             preStmts += "$t.tag = ktc_core_str_toLongOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
@@ -1794,7 +1794,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "toDoubleOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Double ${t}_val;"
-            preStmts += "ktc_Double_Optional $t;"
+            preStmts += "ktc_Double\$Optional $t;"
             preStmts += "$t.tag = ktc_core_str_toDoubleOrNull($recv, &${t}_val) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = ${t}_val;"
             markOptional(t)
@@ -1803,7 +1803,7 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
         "toFloatOrNull" -> if (recvTypeKtc is KtcType.Str) {
             val t = tmp()
             preStmts += "ktc_Double ${t}_d;"
-            preStmts += "ktc_Float_Optional $t;"
+            preStmts += "ktc_Float\$Optional $t;"
             preStmts += "$t.tag = ktc_core_str_toDoubleOrNull($recv, &${t}_d) ? ktc_SOME : ktc_NONE;"
             preStmts += "$t.value = (ktc_Float)${t}_d;"
             markOptional(t)
@@ -2635,7 +2635,7 @@ internal fun CCodeGen.genSafeDot(e: SafeDotExpr): String {
         markOptional(t)
         defineVar(t, fieldType)
     } else {
-        val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int_Optional"
+        val optType = if (fieldType != null) optCTypeName("${fieldType}?") else "ktc_Int\$Optional"
         preStmts += "$optType $t = $guard ? ($optType){ktc_SOME, $fieldAccess} : ${optNone(optType)};"
         markOptional(t)
         defineVar(t, "${fieldType ?: "Int"}?")

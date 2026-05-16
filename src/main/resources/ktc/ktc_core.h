@@ -130,7 +130,25 @@ typedef struct { ktc_core_AnySupertype __base; void* data; const ktc_core_AnyVt*
 
 typedef enum { ktc_NONE = 0, ktc_SOME = 1 } ktc_OptionalTag;
 
-#define KTC_OPTIONAL(T) typedef struct { ktc_OptionalTag tag; T value; } T##_Optional
+/* Value-type Optional wrapper: generates TypeName$Optional = { tag, value }. */
+#define KTC_OPTIONAL(T) typedef struct T##$Optional { ktc_OptionalTag tag; T value; } T##$Optional
+
+/* Name of the Optional wrapper for a specific generic instantiation.
+   The $Optional is placed right after the base class name, before the type arg.
+   Example: KTC_OPTIONAL_GENERIC_NAME(ktc_ArrayList, Int$Optional)
+            → ktc_ArrayList$Optional_Int$Optional */
+#define KTC_OPTIONAL_GENERIC_NAME(Base, TypeArg) Base##$Optional_##TypeArg
+
+/* Define Optional wrapper struct for a generic class instantiation.
+   T        : the full concrete class C type (value field type)
+   Base     : base class C name, e.g. ktc_std_ArrayList
+   TypeArg  : type arg part, e.g. ktc_Int or ktc_Int$Optional
+              (for multiple args or nested generics, compose with KTC_OPTIONAL_GENERIC_NAME)
+   Example: KTC_OPTIONAL_GENERIC(ktc_std_ArrayList_Int, ktc_std_ArrayList, ktc_Int)
+            → struct ktc_std_ArrayList$Optional_ktc_Int { ktc_OptionalTag tag; ktc_std_ArrayList_Int value; } */
+#define KTC_OPTIONAL_GENERIC(T, Base, TypeArg) \
+    typedef struct KTC_OPTIONAL_GENERIC_NAME(Base, TypeArg) { ktc_OptionalTag tag; T value; } \
+    KTC_OPTIONAL_GENERIC_NAME(Base, TypeArg)
 
 /** No-op dispose used by vtables when a class has no custom dispose. */
 static void ktc_core_noop_dispose(void* obj) { (void)obj; }

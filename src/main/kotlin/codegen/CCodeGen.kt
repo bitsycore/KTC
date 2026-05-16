@@ -219,16 +219,34 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
     // Used to prevent registering type params as concrete instantiations
     internal val allGenericTypeParamNames = mutableSetOf<String>()
 
-    /** Mangle a generic class name with concrete type args: MyList + [Int] → "MyList_Int" */
+    // Reverse map: mangled class name → (baseName, typeArgs) for generic instances.
+    // Used to compute KTC_OPTIONAL_GENERIC_NAME-style Optional wrapper names.
+    internal val mangledComponents = mutableMapOf<String, Pair<String, List<String>>>()
+
+    /** Mangle a generic class name with concrete type args: MyList + ["Int?"] → "MyList_Int$Optional" */
     internal fun mangledGenericName(baseName: String, typeArgs: List<String>): String {
+        // Nullable type args use $Optional suffix (e.g. Int? → Int$Optional).
+        // Optional WRAPPER names for generic instances use KTC_OPTIONAL_GENERIC_NAME style
+        // (Base$Optional_TypeArg) so they never collide with the class name itself.
         val sanitized = typeArgs.joinToString("_") { it.replace("?", "\$Optional") }
-        return "${baseName}_$sanitized"
+        val mangledName = "${baseName}_$sanitized"
+        mangledComponents[mangledName] = Pair(baseName, typeArgs)
+        return mangledName
     }
 
     /** Record a concrete instantiation of a generic class and return the mangled name. */
     internal fun recordGenericInstantiation(baseName: String, typeArgs: List<String>): String {
         genericInstantiations.getOrPut(baseName) { mutableSetOf() }.add(typeArgs)
         return mangledGenericName(baseName, typeArgs)
+    }
+
+    /** Compute the KTC_OPTIONAL_GENERIC_NAME style C name for the Optional wrapper of a generic instance.
+    e.g. ArrayList + ["Int"] → "ktc_std_ArrayList$Optional_ktc_Int"
+         ArrayList + ["Int?"] → "ktc_std_ArrayList$Optional_ktc_Int$Optional" */
+    internal fun genericOptionalCName(baseName: String, typeArgs: List<String>): String {
+        val baseCName = typeFlatName(baseName)
+        val typeArgStr = typeArgs.joinToString("_") { optTypeArgComponent(it) }
+        return "${baseCName}\$Optional_${typeArgStr}"
     }
 
     // Maps mangled concrete name → type substitution (e.g. "MyList_Int" → {T: "Int"})
@@ -439,24 +457,69 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         else -> true
     }
 
-    /* Maps an internal type string to its C Optional struct type name. */
+    /* Maps an internal type string to its C Optional struct type name.
+    For generic class instances, uses KTC_OPTIONAL_GENERIC_NAME style (Base$Optional_TypeArg)
+    so the name never collides with the class name T_Arg$Optional (T of nullable Arg). */
     internal fun optCTypeName(internalType: String): String {
-        return when (val base = internalType.removeSuffix("?")) {
-            "Byte"    -> "ktc_Byte_Optional"
-            "Short"   -> "ktc_Short_Optional"
-            "Int"     -> "ktc_Int_Optional"
-            "Long"    -> "ktc_Long_Optional"
-            "Float"   -> "ktc_Float_Optional"
-            "Double"  -> "ktc_Double_Optional"
-            "Boolean" -> "ktc_Bool_Optional"
-            "Char"    -> "ktc_Char_Optional"
-            "UByte"   -> "ktc_UByte_Optional"
-            "UShort"  -> "ktc_UShort_Optional"
-            "UInt"    -> "ktc_UInt_Optional"
-            "ULong"   -> "ktc_ULong_Optional"
-            "String"  -> "ktc_String_Optional"
+        val base = internalType.removeSuffix("?")
+        return when (base) {
+            "Byte"    -> "ktc_Byte\$Optional"
+            "Short"   -> "ktc_Short\$Optional"
+            "Int"     -> "ktc_Int\$Optional"
+            "Long"    -> "ktc_Long\$Optional"
+            "Float"   -> "ktc_Float\$Optional"
+            "Double"  -> "ktc_Double\$Optional"
+            "Boolean" -> "ktc_Bool\$Optional"
+            "Char"    -> "ktc_Char\$Optional"
+            "UByte"   -> "ktc_UByte\$Optional"
+            "UShort"  -> "ktc_UShort\$Optional"
+            "UInt"    -> "ktc_UInt\$Optional"
+            "ULong"   -> "ktc_ULong\$Optional"
+            "String"  -> "ktc_String\$Optional"
             "Any"     -> "ktc_Any"   // Any uses data==NULL for null, not Optional
-            else -> "${typeFlatName(base)}_Optional"
+            else -> {
+                val components = mangledComponents[base]
+                if (components != null) {
+                    // Generic instance: use KTC_OPTIONAL_GENERIC_NAME(baseCName, typeArgStr)
+                    // e.g. ArrayList<Int>? → ktc_std_ArrayList$Optional_ktc_Int
+                    //      ArrayList<Int?>? → ktc_std_ArrayList$Optional_ktc_Int$Optional
+                    val (genBase, typeArgs) = components
+                    val baseCName = typeFlatName(genBase)
+                    val typeArgStr = typeArgs.joinToString("_") { arg -> optTypeArgComponent(arg) }
+                    "${baseCName}\$Optional_${typeArgStr}"
+                } else {
+                    "${typeFlatName(base)}\$Optional"
+                }
+            }
+        }
+    }
+
+    /* Compute the C name component for a type arg inside KTC_OPTIONAL_GENERIC_NAME.
+    Non-nullable → C type name. Nullable primitive/simple → ktc_T$Optional. Nullable generic → recursive. */
+    internal fun optTypeArgComponent(internalTypeArg: String): String {
+        return if (internalTypeArg.endsWith("?")) {
+            // Nullable type arg: recurse to get the Optional name for this type
+            optCTypeName(internalTypeArg)
+        } else {
+            // Non-nullable type arg: use the C type name (with prefix)
+            val components = mangledComponents[internalTypeArg]
+            if (components != null) {
+                // Nested generic (non-nullable): flatten as baseName_typeArgs
+                val (genBase, typeArgs) = components
+                val baseCName = typeFlatName(genBase)
+                val innerStr = typeArgs.joinToString("_") { optTypeArgComponent(it) }
+                "${baseCName}_${innerStr}"
+            } else {
+                // Non-generic non-nullable: map to C type
+                when (internalTypeArg) {
+                    "Byte"    -> "ktc_Byte";  "Short"   -> "ktc_Short";  "Int"     -> "ktc_Int"
+                    "Long"    -> "ktc_Long";  "Float"   -> "ktc_Float";  "Double"  -> "ktc_Double"
+                    "Boolean" -> "ktc_Bool";  "Char"    -> "ktc_Char";   "UByte"   -> "ktc_UByte"
+                    "UShort"  -> "ktc_UShort"; "UInt"   -> "ktc_UInt";   "ULong"   -> "ktc_ULong"
+                    "String"  -> "ktc_String"; "Any"    -> "ktc_Any"
+                    else -> typeFlatName(internalTypeArg)
+                }
+            }
         }
     }
 
@@ -955,13 +1018,17 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
         }
 
         // Emit forward declarations for all monomorphized generic class types
-        // so method signatures can reference them before their full definitions
+        // so method signatures can reference them before their full definitions.
+        // Also forward-declare the KTC_OPTIONAL_GENERIC_NAME-style Optional wrapper.
         for ((baseName, instantiations) in genericInstantiations) {
             if (!genericClassDecls.containsKey(baseName)) continue
             for (typeArgs in instantiations) {
                 val mangledName = mangledGenericName(baseName, typeArgs)
                 val cName = typeFlatName(mangledName)
                 hdr.appendLine("typedef struct $cName $cName;")
+                // Forward-declare the Optional wrapper (Base$Optional_TypeArg style)
+                val optName = genericOptionalCName(baseName, typeArgs)
+                hdr.appendLine("typedef struct $optName $optName;")
             }
         }
         if (genericInstantiations.isNotEmpty()) hdr.appendLine()
@@ -972,12 +1039,19 @@ class CCodeGen(internal val file: KtFile, internal val allFiles: List<KtFile> = 
 
         // Forward-declare all monomorphized generic interface vtable structs so that
         // class _as_ declarations can reference them before the full vtable definition.
+        // Also forward-declare the KTC_OPTIONAL_GENERIC_NAME-style Optional wrapper.
         var emittedMonoFwd = false
         for ((name, _) in interfaces) {
             val isMonomorphized = genericIfaceDecls.keys.any { tmpl -> name.startsWith(tmpl + "_") }
             if (isMonomorphized) {
                 val cName = typeFlatName(name)
                 hdr.appendLine("typedef struct ${cName}_vt ${cName}_vt;")
+                val vIfaceComponents = mangledComponents[name]
+                if (vIfaceComponents != null) {
+                    val (vGenBase, vTypeArgs) = vIfaceComponents
+                    val optName = genericOptionalCName(vGenBase, vTypeArgs)
+                    hdr.appendLine("typedef struct $optName $optName;")
+                }
                 emittedMonoFwd = true
             }
         }

@@ -70,7 +70,7 @@ int main(void) {
 **Types and memory**
 - All types are **by value** on the stack by default — no hidden allocations
 - `@Ptr T` for pointer semantics; `@Ptr T?` for nullable pointers (NULL)
-- `T?` value-nullable via `ktc_T_Optional { tag, value }` struct
+- `T?` value-nullable via `ktc_T$Optional { tag, value }` struct
 - Heap allocation via `HeapAlloc`, `HeapArrayZero`, `heapArrayOf` (explicit, no GC)
 
 **Classes and interfaces**

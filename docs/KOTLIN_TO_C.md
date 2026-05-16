@@ -28,13 +28,13 @@ Source-to-source transpiler: Kotlin → C11. Zero runtime, stack-first, no GC.
 | `Char`    | `ktc_Char` (char)                                                     |
 | `String`  | `ktc_String` = `{ const char* ptr; int32_t len; }` (non-owning slice) |
 
-All primitives have `ktc_T_Optional` and `ktc_hash_*` support.
+All primitives have `ktc_T$Optional` and `ktc_hash_*` support.
 
 ### Nullable
 
 | Kotlin            | C                                                      |
 |-------------------|--------------------------------------------------------|
-| `T?` (value type) | `ktc_T_Optional` = `{ ktc_OptionalTag tag; T value; }` |
+| `T?` (value type) | `ktc_T$Optional` = `{ ktc$OptionalTag tag; T value; }` |
 | `@Ptr T?`         | `T*` (NULL = null)                                     |
 | `Array<T>?`       | `ktc_ArrayTrampoline` with `data == NULL`              |
 

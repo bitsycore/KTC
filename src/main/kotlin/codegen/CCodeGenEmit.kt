@@ -1066,8 +1066,16 @@ internal fun CCodeGen.emitIfaceInfo(info: IfaceInfo) {
     }
     hdr.appendLine("    const ${cName}_vt* vt;")
     hdr.appendLine("} $cName;")
-    // Emit _Optional wrapper for nullable interface use
-    hdr.appendLine("KTC_OPTIONAL($cName);")
+    // Emit $Optional wrapper for nullable interface use
+    val vIfaceComponents = mangledComponents[info.name]
+    if (vIfaceComponents != null) {
+        val (vGenBase, vTypeArgs) = vIfaceComponents
+        val vBaseCName = typeFlatName(vGenBase)
+        val vTypeArgStr = vTypeArgs.joinToString("_") { optTypeArgComponent(it) }
+        hdr.appendLine("KTC_OPTIONAL_GENERIC($cName, $vBaseCName, $vTypeArgStr);")
+    } else {
+        hdr.appendLine("KTC_OPTIONAL($cName);")
+    }
     hdr.appendLine()
 }
 
@@ -1254,7 +1262,17 @@ internal fun CCodeGen.emitStructFields(ci: ClassInfo) {
 
 /** Emit primary constructor body (shared by emitClass and emitGenericClass). */
 internal fun CCodeGen.emitConstructorBody(cName: String, ci: ClassInfo) {
-    hdr.appendLine("KTC_OPTIONAL($cName);")
+    val vComponents = mangledComponents[ci.name]
+    if (vComponents != null) {
+        // Generic instance: emit KTC_OPTIONAL_GENERIC(T, Base, TypeArg) so the wrapper name is
+        // BaseName$Optional_TypeArg — distinct from the class name T_TypeArg$Optional.
+        val (vGenBase, vTypeArgs) = vComponents
+        val vBaseCName = typeFlatName(vGenBase)
+        val vTypeArgStr = vTypeArgs.joinToString("_") { optTypeArgComponent(it) }
+        hdr.appendLine("KTC_OPTIONAL_GENERIC($cName, $vBaseCName, $vTypeArgStr);")
+    } else {
+        hdr.appendLine("KTC_OPTIONAL($cName);")
+    }
     hdr.appendLine()
     val vAllCtorParams = ci.ctorProps + ci.ctorPlainParams
     val vParamStr = expandCtorParams(vAllCtorParams)

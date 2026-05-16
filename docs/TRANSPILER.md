@@ -392,7 +392,7 @@ Three representations depending on the type:
 
 | Kotlin type               | C representation                        | Null sentinel  |
 |---------------------------|-----------------------------------------|----------------|
-| `T?` (primitive / struct) | `ktc_T_Optional { has, value }`         | `has == 0`     |
+| `T?` (primitive / struct) | `ktc_T$Optional { has, value }`         | `has == 0`     |
 | `@Ptr T?`                 | `T*`                                    | `NULL`         |
 | `Array<T>?`               | `ktc_ArrayTrampoline` + `bool name$has` | `has == false` |
 | `Any?`                    | `ktc_Any` trampoline                    | `data == NULL` |

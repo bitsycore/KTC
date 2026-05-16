@@ -47,7 +47,7 @@ class MyFeatureUnitTest : TranspilerTestBase() {
     @Test fun withMainBody() {
         // transpileMain wraps the body in a package + main()
         val r = transpileMain("val x: Int? = null")
-        r.sourceContains("ktc_Int_Optional x = (ktc_Int_Optional){ktc_NONE}")
+        r.sourceContains("ktc_Int$Optional x = (ktc_Int$Optional){ktc_NONE}")
     }
 }
 ```
