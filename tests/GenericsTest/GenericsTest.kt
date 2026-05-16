@@ -11,6 +11,7 @@ class Wrapper<T>(private var value: T) {
 
 // Pair + to infix
 fun main() {
+
     // Generic function
     val list = mutableListOf(10, 20, 30)
     defer list.dispose()
@@ -39,6 +40,20 @@ fun main() {
     val t2 = Triple<Boolean, Int, String>(false, 42, "world")
     println("Triple2: ${t2.first}, ${t2.second}, ${t2.third}")
     if (t2.first != false || t2.second != 42 || t2.third != "world") error("FAIL Triple2")
+
+    // Pair with nullable type args
+    val abc = Pair<Int?, String?>(null, "Hello world")
+    println("abc.first is null: ${abc.first == null}")
+    println("abc.second: ${abc.second}")
+    if (abc.first != null) error("FAIL abc.first should be null")
+    if (abc.second != "Hello world") error("FAIL abc.second")
+
+    var abc2: Pair<Int?, String?>? = Pair<Int?, String?>(null, "Hello world")
+    println("abc2 not null: ${abc2 != null}")
+    if (abc2 == null) error("FAIL abc2 should not be null")
+    abc2 = null
+    println("abc2 is null: ${abc2 == null}")
+    if (abc2 != null) error("FAIL abc2 should be null")
 
     println("done")
 }

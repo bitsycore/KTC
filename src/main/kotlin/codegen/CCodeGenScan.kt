@@ -173,8 +173,9 @@ internal fun CCodeGen.scanTypeRefForGenerics(t: TypeRef?, skip: Set<String> = em
     if (t == null) return
     if (t.typeArgs.isNotEmpty() && classes.containsKey(t.name) && classes[t.name]!!.isGeneric) {
         // Only record if all type args are concrete (not type params or star projections)
-        val concreteArgs = t.typeArgs.map { it.name }
-        if (concreteArgs.none { it in skip || it == "*" }) {
+        // Include "?" suffix for nullable type args so scan matches codegen's resolved names.
+        val concreteArgs = t.typeArgs.map { if (it.nullable) "${it.name}?" else it.name }
+        if (concreteArgs.none { it.trimEnd('?') in skip || it == "*" }) {
             recordGenericInstantiation(t.name, concreteArgs)
         }
     }
@@ -189,15 +190,15 @@ internal fun CCodeGen.scanExprForGenerics(e: Expr?, skip: Set<String> = emptySet
             // Constructor call: MyList<Int>(...) or HeapAlloc<MyList<Int>>(...)
             for (ta in e.typeArgs) {
                 if (ta.typeArgs.isNotEmpty() && classes.containsKey(ta.name) && classes[ta.name]!!.isGeneric) {
-                    val concreteArgs = ta.typeArgs.map { it.name }
-                    if (concreteArgs.none { it in skip || it == "*" }) {
+                    val concreteArgs = ta.typeArgs.map { if (it.nullable) "${it.name}?" else it.name }
+                    if (concreteArgs.none { it.trimEnd('?') in skip || it == "*" }) {
                         recordGenericInstantiation(ta.name, concreteArgs)
                     }
                 }
             }
             if (name != null && classes.containsKey(name) && classes[name]!!.isGeneric && e.typeArgs.isNotEmpty()) {
-                val concreteArgs = e.typeArgs.map { it.name }
-                if (concreteArgs.none { it in skip || it == "*" }) {
+                val concreteArgs = e.typeArgs.map { if (it.nullable) "${it.name}?" else it.name }
+                if (concreteArgs.none { it.trimEnd('?') in skip || it == "*" }) {
                     recordGenericInstantiation(name, concreteArgs)
                 }
             }

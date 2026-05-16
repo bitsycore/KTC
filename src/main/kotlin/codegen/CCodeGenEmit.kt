@@ -215,7 +215,15 @@ internal fun CCodeGen.emitClassEquals(cName: String, ci: ClassInfo) {
         val vKtcEq = resolveTypeName(type)          // KtcType for equals dispatch
         val vTStr  = vKtcEq.toInternalStr            // string for class lookup
         when {
-            type.nullable -> "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == ktc_NONE || a.$fieldName.value == b.$fieldName.value))"
+            type.nullable -> {
+                val vInnerName = type.name
+                val vValueCmp = when {
+                    vInnerName == "String" -> "ktc_core_string_eq(a.$fieldName.value, b.$fieldName.value)"
+                    classes[vInnerName]?.isData == true -> "${typeFlatName(vInnerName)}_equals(a.$fieldName.value, b.$fieldName.value)"
+                    else -> "a.$fieldName.value == b.$fieldName.value"
+                }
+                "(a.$fieldName.tag == b.$fieldName.tag && (a.$fieldName.tag == ktc_NONE || $vValueCmp))"
+            }
             vTStr == "String" -> "ktc_core_string_eq(a.$fieldName, b.$fieldName)"
             classes[vTStr]?.isData == true -> "${typeFlatName(vTStr)}_equals(a.$fieldName, b.$fieldName)"
             else -> "a.$fieldName == b.$fieldName"

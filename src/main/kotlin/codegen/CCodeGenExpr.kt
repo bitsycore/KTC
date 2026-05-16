@@ -488,9 +488,12 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             rtKtc is KtcType.Nullable && isValueNullableKtc(rtKtc)) {
             val leftExpr = genExpr(e.left)
             val rightExpr = genExpr(e.right)
+            val vIsStr = ltKtc.inner is KtcType.Str
             return when (e.op) {
-                "==" -> "($leftExpr.tag == $rightExpr.tag && ($leftExpr.tag == ktc_NONE || $leftExpr.value == $rightExpr.value))"
-                "!=" -> "($leftExpr.tag != $rightExpr.tag || ($leftExpr.tag == ktc_SOME && $leftExpr.value != $rightExpr.value))"
+                "==" -> if (vIsStr) "($leftExpr.tag == $rightExpr.tag && ($leftExpr.tag == ktc_NONE || ktc_core_string_eq($leftExpr.value, $rightExpr.value)))"
+                        else "($leftExpr.tag == $rightExpr.tag && ($leftExpr.tag == ktc_NONE || $leftExpr.value == $rightExpr.value))"
+                "!=" -> if (vIsStr) "($leftExpr.tag != $rightExpr.tag || ($leftExpr.tag == ktc_SOME && !ktc_core_string_eq($leftExpr.value, $rightExpr.value)))"
+                        else "($leftExpr.tag != $rightExpr.tag || ($leftExpr.tag == ktc_SOME && $leftExpr.value != $rightExpr.value))"
                 else -> "($leftExpr.tag == ktc_SOME && $rightExpr.tag == ktc_SOME && $leftExpr.value ${e.op} $rightExpr.value)"
             }
         }
@@ -499,9 +502,12 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             rtKtc != null && rtKtc !is KtcType.Nullable && e.right !is NullLit) {
             val leftExpr = genExpr(e.left)
             val rightExpr = genExpr(e.right)
+            val vIsStr = ltKtc.inner is KtcType.Str
             return when (e.op) {
-                "==" -> "($leftExpr.tag == ktc_SOME && $leftExpr.value == $rightExpr)"
-                "!=" -> "($leftExpr.tag != ktc_SOME || $leftExpr.value != $rightExpr)"
+                "==" -> if (vIsStr) "($leftExpr.tag == ktc_SOME && ktc_core_string_eq($leftExpr.value, $rightExpr))"
+                        else "($leftExpr.tag == ktc_SOME && $leftExpr.value == $rightExpr)"
+                "!=" -> if (vIsStr) "($leftExpr.tag != ktc_SOME || !ktc_core_string_eq($leftExpr.value, $rightExpr))"
+                        else "($leftExpr.tag != ktc_SOME || $leftExpr.value != $rightExpr)"
                 else -> "($leftExpr.tag == ktc_SOME && $leftExpr.value ${e.op} $rightExpr)"
             }
         }
@@ -510,9 +516,12 @@ internal fun CCodeGen.genBin(e: BinExpr): String {
             ltKtc != null && ltKtc !is KtcType.Nullable && e.left !is NullLit) {
             val leftExpr = genExpr(e.left)
             val rightExpr = genExpr(e.right)
+            val vIsStr = rtKtc.inner is KtcType.Str
             return when (e.op) {
-                "==" -> "($rightExpr.tag == ktc_SOME && $leftExpr == $rightExpr.value)"
-                "!=" -> "($rightExpr.tag != ktc_SOME || $leftExpr != $rightExpr.value)"
+                "==" -> if (vIsStr) "($rightExpr.tag == ktc_SOME && ktc_core_string_eq($leftExpr, $rightExpr.value))"
+                        else "($rightExpr.tag == ktc_SOME && $leftExpr == $rightExpr.value)"
+                "!=" -> if (vIsStr) "($rightExpr.tag != ktc_SOME || !ktc_core_string_eq($leftExpr, $rightExpr.value))"
+                        else "($rightExpr.tag != ktc_SOME || $leftExpr != $rightExpr.value)"
                 else -> "($rightExpr.tag == ktc_SOME && $leftExpr ${e.op} $rightExpr.value)"
             }
         }
