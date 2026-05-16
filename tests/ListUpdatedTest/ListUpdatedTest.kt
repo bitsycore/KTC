@@ -257,20 +257,22 @@ fun <T> List<T>?.testListValueExtNullable() {
 }
 
 fun arrayListAllocTest() {
+    println("\n============ arrayListAllocTest ============\n")
+
     // alloc ArrayList on stack, right infered
-    val stack1 = ArrayList<Int>(allocator = Heap, capacity = 5)
+    val stack1 = ArrayList<Int>(allocator = Heap, capacity = 4)
     defer { stack1.dispose() }
     // alloc ArrayList on stack, left infered
-    val stack2: ArrayList<Float> = ArrayList(Heap, 5)
+    val stack2: ArrayList<Float> = ArrayList(Heap, 8)
     defer { stack2.dispose() }
     // alloc ArrayList on heap, right infered
-    val heap1 = ArrayList<Int>.allocWith(Heap, Heap, 5)
+    val heap1 = ArrayList<Int>.allocWith(Heap, Heap, 2)
     defer {
         heap1.dispose()
         Heap.freeMem(heap1)
     }
     // alloc ArrayList on heap, left infered
-    val heap2: @Ptr ArrayList<Float> = ArrayList.allocWith(Heap, Heap, 5)
+    val heap2: @Ptr ArrayList<Float> = ArrayList.allocWith(Heap, Heap, 1)
     defer {
         heap2.dispose()
         Heap.freeMem(heap2)
@@ -495,20 +497,22 @@ fun arrayListAllocTest() {
 }
 
 fun arrayListWithNullableAllocTest() {
+    println("\n============ arrayListWithNullableAllocTest ============\n")
+
     // alloc ArrayList on stack, right infered
-    val stack1 = ArrayList<Int?>(allocator = Heap, capacity = 5)
+    val stack1 = ArrayList<Int?>(allocator = Heap, capacity = 16)
     defer { stack1.dispose() }
     // alloc ArrayList on stack, left infered
-    val stack2: ArrayList<Float?> = ArrayList(Heap, 5)
+    val stack2: ArrayList<Float?> = ArrayList(Heap, 2)
     defer { stack2.dispose() }
     // alloc ArrayList on heap, right infered
-    val heap1 = ArrayList<Int?>.allocWith(Heap, Heap, 5)
+    val heap1 = ArrayList<Int?>.allocWith(Heap, Heap, 2)
     defer {
         heap1.dispose()
         Heap.freeMem(heap1)
     }
     // alloc ArrayList on heap, left infered
-    val heap2: @Ptr ArrayList<Float?> = ArrayList.allocWith(Heap, Heap, 5)
+    val heap2: @Ptr ArrayList<Float?> = ArrayList.allocWith(Heap, Heap, 4)
     defer {
         heap2.dispose()
         Heap.freeMem(heap2)

@@ -1588,9 +1588,10 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                         parts += "(ktc_ArrayTrampoline){.size = $sizeExpr, .data = $expr}"
                     }
                 }
-            } else if (param.type.nullable && isValueNullableKtc(KtcType.Nullable(paramTypeKtc))) {
+            } else if ((param.type.nullable || paramTypeKtc is KtcType.Nullable) && isValueNullableKtc(paramTypeKtc.let { if (it is KtcType.Nullable) it else KtcType.Nullable(it) })) {
                 // Value-nullable param → pass as Optional struct
-                val optType = optCTypeName("${paramType}?")
+                val optBase = if (paramType.endsWith("?")) paramType.dropLast(1) else paramType
+                val optType = optCTypeName("${optBase}?")
                 if (arg.expr is NullLit) {
                     parts += optNone(optType)
                 } else {
@@ -1600,7 +1601,7 @@ internal fun CCodeGen.expandCallArgs(args: List<Arg>, params: List<Param>?, isCt
                         && (argVarName != null && isOptional(argVarName))
                     ) {
                         // Already an Optional var — check if needs interface conversion
-                        val ifaceName2 = paramType
+                        val ifaceName2 = paramType.removeSuffix("?")
                         if (interfaces.containsKey(ifaceName2) && classes.containsKey(argVarKtc.inner.toInternalStr)
                             && classInterfaces[argVarKtc.inner.toInternalStr]?.contains(ifaceName2) == true) {
                             val baseFlat = typeFlatName(argVarKtc.inner.toInternalStr)
@@ -1953,7 +1954,20 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             val methodDecl = classes[pointerBase]?.let { findOverload(method, args, it.methods) }
             val isExt = methodDecl?.receiver != null
             val recvArg = if (isExt) "(*$recv)" else recv
-            val allArgs = if (argStr.isEmpty()) recvArg else "$recvArg, $argStr"
+            // For generic materialized classes, set typeSubst so nullable type args resolve at call sites
+            val savedSubst2 = typeSubst
+            val classBindings2 = genericTypeBindings[pointerBase]
+            if (classBindings2 != null && classBindings2.isNotEmpty()) {
+                typeSubst = classBindings2
+            }
+            val expandedArgs2 = if (methodDecl != null) {
+                val filled2 = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
+                expandCallArgs(filled2, methodDecl.params)
+            } else argStr
+            if (classBindings2 != null && classBindings2.isNotEmpty()) {
+                typeSubst = savedSubst2
+            }
+            val allArgs = if (expandedArgs2.isEmpty()) recvArg else "$recvArg, $expandedArgs2"
             if (methodDecl?.returnType?.nullable == true) {
                 return genNullableMethodCall(pointerBase, "${typeFlatName(pointerBase)}_$method", allArgs, methodDecl)
             }
@@ -2214,10 +2228,20 @@ internal fun CCodeGen.genMethodCall(dot: DotExpr, args: List<Arg>): String {
             else recv
         } else "&$recv"
         // Use expandCallArgs for proper @Ptr expansion and default arg filling
+        // For generic materialized classes, temporarily set typeSubst from the class bindings
+        // so that nullable type args (e.g., T=Int?) are properly resolved at call sites
+        val savedSubst = typeSubst
+        val classBindings = genericTypeBindings[vClassInfo.name]
+        if (classBindings != null && classBindings.isNotEmpty()) {
+            typeSubst = classBindings
+        }
         val expandedArgs = if (methodDecl != null) {
             val filled = fillDefaults(args, methodDecl.params, methodDecl.params.associate { it.name to it.default }, methodDecl.name, strict = true)
             expandCallArgs(filled, methodDecl.params)
         } else argStr
+        if (classBindings != null && classBindings.isNotEmpty()) {
+            typeSubst = savedSubst
+        }
         val allArgs = if (expandedArgs.isEmpty()) selfArg else "$selfArg, $expandedArgs"
         val overloadedName = methodDecl?.let { methodName(it, vClassInfo.methods) } ?: method
         val fnPrefix = if (methodDecl?.isPrivate == true) "PRIV_$overloadedName" else overloadedName
